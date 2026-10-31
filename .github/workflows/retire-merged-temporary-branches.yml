@@ -71,6 +71,20 @@ jobs:
               'backup/stoneyverify-stable-7fdc331-20261008',
               String(process.env.LINKED_PRODUCTION_BRANCH || '').trim()
             ]);
+            // A nonempty variable is not proof that the branch exists. Fail
+            // closed if it is mistyped or was deleted since configuration.
+            const configuredDeployBranch = String(process.env.LINKED_PRODUCTION_BRANCH || '').trim();
+            let deploymentBranchConfigured = false;
+            if (configuredDeployBranch) {
+              try {
+                const deployed = (await github.rest.repos.getBranch({
+                  owner, repo, branch: configuredDeployBranch
+                })).data;
+                deploymentBranchConfigured = Boolean(deployed.commit?.sha);
+              } catch (error) {
+                core.warning('Configured Discloud deployment branch cannot be resolved; historical deletion disabled');
+              }
+            }
             const isManual = context.eventName === 'workflow_dispatch';
             const mode = isManual ? process.env.REQUESTED_MODE : 'delete';
             if (!['preview', 'delete', 'preview-reviewed-merged', 'delete-reviewed-merged'].includes(mode)) {
@@ -87,7 +101,7 @@ jobs:
                 throw new Error('Owner dispatch required');
               }
               const deleteReviewed = mode === 'delete-reviewed-merged';
-              if (deleteReviewed && !String(process.env.LINKED_PRODUCTION_BRANCH || '').trim()) {
+              if (deleteReviewed && !deploymentBranchConfigured) {
                 throw new Error('Verify and set DANK_DISCLOUD_DEPLOY_BRANCH before deleting reviewed refs');
               }
               const mainSha = (await github.rest.repos.getBranch({
@@ -299,11 +313,13 @@ jobs:
             // of EXACT-HEAD merged PRs whose commits are already ancestors of
             // main. Squash/diverged histories stay in the owner-reviewed path.
             let integratedRemoved = 0;
+            let archivedOnly = 0;
+            let newArchives = 0;
             if (!isManual) {
-              const deployedRef = String(process.env.LINKED_PRODUCTION_BRANCH || '').trim();
-              if (!deployedRef) {
-                core.warning('Historical retirement skipped: DANK_DISCLOUD_DEPLOY_BRANCH is not verified');
-              } else {
+              const canRetire = deploymentBranchConfigured;
+              if (!canRetire) {
+                core.warning('Historical cleanup is archive-only until DANK_DISCLOUD_DEPLOY_BRANCH is verified');
+              }
                 const openPRs = await github.paginate(github.rest.pulls.list, {
                   owner, repo, state: 'open', per_page: 100
                 });
@@ -340,7 +356,7 @@ jobs:
                   ? Math.floor(Date.now() / 300000) % historical.length : 0;
                 const scanLimit = Math.min(24, historical.length);
                 const cutoff = Date.now() - 48 * 60 * 60 * 1000;
-                for (let i = 0; i < scanLimit && integratedRemoved < 8; i++) {
+                for (let i = 0; i < scanLimit && (integratedRemoved + archivedOnly) < 8; i++) {
                   const item = historical[(start + i) % historical.length];
                   const name = item.name, sha = item.commit.sha;
                   try {
@@ -374,6 +390,7 @@ jobs:
                     }
                     const tagRef = 'tags/branch-retirement-integrated/' + name;
                     let archive;
+                    let archiveCreated = false;
                     try {
                       archive = (await github.rest.git.getRef({
                         owner, repo, ref: tagRef
@@ -383,12 +400,22 @@ jobs:
                       await github.rest.git.createRef({
                         owner, repo, ref: 'refs/' + tagRef, sha
                       });
+                      archiveCreated = true;
                       archive = (await github.rest.git.getRef({
                         owner, repo, ref: tagRef
                       })).data;
                     }
                     if (archive.object.type !== 'commit' || archive.object.sha !== sha) {
                       rows.push([name, 'held', 'Archive SHA mismatch']);
+                      continue;
+                    }
+                    if (archiveCreated) newArchives++;
+                    // Preserve verified merged work even while external Discloud
+                    // deployment identity is unknown. Never delete in this mode.
+                    if (!canRetire) {
+                      archivedOnly++;
+                      rows.push([name, archiveCreated ? 'archived' : 'archive-verified',
+                        'Merged PR #' + pr.number + '; zero unique commits; awaiting verified deployment ref']);
                       continue;
                     }
                     const latestOpen = await github.paginate(github.rest.pulls.list, {
@@ -415,7 +442,6 @@ jobs:
                     rows.push([name, 'held', String(error.message || error)]);
                   }
                 }
-              }
             }
 
             const after = (deleting || integratedRemoved)
@@ -424,7 +450,8 @@ jobs:
             await core.summary
               .addHeading('Guarded temporary-branch hygiene')
               .addRaw('Mode: ' + mode + '; before: ' + allBranches.length +
-                '; after: ' + after.length + '; deleted: ' + (removed + integratedRemoved) + '.')
+                '; after: ' + after.length + '; deleted: ' + (removed + integratedRemoved) +
+                '; archived-only verified: ' + archivedOnly + '; new archive tags: ' + newArchives + '.')
               .addTable([
                 [{data:'Branch',header:true},{data:'Result',header:true},{data:'Evidence',header:true}],
                 ...(rows.length ? rows : [['(none)', 'no-op', 'No eligible exact-head merged branches']])

@@ -39,10 +39,10 @@ def test_fully_integrated_historical_cleanup_is_archive_first_and_bounded() -> N
     assert "  push:\n    branches:\n      - main" in workflow
     assert "Math.floor(Date.now() / 300000)" in workflow
     assert "historical[(start + i) % historical.length]" in workflow
-    assert "DANK_DISCLOUD_DEPLOY_BRANCH is not verified" in workflow
+    assert "DANK_DISCLOUD_DEPLOY_BRANCH is verified" in workflow
     assert "const historicalPrefixes = ['feat/', 'fix/', 'extract/', 'docs/', 'audit/', 'chore/']" in workflow
     assert "const scanLimit = Math.min(24, historical.length)" in workflow
-    assert "integratedRemoved < 8" in workflow
+    assert "(integratedRemoved + archivedOnly) < 8" in workflow
     assert "graph.ahead_by !== 0" in workflow
     assert "['behind', 'identical'].includes(graph.status)" in workflow
     assert "prs.length !== 1" in workflow
@@ -83,3 +83,17 @@ def test_historical_owner_review_workflow_is_unchanged() -> None:
     assert "DELETE_VERIFIED_NEXT_BATCH" in workflow
     assert "DELETE_REVIEWED_HISTORICAL_BRANCHES" in workflow
     assert "CLEANUP_CONFIRMATION" in workflow
+
+def test_unverified_deployment_branch_allows_archival_but_never_deletion() -> None:
+    workflow = AUTO.read_text(encoding="utf-8")
+    assert "const canRetire = deploymentBranchConfigured;" in workflow
+    assert "deploymentBranchConfigured = Boolean(deployed.commit?.sha);" in workflow
+    assert "if (deleteReviewed && !deploymentBranchConfigured)" in workflow
+    assert "if (!canRetire) {" in workflow
+    assert "archivedOnly++;" in workflow
+    assert "archiveCreated = true;" in workflow
+    assert "if (archiveCreated) newArchives++;" in workflow
+    assert "archived-only verified: " in workflow
+    assert workflow.index("if (!canRetire) {", workflow.index("archive.object.sha !== sha")) < workflow.index(
+        "await github.rest.git.deleteRef({owner, repo, ref: 'heads/' + name})"
+    )
