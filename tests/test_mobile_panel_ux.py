@@ -260,7 +260,10 @@ def test_roles_and_profiles_sections_preserve_permission_gated_controls():
             item.label for item in view.children
             if isinstance(item, __import__("discord").ui.Button)
         }
-        assert actual == set(names) | {"Dank Shield Home"}
+        expected = set(names) | {"Dank Shield Home"}
+        if section == "profile":
+            expected.discard("My Community & Pings")  # staff use manager entry instead
+        assert actual == expected
         assert len(view.children) <= 6
         assert len(roles._center_embed(
             section=section, staff=True, role_manager=True, setup_manager=True,
