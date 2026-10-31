@@ -246,12 +246,10 @@ jobs:
             // Rotate a bounded window so an ambiguous or unmerged ref at
             // the start cannot permanently starve later eligible branches.
             eligibleCandidates.sort((a, b) => a.name.localeCompare(b.name));
-            const candidateStart = eligibleCandidates.length
-              ? Math.floor(Date.now() / 300000) % eligibleCandidates.length : 0;
-            const candidates = Array.from(
-              {length: Math.min(20, eligibleCandidates.length)},
-              (_, i) => eligibleCandidates[(candidateStart + i) % eligibleCandidates.length]
-            );
+            const candidateBatchCount = Math.max(1, Math.ceil(eligibleCandidates.length / 20));
+            const candidateBatch = Math.floor(Date.now() / 300000) % candidateBatchCount;
+            const candidateStart = candidateBatch * 20;
+            const candidates = eligibleCandidates.slice(candidateStart, candidateStart + 20);
             if (eligibleCandidates.length > candidates.length) {
               core.warning('Opt-in backlog: ' + eligibleCandidates.length +
                 ' eligible; examining rotating batch of ' + candidates.length + ' this run');
