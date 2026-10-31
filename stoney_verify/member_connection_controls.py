@@ -282,3 +282,50 @@ async def remove_protection(guild: discord.Guild, actor: discord.Member, channel
                 raise ConnectionControlError("Protection changed during restoration.")
             del policy["protected"][cid]
         await _change(gid, clear)
+
+async def post_private_connection_alert(
+    guild: discord.Guild, embed: discord.Embed, *, event_key: str,
+) -> bool:
+    """Never publish relationship leads to a member-visible or unknown modlog.
+
+    Ordinary modlog delivery keeps its existing behavior; this additional
+    privacy gate applies only to the sensitive Connection Intelligence alerts.
+    """
+    from .modlog import _get_modlog_channel_async, _post_modlog
+
+    try:
+        channel = await _get_modlog_channel_async(guild)
+        if not isinstance(channel, discord.TextChannel):
+            return False
+        if channel.permissions_for(guild.default_role).view_channel:
+            return False
+        _, _ = await load_controls(guild.id, refresh=False)
+        cfg = await get_guild_config(guild.id)
+        if str(cfg.get("source", "")).startswith("unavailable:"):
+            return False
+        allowed_staff = {
+            _valid_id(cfg.get(key))
+            for key in ("staff_role_id", "vc_staff_role_id", "server_control_role_id")
+        }
+        for role in guild.roles:
+            if role.id == guild.default_role.id:
+                continue
+            overwrite = channel.overwrites_for(role)
+            if overwrite.view_channel is not True:
+                continue
+            p = role.permissions
+            elevated = (p.administrator or p.manage_guild or p.manage_roles
+                        or p.moderate_members or p.kick_members or p.ban_members)
+            if role.id not in allowed_staff and not elevated:
+                return False
+        # Explicit member allowances cannot be classified safely from cached
+        # member roles. Refuse those for sensitive account-relationship alerts.
+        for principal, overwrite in channel.overwrites.items():
+            if isinstance(principal, discord.Member) and overwrite.view_channel is True:
+                return False
+        await _post_modlog(
+            guild, embed, event_key=event_key, dedupe_window_seconds=900,
+        )
+        return True
+    except Exception:
+        return False
