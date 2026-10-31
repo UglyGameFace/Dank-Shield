@@ -269,7 +269,43 @@ def _search_help_guides(query: str) -> list[NavigationFeature]:
     )
     cleaned = re.sub(r"^(?:use|set\s+up|configure|open|find|the)\s+", "", cleaned)
     cleaned = re.sub(r"[?.!]+$", "", cleaned).strip()
-    return search_features(cleaned or query, limit=20)
+    matches = search_features(cleaned or query, limit=20)
+    if matches:
+        return matches
+
+    # A natural sentence may have filler words in the middle ("send a
+    # reminder now"). Remove those without discarding the useful task words.
+    stopwords = {"a", "an", "the", "my", "to", "for", "on", "in", "with",
+                 "please", "that", "i", "me", "do", "can", "how", "some"}
+    words = [word for word in re.findall(r"[a-z0-9]+", cleaned)
+             if word not in stopwords]
+    if not words:
+        return []
+
+    compact = " ".join(words)
+    matches = search_features(compact, limit=20)
+    if matches:
+        return matches
+
+    # Last resort: rank words against registered names/aliases, never against
+    # invented capabilities. Require every meaningful word to be represented.
+    def rank(feature: NavigationFeature) -> int:
+        sources = [
+            feature.label.lower(), feature.key.replace("_", " "),
+            *(alias.lower() for alias in feature.aliases),
+        ]
+        combined = " ".join(sources)
+        if not all(any(word in source for source in sources) for word in words):
+            return 0
+        return sum(4 if word in feature.label.lower() else 2 for word in words) + (
+            6 if compact in combined else 0
+        )
+
+    scored = [(rank(feature), index, feature)
+              for index, feature in enumerate(FEATURES)]
+    scored = [entry for entry in scored if entry[0] > 0]
+    scored.sort(key=lambda entry: (-entry[0], entry[1]))
+    return [feature for _score, _index, feature in scored[:15]]
 
 
 def _asset_embed() -> discord.Embed:
