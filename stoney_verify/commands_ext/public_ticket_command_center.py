@@ -117,31 +117,15 @@ def _current_or_selected(interaction: discord.Interaction, selected_id: int = 0)
 
 
 def _ticket_center_embed(channel: Optional[discord.TextChannel]) -> discord.Embed:
-    embed = discord.Embed(
-        title="🎫 Current Ticket Center",
+    return discord.Embed(
+        title="🎫 Current Ticket",
         description=(
-            "Every normal ticket action lives here. Pick another ticket channel if needed, "
-            "then choose an action. Existing claim-first rules, guild-owner authority, "
-            "transcript safeguards, and lifecycle repair still apply."
+            f"**Selected:** {channel.mention if channel else 'No ticket selected'}\n"
+            "Choose the action you need below. Changes require current staff "
+            "permissions; closing and deleting retain confirmation."
         ),
         color=discord.Color.blurple(),
-        timestamp=discord.utils.utcnow(),
     )
-    embed.add_field(
-        name="Target ticket",
-        value=(f"{channel.mention}\n`{channel.id}`" if channel else "No ticket channel selected."),
-        inline=False,
-    )
-    embed.add_field(
-        name="Fast actions",
-        value=(
-            "Info • Claim/Unclaim • Transfer • Priority • Close/Reopen • Transcript • "
-            "Access • Rename • Lock/Unlock • Notes/Macros through the persistent ticket panel • Delete"
-        ),
-        inline=False,
-    )
-    embed.set_footer(text="/ticket • actions stay guarded at click time")
-    return embed
 
 
 def _ticket_action_name(command_name: str) -> str:
