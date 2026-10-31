@@ -788,92 +788,59 @@ def _strict_gate_flow_value(
 def _admin_embed(guild: discord.Guild, state: Mapping[str, Any]) -> discord.Embed:
     health = gate_health(guild, state)
     channel = health["setup_channel"]
-    access_role = health["access_role"]
+    access = health["access_role"]
     prerequisite = health["prerequisite_role"]
-    categories = list(health["protected_categories"])
     latest = latest_revision(state)
-
+    blockers = list(health["blockers"])
+    warnings = list(health["warnings"])
     embed = discord.Embed(
         title="🪪 Member Setup Manager",
         description=(
-            "Publish versioned member-role/profile changes without wiping existing choices. "
-            "Strict Gate is separate and cannot activate until its role/channel/category health checks pass."
+            "Configure member requirements, review changes, then publish. "
+            "Strict Gate requires a healthy role and channel mapping and is enabled separately."
         ),
         color=discord.Color.green() if state.get("gate_active") else discord.Color.blurple(),
-        timestamp=discord.utils.utcnow(),
     )
     embed.add_field(
-        name="Published setup",
+        name="Published status",
         value=(
-            f"Revision: **{int(state.get('current_revision') or 0)}**\n"
-            f"Latest: **{_severity_label(str((latest or {}).get('severity') or SEVERITY_MINOR))}**\n"
-            f"Gate: **{'ACTIVE' if state.get('gate_active') else 'Not active'}**"
-        ),
-        inline=True,
-    )
-    embed.add_field(
-        name="Member Setup channel",
-        value=channel.mention if isinstance(channel, discord.TextChannel) else "Not selected",
-        inline=True,
-    )
-    embed.add_field(
-        name="Member Access role (automatic)",
-        value=(
-            f"{access_role.mention}\nDank Shield grants/removes this role after setup."
-            if isinstance(access_role, discord.Role)
-            else "Not selected — choose the role Dank Shield should grant/remove automatically."
-        ),
-        inline=True,
-    )
-    panel_message_id = _safe_int(state.get("panel_message_id"), 0)
-    embed.add_field(
-        name="Public setup panel",
-        value=(
-            "Connected — **Refresh Public Panel** updates it after setup changes."
-            if panel_message_id > 0
-            else "Needs refresh — use **Refresh Public Panel** to connect the live member setup panel."
+            f"Revision **{int(state.get('current_revision') or 0)}** • "
+            f"Latest **{_severity_label(str((latest or {}).get('severity') or SEVERITY_MINOR))}**\n"
+            f"Strict Gate: **{'On' if state.get('gate_active') else 'Off'}** • "
+            f"Public panel: **{'Connected' if _safe_int(state.get('panel_message_id'), 0) > 0 else 'Needs refresh'}**"
         ),
         inline=False,
     )
     embed.add_field(
-        name="Eligibility prerequisite (optional)",
+        name="Channel and access",
         value=(
-            f"{prerequisite.mention}\nMember must already have this role; Dank Shield does not grant it."
-            if isinstance(prerequisite, discord.Role)
-            else "None — setup completion alone can qualify a member for Member Access."
-        ),
-        inline=True,
-    )
-    embed.add_field(
-        name="Protected categories",
-        value=(
-            "\n".join(f"• {category.name}" for category in categories[:12])
-            if categories else "None selected"
+            f"Member Setup: {channel.mention if isinstance(channel, discord.TextChannel) else 'Not selected'}\n"
+            f"Access role: {access.mention if isinstance(access, discord.Role) else 'Not selected'}\n"
+            f"Optional prerequisite: {prerequisite.mention if isinstance(prerequisite, discord.Role) else 'None'}\n"
+            f"Protected categories: **{len(health['protected_categories'])}**"
         ),
         inline=False,
     )
-    embed.add_field(
-        name="How Strict Gate works",
-        value=_strict_gate_flow_value(guild, state),
-        inline=False,
+    health_lines = (
+        [f"❌ {item}" for item in blockers[:6]]
+        + [f"⚠️ {item}" for item in warnings[:3]]
     )
-    if health["blockers"]:
-        embed.add_field(
-            name="Strict Gate blockers",
-            value="\n".join(f"• {item}" for item in health["blockers"][:8]),
-            inline=False,
+    if len(blockers) > 6 or len(warnings) > 3:
+        health_lines.append(
+            f"And {max(0, len(blockers)-6) + max(0, len(warnings)-3)} more readiness items."
         )
-    else:
-        embed.add_field(name="Strict Gate health", value="✅ Ready to activate.", inline=False)
-    if health["warnings"]:
-        embed.add_field(
-            name="Warnings",
-            value="\n".join(f"• {item}" for item in health["warnings"][:6]),
-            inline=False,
-        )
+    embed.add_field(
+        name="Gate readiness",
+        value=_clip("\n".join(health_lines) if health_lines else "✅ Ready to activate.", 1024),
+        inline=False,
+    )
     if latest:
-        embed.add_field(name="Latest published change", value=_clip(latest.get("summary"), 1024), inline=False)
-    embed.set_footer(text="Publishing a revision and activating the Discord access gate are separate actions.")
+        embed.add_field(
+            name="Latest published change",
+            value=_clip(latest.get("summary"), 350),
+            inline=False,
+        )
+    embed.set_footer(text="Use the controls to inspect exact roles, categories, revisions and gate requirements")
     return embed
 
 
