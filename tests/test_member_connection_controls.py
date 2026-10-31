@@ -185,7 +185,7 @@ def test_other_role_explicit_allow_blocks_protection(monkeypatch):
         manage_messages=False, moderate_members=False, kick_members=False, ban_members=False,
     )
     guild.channel.overwrites[other_role] = FakeOverwrite(True)
-    with pytest.raises(controls.ConnectionControlError, match="Another role or member"):
+    with pytest.raises(controls.ConnectionControlError, match="ordinary role or individual member has explicit channel access"):
         run(controls.protect_channel(guild, actor, guild.channel, guild.trusted))
     assert record["current"] is None
     assert guild.channel.overwrites[other_role].view_channel is True
