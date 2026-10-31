@@ -10,6 +10,12 @@ not mandatory.
 1. Open **Share Router → Where Videos Go**. The screen shows the current request
    channel and saved delivery mode. Existing servers with a configured download
    channel but no delivery setting keep their original **Private DM** behavior.
+   **Fast option:** If you want the channel you're currently using to handle
+   both incoming video links and finished videos, choose **Requests + Results
+   Here**. Review the confirmation, then choose **Save Requests + Results Here**.
+   It saves one channel as both request and result, disables DMs, and does
+   not touch forwarding rules. It refuses an active forwarding source rather
+   than silently replacing that rule. No changes occur before confirmation.
 2. Choose **Private DM**, **Post in Server Channel**, **Both DM and Channel**, or
    **Pause Downloads**. For channel delivery, choose **Use This Channel** or the
    existing Search-Safe **Choose Channel** picker. Styled names and emojis use
