@@ -144,6 +144,8 @@ def test_history_view_has_focused_controls_and_mobile_rows() -> None:
 
     assert button_labels(view) == {
         "Choose Backup Contents",
+        "Previous Versions",
+        "Next Versions",
         "Refresh",
         "Back to All Features",
         "Setup Home",
@@ -159,6 +161,30 @@ def test_history_view_has_focused_controls_and_mobile_rows() -> None:
         row = int(getattr(child, "row", 0) or 0)
         rows[row] = rows.get(row, 0) + 1
     assert max(rows.values()) <= 3
+
+
+def test_history_pages_cover_all_retained_versions_without_truncation() -> None:
+    versions = [
+        {"version_id": i, "config_table": "guild_configs", "source": "manual_backup"}
+        for i in range(1, 51)
+    ]
+    first = ui.ConfigHistoryView(versions, page=0)
+    second = ui.ConfigHistoryView(versions, page=1)
+    first_select = next(child for child in first.children if isinstance(child, discord.ui.Select))
+    second_select = next(child for child in second.children if isinstance(child, discord.ui.Select))
+
+    assert len(first_select.options) == 25
+    assert len(second_select.options) == 25
+    assert {opt.value for opt in first_select.options}.isdisjoint(
+        {opt.value for opt in second_select.options}
+    )
+    assert {opt.value for opt in first_select.options + second_select.options} == {
+        str(i) for i in range(1, 51)
+    }
+    assert find_button(first, "Previous Versions").disabled
+    assert not find_button(first, "Next Versions").disabled
+    assert not find_button(second, "Previous Versions").disabled
+    assert find_button(second, "Next Versions").disabled
 
 
 def test_backup_contents_defaults_to_both_domains_and_explains_them() -> None:
