@@ -113,58 +113,33 @@ def _home_embed(guild: discord.Guild, options: Mapping[str, Any] | None = None) 
     embed = discord.Embed(
         title="🎨 Dank Design Studio",
         description=(
-            "Pick **one job** below. The home screen never changes a Discord name.\n\n"
-            "**Server-wide design, separator changes, Smart Repair, and Custom Format use:** "
-            "Choose → Preview → **Apply Reviewed Changes**.\n"
-            "**Only one action is immediate:** Edit One Category / Channel → **Rename**. "
-            "That item screen clearly says it applies immediately."
+            "**Choose a design task below.** Batch changes use Preview → "
+            "Apply Reviewed Changes. Renaming one selected item applies immediately."
         ),
         color=discord.Color.blurple(),
     )
     embed.add_field(
-        name="Current server design settings",
+        name="Current style",
         value=(
-            f"Theme: **{getattr(theme, 'label', 'Gothic Clean')}**\n"
-            f"Font: **{studio.font_label(active_font)}**\n"
-            f"Strength: **{_safe_int(options.get('strength'), 4)}/5**\n"
-            f"Separator: **{legacy._separator_choice_label(rule_service.effective_draft_separator(options, theme_separator=_safe_str(getattr(theme, 'channel_separator', 'none'), 'none')))}**\n"  # type: ignore[attr-defined]
-            f"Global rule: **{'On' if counts.get('global') else 'Off'}**"
-        ),
-        inline=True,
-    )
-    embed.add_field(
-        name="Saved narrow rules",
-        value=(
-            f"Categories: **{counts.get('categories', 0)}**\n"
-            f"Channels: **{counts.get('channels', 0)}**\n"
-            f"Exact names: **{counts.get('manual_names', 0)}**\n"
-            f"Exact protection: **{counts.get('protection_items', 0)}**\n"
-            f"Name protection: **{counts.get('protection_names', 0)}**"
-        ),
-        inline=True,
-    )
-    embed.add_field(
-        name="Choose what you want to do",
-        value=(
-            "🌐 **Design Entire Server** — choose theme, font, strength, separator, category frame, and icon behavior with live examples.\n"
-            "✏️ **Edit One Category / Channel** — rename or style one exact item.\n"
-            "🩺 **Fix Inconsistent Names** — scan first, then build a safe Smart Repair preview.\n"
-            "🔐 **Saved Rules & Protection** — manage what future previews enforce; this does not rename anything by itself.\n"
-            "🔎 **Search-Safe Naming** — keep decoration while making role/channel words searchable in normal letters.\n"
-            "↩️ **Undo Last Apply** — review and restore the previous names from the latest applied batch."
+            f"**{getattr(theme, 'label', 'Gothic Clean')}** • "
+            f"{studio.font_label(active_font)} • "
+            f"Strength {_safe_int(options.get('strength'), 4)}/5\n"
+            f"Separator: {legacy._separator_choice_label(rule_service.effective_draft_separator(options, theme_separator=_safe_str(getattr(theme, 'channel_separator', 'none'), 'none')))}"
         ),
         inline=False,
     )
     embed.add_field(
-        name="What Dank Design never redesigns",
+        name="Saved design rules",
         value=(
-            "The visual styling engine never changes permissions, roles, topics, channel order, ticket placement, "
-            "slowmode, NSFW settings, verification, or category placement. Search-Safe Naming is a separate reviewed "
-            "accessibility tool and only normalizes styled letter glyphs in role/channel names."
+            f"Server: {'On' if counts.get('global') else 'Off'} • "
+            f"Categories: {counts.get('categories', 0)} • "
+            f"Channels: {counts.get('channels', 0)}\n"
+            f"Exact names: {counts.get('manual_names', 0)} • "
+            f"Protected: {counts.get('protection_items', 0)}"
         ),
         inline=False,
     )
-    embed.set_footer(text="Names only • Preview before batch changes • Narrow saved rules always win")
+    embed.set_footer(text="Names only • Existing permissions and roles are unchanged")
     return legacy._clean_design_embed(embed)  # type: ignore[attr-defined]
 
 
