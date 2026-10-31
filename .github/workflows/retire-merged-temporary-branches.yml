@@ -118,7 +118,7 @@ jobs:
                 if (pr.head.repo?.full_name === fullName) inUse.add(pr.head.ref);
                 if (pr.base.repo?.full_name === fullName) inUse.add(pr.base.ref);
               }
-              const prefixes = ['feat/', 'fix/', 'extract/', 'docs/', 'audit/', 'chore/'];
+              const prefixes = ['feat/', 'fix/', 'hotfix/', 'extract/', 'docs/', 'audit/', 'chore/'];
               const heldPrefixes = [
                 'aaa-', 'archive/', 'backup/', 'recovery/', 'integration/',
                 'reconcile/', 'release/', 'deploy/', 'ops/', 'ci/', 'migration/'
@@ -328,7 +328,7 @@ jobs:
                   if (pr.head.repo?.full_name === fullName) inUse.add(pr.head.ref);
                   if (pr.base.repo?.full_name === fullName) inUse.add(pr.base.ref);
                 }
-                const historicalPrefixes = ['feat/', 'fix/', 'extract/', 'docs/', 'audit/', 'chore/'];
+                const historicalPrefixes = ['feat/', 'fix/', 'hotfix/', 'extract/', 'docs/', 'audit/', 'chore/'];
                 const heldPrefixes = [
                   'aaa-', 'backup/', 'archive/', 'recovery/', 'integration/',
                   'reconcile/', 'release/', 'deploy/', 'deployment/', 'ops/',
