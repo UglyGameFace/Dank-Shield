@@ -1527,8 +1527,10 @@ async def on_member_join(member: discord.Member):
             try:
                 from .member_connection_intelligence import verified_ban_connections
 
+                from .member_connection_controls import auto_review_enabled
+                should_review = await auto_review_enabled(guild.id, "review")
                 banned_links = (await verified_ban_connections(guild, join_context, risk_profile)
-                                if not getattr(member, "bot", False) else [])
+                                if should_review and not getattr(member, "bot", False) else [])
                 if banned_links:
                     linked_ids = ", ".join(f"`{x['user_id']}`" for x in banned_links[:5])
                     notice = discord.Embed(
@@ -1734,8 +1736,12 @@ async def on_member_ban(guild: discord.Guild, user: discord.User):
         try:
             from .member_connection_intelligence import analyze_member_connections
 
-            connection_report = await analyze_member_connections(guild.id, user.id)
-            matches = connection_report.get("matches") or []
+            from .member_connection_controls import auto_review_enabled
+            if await auto_review_enabled(guild.id, "monitor"):
+                connection_report = await analyze_member_connections(guild.id, user.id)
+                matches = connection_report.get("matches") or []
+            else:
+                connection_report, matches = {}, []
             if matches:
                 lines = [
                     f"• `{row['user_id']}`: {row['category']}"
