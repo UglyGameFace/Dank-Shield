@@ -1542,10 +1542,9 @@ async def on_member_join(member: discord.Member):
                         ),
                         color=discord.Color.orange(),
                     )
-                    await _post_modlog(
-                        guild, notice,
-                        event_key=f"ban_connection_join:{member.id}",
-                        dedupe_window_seconds=900,
+                    from .member_connection_controls import post_private_connection_alert
+                    await post_private_connection_alert(
+                        guild, notice, event_key=f"ban_connection_join:{member.id}",
                     )
             except Exception as exc:
                 print(f"⚠️ ban connection join check failed: {type(exc).__name__}")
@@ -1759,10 +1758,9 @@ async def on_member_ban(guild: discord.Guild, user: discord.User):
                 )
                 if connection_report.get("coverage") != "available":
                     notice.set_footer(text="Evidence incomplete; some storage reads failed.")
-                await _post_modlog(
-                    guild, notice,
-                    event_key=f"ban_connections:{user.id}",
-                    dedupe_window_seconds=900,
+                from .member_connection_controls import post_private_connection_alert
+                await post_private_connection_alert(
+                    guild, notice, event_key=f"ban_connections:{user.id}",
                 )
         except Exception as exc:
             print(f"⚠️ ban connection review unavailable: {type(exc).__name__}")
