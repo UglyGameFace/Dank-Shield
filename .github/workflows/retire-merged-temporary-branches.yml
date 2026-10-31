@@ -93,7 +93,12 @@ jobs:
             if (isManual && mode === 'delete' && context.actor !== 'UglyGameFace') {
               throw new Error('Manual deletion requires repository owner');
             }
-            const deleting = mode === 'delete';
+            // No deletion path may run without a resolved deployment ref.
+            // Scheduled runs remain archive-only until this evidence exists.
+            if (isManual && mode === 'delete' && !deploymentBranchConfigured) {
+              throw new Error('Verify DANK_DISCLOUD_DEPLOY_BRANCH before deleting any refs');
+            }
+            const deleting = mode === 'delete' && deploymentBranchConfigured;
 
             const reviewed = mode === 'preview-reviewed-merged' || mode === 'delete-reviewed-merged';
             if (reviewed) {
