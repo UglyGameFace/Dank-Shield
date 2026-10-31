@@ -36,6 +36,9 @@ def test_auto_retirement_only_opt_in_namespaces() -> None:
 def test_fully_integrated_historical_cleanup_is_archive_first_and_bounded() -> None:
     workflow = AUTO.read_text(encoding="utf-8")
     assert "cron: '*/5 * * * *'" in workflow
+    assert "  push:\n    branches:\n      - main" in workflow
+    assert "Math.floor(Date.now() / 300000)" in workflow
+    assert "historical[(start + i) % historical.length]" in workflow
     assert "DANK_DISCLOUD_DEPLOY_BRANCH is not verified" in workflow
     assert "const historicalPrefixes = ['feat/', 'fix/', 'extract/', 'docs/', 'audit/', 'chore/']" in workflow
     assert "const scanLimit = Math.min(24, historical.length)" in workflow
