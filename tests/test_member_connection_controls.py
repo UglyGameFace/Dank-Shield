@@ -85,6 +85,11 @@ class FakeOverwrite:
 class FakePerms:
     administrator = False
     manage_roles = True
+    view_channel = False
+    manage_guild = False
+    moderate_members = False
+    kick_members = False
+    ban_members = False
 
 
 class FakeRole:
@@ -136,6 +141,7 @@ class FakeGuild:
         self.trusted = FakeRole(456, self)
         self.me = FakeMember(self, 999)
         self.channel = FakeTextChannel(self, 789)
+        self.roles = [self.default_role, self.trusted]
 
     def get_channel(self, cid):
         return self.channel if cid == 789 else None
@@ -210,3 +216,51 @@ def test_nobody_is_restricted_for_connections_and_events_respect_switches():
     assert "member.ban(" not in service
     assert "member.kick(" not in service
     assert "member.timeout(" not in service
+
+
+def test_sensitive_connection_alerts_require_private_modlog(monkeypatch):
+    from stoney_verify import modlog
+    install_store(monkeypatch)
+    guild, _ = install_discord(monkeypatch)
+    messages = []
+
+    async def get_channel(_guild):
+        return guild.channel
+
+    async def send(guild_arg, embed, *, event_key, dedupe_window_seconds):
+        messages.append((event_key, dedupe_window_seconds))
+
+    monkeypatch.setattr(modlog, "_get_modlog_channel_async", get_channel)
+    monkeypatch.setattr(modlog, "_post_modlog", send)
+    assert run(controls.post_private_connection_alert(
+        guild, SimpleNamespace(), event_key="connection:1"
+    )) is True
+    assert messages == [("connection:1", 900)]
+
+    def public_permissions(who):
+        return SimpleNamespace(view_channel=True, manage_roles=True)
+
+    guild.channel.permissions_for = public_permissions
+    assert run(controls.post_private_connection_alert(
+        guild, SimpleNamespace(), event_key="connection:2"
+    )) is False
+    assert messages == [("connection:1", 900)]
+
+
+def test_sensitive_alerts_refuse_untrusted_explicit_member_access(monkeypatch):
+    from stoney_verify import modlog
+    install_store(monkeypatch)
+    guild, actor = install_discord(monkeypatch)
+    guild.channel.overwrites[actor] = FakeOverwrite(True)
+
+    async def get_channel(_guild):
+        return guild.channel
+
+    async def never_send(*args, **kwargs):
+        raise AssertionError("Sensitive connection evidence must not be sent")
+
+    monkeypatch.setattr(modlog, "_get_modlog_channel_async", get_channel)
+    monkeypatch.setattr(modlog, "_post_modlog", never_send)
+    assert run(controls.post_private_connection_alert(
+        guild, SimpleNamespace(), event_key="connection:3"
+    )) is False
