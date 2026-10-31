@@ -71,6 +71,20 @@ jobs:
               'backup/stoneyverify-stable-7fdc331-20261008',
               String(process.env.LINKED_PRODUCTION_BRANCH || '').trim()
             ]);
+            // A nonempty variable is not proof that the branch exists. Fail
+            // closed if it is mistyped or was deleted since configuration.
+            const configuredDeployBranch = String(process.env.LINKED_PRODUCTION_BRANCH || '').trim();
+            let deploymentBranchConfigured = false;
+            if (configuredDeployBranch) {
+              try {
+                const deployed = (await github.rest.repos.getBranch({
+                  owner, repo, branch: configuredDeployBranch
+                })).data;
+                deploymentBranchConfigured = Boolean(deployed.commit?.sha);
+              } catch (error) {
+                core.warning('Configured Discloud deployment branch cannot be resolved; historical deletion disabled');
+              }
+            }
             const isManual = context.eventName === 'workflow_dispatch';
             const mode = isManual ? process.env.REQUESTED_MODE : 'delete';
             if (!['preview', 'delete', 'preview-reviewed-merged', 'delete-reviewed-merged'].includes(mode)) {
@@ -87,7 +101,7 @@ jobs:
                 throw new Error('Owner dispatch required');
               }
               const deleteReviewed = mode === 'delete-reviewed-merged';
-              if (deleteReviewed && !String(process.env.LINKED_PRODUCTION_BRANCH || '').trim()) {
+              if (deleteReviewed && !deploymentBranchConfigured) {
                 throw new Error('Verify and set DANK_DISCLOUD_DEPLOY_BRANCH before deleting reviewed refs');
               }
               const mainSha = (await github.rest.repos.getBranch({
@@ -302,8 +316,7 @@ jobs:
             let archivedOnly = 0;
             let newArchives = 0;
             if (!isManual) {
-              const deployedRef = String(process.env.LINKED_PRODUCTION_BRANCH || '').trim();
-              const canRetire = Boolean(deployedRef);
+              const canRetire = deploymentBranchConfigured;
               if (!canRetire) {
                 core.warning('Historical cleanup is archive-only until DANK_DISCLOUD_DEPLOY_BRANCH is verified');
               }
