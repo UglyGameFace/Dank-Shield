@@ -554,14 +554,16 @@ def _protection_embed(
             value=(
                 f"Invites: **{'Blocked' if _cfg_bool(cfg, 'automod_block_invites', False) else 'Allowed'}**\n"
                 f"Other links: **{'Blocked' if _cfg_bool(cfg, 'automod_block_links', False) else 'Allowed'}**\n"
-                f"Delete access in this channel: {_invite_delete_health(guild, channel)}"
+                f"**Live delete access here:** {_invite_delete_health(guild, channel)}"
             ),
             inline=False,
         )
         embed.add_field(
             name="How it works",
             value="Invite Blocker changes Discord invites; Link Shield changes all URLs. "
-                  "Invite Settings controls exceptions and special cases.",
+                  "Invite Settings controls exceptions and special cases.\n"
+                  "**Modern app cards:** visible Components V2 text is checked; "
+                  "generated previews and support URLs are excluded.",
             inline=False,
         )
     elif section == "filters":
