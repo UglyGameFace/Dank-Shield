@@ -1320,4 +1320,5 @@ def test_both_owner_cleanup_jobs_require_real_deployment_reference() -> None:
     assert text.count("if (deleting) {\n              if (!linkedProductionBranch)") == 2
     assert text.count("github.rest.repos.getBranch({\n                owner, repo, branch: linkedProductionBranch") == 2
     assert "linkedProductionBranch\n            ]);" in text
+    assert "if (name === linkedProductionBranch) continue;" in text
     assert "name === linkedProductionBranch" in text
