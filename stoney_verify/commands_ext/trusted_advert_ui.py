@@ -48,85 +48,108 @@ async def _resolve_bot(guild: discord.Guild, raw: str) -> discord.Member | None:
     return member
 
 
-def _embed(guild: discord.Guild, channel_id: int, rules: list[dict[str, Any]]) -> discord.Embed:
+_TRUSTED_ADS_SECTIONS = {
+    "approval": ("Use This Channel", "Choose Channel", "Find Bot", "Approve Bot", "Manage / Remove"),
+    "retention": ("Enable Cleanup", "Collapse Previews", "Bulk Progress", "Cancel Bulk", "Cleanup Status"),
+}
+
+
+def _embed(
+    guild: discord.Guild, channel_id: int, rules: list[dict[str, Any]],
+    *, section: str = "approval",
+) -> discord.Embed:
+    section = section if section in _TRUSTED_ADS_SECTIONS else "approval"
     channel = guild.get_channel(channel_id)
-    mention = channel.mention if isinstance(channel, discord.TextChannel) else "Choose a text channel"
+    selected = [rule for rule in rules if rule["channel_id"] == channel_id]
     embed = discord.Embed(
-        title="🤝 Trusted Advertising Bots",
+        title=f"🤝 Trusted Ad Bots • {'Approvals' if section == 'approval' else 'Cleanup & Previews'}",
         description=(
-            "Invite Shield stays **ON everywhere**. Allow only an exact trusted bot "
-            "to post advertisements in one approved channel. Members and bots elsewhere "
-            "are still checked. Start by selecting a channel, then approve the bot's Discord ID."
-        ), color=discord.Color.blurple(),
+            "Invite Shield stays **on for everyone else**. Only an exact approved bot "
+            "in an exact channel receives an exception."
+        ),
+        color=discord.Color.blurple(),
     )
-    embed.add_field(name="Selected ad channel", value=mention, inline=False)
-    if isinstance(channel, discord.TextChannel):
-        me = getattr(guild, "me", None)
-        if me is not None:
-            perms = channel.permissions_for(me)
-            needed = [
-                label for flag, label in (
-                    ("view_channel", "View Channel"),
-                    ("read_message_history", "Read Message History"),
-                    ("manage_messages", "Manage Messages"),
-                )
-                if not getattr(perms, flag, False)
-            ]
-            embed.add_field(
-                name="Cleanup permissions",
-                value=("✅ Ready" if not needed else "⚠️ Missing: " + ", ".join(needed)),
-                inline=False,
-            )
-        default_role = getattr(guild, "default_role", None)
-        if default_role is not None:
-            public_view = bool(getattr(channel.permissions_for(default_role), "view_channel", False))
-            embed.add_field(
-                name="OneBump visibility",
-                value=("✅ Members can view the advertising channel." if public_view
-                       else "⚠️ The default server role cannot view this channel. OneBump fair-play rules require visible adverts."),
-                inline=False,
-            )
-    lines = []
-    for rule in rules[:10]:
-        lines.append(
-            f"Bot `{rule['bot_id']}` • <#{rule['channel_id']}> • "
-            + ("Previews hidden • " if rule.get("suppress_embeds") else "Previews visible • ")
-            + (f"Cleanup after {rule['retention_hours']}h + 10m" if rule["cleanup_enabled"] else "No automatic deletion")
+    embed.add_field(
+        name="Advertising channel",
+        value=channel.mention if isinstance(channel, discord.TextChannel) else "Choose a text channel first.",
+        inline=False,
+    )
+    if section == "approval":
+        embed.add_field(
+            name="Approved pairs",
+            value=(
+                f"**{len(rules)}/10** total • **{len(selected)}** in this channel\n"
+                "Use Manage / Remove for an existing bot. Approval requires the exact Discord bot ID."
+            ),
+            inline=False,
         )
-    embed.add_field(
-        name=f"Approved bot/channel pairs ({len(rules)}/10)",
-        value="\n".join(lines)[:1024] or "No trusted advertising bots configured.",
-        inline=False,
-    )
-    embed.add_field(
-        name="Collapse ad previews (optional)",
-        value=(
-            "Hide the rich embed card of an approved advertising bot in the selected channel. "
-            "The original post stays; **its large preview and Join card may disappear**. "
-            "This is NOT selective text blur, and OneBump may consider a collapsed advert "
-            "less visible under its fair-play policy. Default: OFF. "
-            "Other bots, members and channels are unchanged."
-        ),
-        inline=False,
-    )
-    embed.add_field(
-        name="OneBump and optional cleanup",
-        value=(
-            "OneBump says adverts must stay visible **at least 24 hours** and warns "
-            "against bulk/purge deletion. Enter **any whole number of hours, 24 or more** "
-            "(for example, **25**); cleanup adds a **10-minute safety buffer**. It "
-            "is OFF by default and might still affect OneBump fair-play standing. "
-            "Never enable it unless you accept that risk. More info: bump.ltd/guides/fair-play"
-        ),
-        inline=False,
-    )
-    embed.add_field(
-        name="Before setting up",
-        value="Copy the real advertising bot's ID in Discord (Developer Mode → Copy User ID). "
-              "No username-based trust, no channel-wide whitelist.",
-        inline=False,
-    )
+        if isinstance(channel, discord.TextChannel):
+            me = getattr(guild, "me", None)
+            if me is not None:
+                perms = channel.permissions_for(me)
+                missing = [
+                    label for flag, label in (
+                        ("view_channel", "View Channel"),
+                        ("read_message_history", "Read Message History"),
+                        ("manage_messages", "Manage Messages"),
+                    )
+                    if not getattr(perms, flag, False)
+                ]
+                embed.add_field(
+                    name="Bot permissions",
+                    value="✅ Ready" if not missing else "⚠️ Missing: " + ", ".join(missing),
+                    inline=False,
+                )
+            default_role = getattr(guild, "default_role", None)
+            if default_role is not None:
+                public_view = bool(getattr(channel.permissions_for(default_role), "view_channel", False))
+                embed.add_field(
+                    name="Public ad visibility",
+                    value="✅ Members can view the channel" if public_view
+                    else "⚠️ Members cannot view this channel. OneBump fair-play requires visible adverts.",
+                    inline=False,
+                )
+    else:
+        cleanup = sum(bool(rule.get("cleanup_enabled")) for rule in selected)
+        collapsed = sum(bool(rule.get("suppress_embeds")) for rule in selected)
+        embed.add_field(
+            name="Selected channel",
+            value=f"Approved bots: **{len(selected)}** • Cleanup enabled: **{cleanup}** • Previews collapsed: **{collapsed}**",
+            inline=False,
+        )
+        embed.add_field(
+            name="OneBump safeguards",
+            value=(
+                "Ads must remain visible **at least 24 hours**. Cleanup is optional, "
+                "starts at a configured **24+ hour** retention with a **10-minute buffer**, "
+                "and can still affect fair-play standing. Preview collapse may hide Join cards. "
+                "Bulk actions never whitelist unrelated messages."
+            ),
+            inline=False,
+        )
+    embed.set_footer(text="Review exact bot IDs and channel scope before changing rules")
     return embed
+
+
+class _TrustedAdsSectionSelect(discord.ui.Select):
+    def __init__(self, owner_id: int, channel_id: int, section: str) -> None:
+        self.owner_id = int(owner_id)
+        self.channel_id = int(channel_id)
+        super().__init__(
+            placeholder="Choose trusted ads settings",
+            options=[
+                discord.SelectOption(label="Bot Approvals", value="approval", default=section == "approval"),
+                discord.SelectOption(label="Cleanup & Previews", value="retention", default=section == "retention"),
+            ],
+            row=0, custom_id="dank_protection:trusted_ads:section:v2",
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        if not _staff(interaction, self.owner_id):
+            return await _notice(interaction, "Manage Server permission required.")
+        await show_trusted_ads(
+            interaction, self.owner_id, channel_id=self.channel_id, section=self.values[0],
+        )
 
 
 class ApproveAdvertBotModal(discord.ui.Modal, title="Approve an Advertising Bot"):
@@ -371,13 +394,22 @@ class TrustedPreviewModal(discord.ui.Modal, title="Collapse Trusted Ad Previews"
 
 class TrustedAdsView(discord.ui.View):
     def __init__(self, owner_id: int, guild: discord.Guild, channel_id: int,
-                 *, rules: list[dict[str, Any]] | None = None):
+                 *, rules: list[dict[str, Any]] | None = None, section: str = "approval"):
         super().__init__(timeout=900)
-        self.owner_id = owner_id
+        self.owner_id = int(owner_id)
         self.guild = guild
-        self.channel_id = channel_id
+        self.channel_id = int(channel_id)
+        self.section = section if section in _TRUSTED_ADS_SECTIONS else "approval"
         # For rendering only; the modal rechecks fresh authoritative config.
         self.rule_options = list(rules or [])
+        original = {str(getattr(item, "label", "")): item for item in self.children}
+        self.clear_items()
+        self.add_item(_TrustedAdsSectionSelect(self.owner_id, self.channel_id, self.section))
+        names = (*_TRUSTED_ADS_SECTIONS[self.section], "Refresh", "Back to Invite Shield")
+        for index, name in enumerate(names):
+            item = original[name]
+            item.row = 1 + index // 4
+            self.add_item(item)
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if _staff(interaction, self.owner_id):
@@ -391,15 +423,15 @@ class TrustedAdsView(discord.ui.View):
         channel = self.guild.get_channel(int(interaction.channel_id or 0))
         if not isinstance(channel, discord.TextChannel):
             return await _notice(interaction, "Open this setup from the advertising text channel, or choose another.")
-        await show_trusted_ads(interaction, self.owner_id, channel_id=channel.id)
+        await show_trusted_ads(interaction, self.owner_id, channel_id=channel.id, section=self.section)
 
     @discord.ui.button(label="Choose Channel", emoji="🧭", style=discord.ButtonStyle.secondary, row=0)
     async def choose_channel(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         async def pick(pick_interaction: discord.Interaction, channel: Any) -> None:
-            await show_trusted_ads(pick_interaction, self.owner_id, channel_id=int(channel.id))
+            await show_trusted_ads(pick_interaction, self.owner_id, channel_id=int(channel.id), section=self.section)
         async def back(back_interaction: discord.Interaction) -> None:
-            await show_trusted_ads(back_interaction, self.owner_id, channel_id=self.channel_id)
+            await show_trusted_ads(back_interaction, self.owner_id, channel_id=self.channel_id, section=self.section)
         browser = DankGuildResourceBrowserView(
             guild=self.guild, author_id=self.owner_id, resource_kinds=("text",),
             on_pick=pick, on_home=back,
@@ -434,12 +466,12 @@ class TrustedAdsView(discord.ui.View):
         _ = button
         if not isinstance(self.guild.get_channel(self.channel_id), discord.TextChannel):
             return await _notice(interaction, "Choose a text channel first.")
-        await interaction.response.send_modal(ApproveAdvertBotModal(self.owner_id, channel_id=self.channel_id))
+        await interaction.response.send_modal(ApproveAdvertBotModal(self.owner_id, channel_id=self.channel_id, section=self.section))
 
     @discord.ui.button(label="Enable Cleanup", emoji="🕒", style=discord.ButtonStyle.secondary, row=1)
     async def cleanup(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
-        await interaction.response.send_modal(ConfirmAdvertCleanupModal(self.owner_id, channel_id=self.channel_id))
+        await interaction.response.send_modal(ConfirmAdvertCleanupModal(self.owner_id, channel_id=self.channel_id, section=self.section))
 
     @discord.ui.button(label="Collapse Previews", emoji="🫥", style=discord.ButtonStyle.secondary, row=1)
     async def collapse_previews(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -458,12 +490,12 @@ class TrustedAdsView(discord.ui.View):
     @discord.ui.button(label="Manage / Remove", emoji="🗑️", style=discord.ButtonStyle.secondary, row=1)
     async def remove(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
-        await interaction.response.send_modal(RemoveAdvertRuleModal(self.owner_id, channel_id=self.channel_id))
+        await interaction.response.send_modal(RemoveAdvertRuleModal(self.owner_id, channel_id=self.channel_id, section=self.section))
 
     @discord.ui.button(label="Refresh", emoji="🔄", style=discord.ButtonStyle.secondary, row=2)
     async def refresh(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
-        await show_trusted_ads(interaction, self.owner_id, channel_id=self.channel_id)
+        await show_trusted_ads(interaction, self.owner_id, channel_id=self.channel_id, section=self.section)
 
     @discord.ui.button(label="Bulk Progress", emoji="📊", style=discord.ButtonStyle.secondary, row=3)
     async def bulk_progress(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -528,7 +560,7 @@ class TrustedAdsView(discord.ui.View):
         from .public_protection_invite_ui import _redraw
         from ..invite_scope_settings import load_invite_scope_settings
         scope = await load_invite_scope_settings(self.guild.id, refresh=True)
-        await _redraw(interaction, author_id=self.owner_id, scope=scope, origin_channel_id=self.channel_id)
+        await _redraw(interaction, author_id=self.owner_id, scope=scope, origin_channel_id=self.channel_id, section=self.section)
 
 
 class RemoveAdvertRuleModal(discord.ui.Modal, title="Remove or Pause Trusted Bot"):
@@ -582,7 +614,7 @@ class RemoveAdvertRuleModal(discord.ui.Modal, title="Remove or Pause Trusted Bot
         ) + stale_note)
 
 
-async def show_trusted_ads(interaction: discord.Interaction, owner_id: int, *, channel_id: int = 0) -> None:
+async def show_trusted_ads(interaction: discord.Interaction, owner_id: int, *, channel_id: int = 0, section: str = "approval") -> None:
     guild = interaction.guild
     if guild is None or not _staff(interaction, owner_id):
         return await _notice(interaction, "Manage Server permission required.")
@@ -594,8 +626,8 @@ async def show_trusted_ads(interaction: discord.Interaction, owner_id: int, *, c
         rules = await load_rules(guild.id, refresh=True)
     except RuntimeError:
         return await _notice(interaction, "Guild settings unavailable. Cannot safely configure trusted bots.")
-    view = TrustedAdsView(owner_id, guild, channel_id, rules=rules)
-    embed = _embed(guild, channel_id, rules)
+    view = TrustedAdsView(owner_id, guild, channel_id, rules=rules, section=section)
+    embed = _embed(guild, channel_id, rules, section=section)
     if interaction.response.is_done():
         await interaction.edit_original_response(embed=embed, view=view, content=None)
     else:
