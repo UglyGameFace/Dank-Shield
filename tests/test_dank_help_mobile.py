@@ -121,6 +121,7 @@ def test_search_matches_everyday_questions_not_only_exact_command_labels():
         ("help me with invite shield", "protection"),
         ("ticket", "tickets"),
         ("how do i use live captions?", "live_captions"),
+        ("How do I investigate banned user connections?", "members_moderation"),
     ]:
         assert key in [feature.key for feature in nav._search_help_guides(question)]
     assert nav._search_help_guides("moonwalk spaceship broccoli") == []
