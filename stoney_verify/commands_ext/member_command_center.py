@@ -624,7 +624,7 @@ class IntelligenceMenuView(OwnedView):
             return
         await interaction.response.defer(ephemeral=True)
         try:
-            bans = [entry async for entry in interaction.guild.bans(limit=10)]
+            bans = [entry async for entry in interaction.guild.bans(limit=None)]
         except (discord.Forbidden, discord.HTTPException):
             await reply_ephemeral(interaction, "⚠️ Cannot list bans. Check Dank Shield's Ban Members permission.")
             return
@@ -634,7 +634,8 @@ class IntelligenceMenuView(OwnedView):
         view = RecentBanConnectionView(self.owner_id, bans)
         embed = discord.Embed(
             title="🔗 Recent Ban Connections",
-            description="Choose a banned user. Dank Shield will check stored server evidence, not outside DMs or private servers.",
+            description=(f"Showing all **{len(bans)}** Discord ban records, 25 per page. "
+                         "Choose a banned user to review retained server evidence."),
             color=discord.Color.blurple(),
         )
         await _replace_panel(interaction, embed=embed, view=view)
@@ -980,17 +981,18 @@ class ConnectionReportView(OwnedView):
 
 
 class RecentBanConnectionSelect(discord.ui.Select):
-    def __init__(self, owner_id: int, bans: list[Any]) -> None:
+    def __init__(self, owner_id: int, bans: list[Any], page: int = 0) -> None:
         self.owner_id = owner_id
+        page_bans = bans[page * 25:(page + 1) * 25]
         options = [
             discord.SelectOption(
                 label=str(entry.user)[:90],
                 value=str(entry.user.id),
                 description="Review stored links to this banned account",
-            ) for entry in bans
+            ) for entry in page_bans
         ]
         super().__init__(
-            placeholder="Choose a banned account…",
+            placeholder=f"Choose a banned account (page {page + 1})…",
             options=options,
             min_values=1,
             max_values=1,
@@ -1005,13 +1007,42 @@ class RecentBanConnectionSelect(discord.ui.Select):
 
 
 class RecentBanConnectionView(OwnedView):
-    def __init__(self, owner_id: int, bans: list[Any]) -> None:
+    def __init__(self, owner_id: int, bans: list[Any], page: int = 0) -> None:
         super().__init__(owner_id)
-        self.add_item(RecentBanConnectionSelect(owner_id, bans))
+        self.bans = bans
+        self.page = max(0, min(page, (len(bans) - 1) // 25))
+        self.add_item(RecentBanConnectionSelect(owner_id, bans, self.page))
+        self.previous.disabled = self.page == 0
+        self.next_page.disabled = (self.page + 1) * 25 >= len(bans)
 
-    @discord.ui.button(label="Intelligence Menu", emoji="◀️", style=discord.ButtonStyle.secondary, row=1)
+    async def _navigate(self, interaction: discord.Interaction, page: int) -> None:
+        if not await require_review(interaction):
+            return
+        await interaction.response.defer(ephemeral=True)
+        embed = discord.Embed(
+            title="🔗 Recent Ban Connections",
+            description=(
+                f"**{len(self.bans)} banned accounts** · Page "
+                f"**{page + 1}/{(len(self.bans) + 24) // 25}**. "
+                "Choose an account to review stored server evidence."
+            ),
+            color=discord.Color.blurple(),
+        )
+        await _replace_panel(
+            interaction, embed=embed,
+            view=RecentBanConnectionView(self.owner_id, self.bans, page),
+        )
+
+    @discord.ui.button(label="Previous", emoji="◀️", style=discord.ButtonStyle.secondary, row=1)
+    async def previous(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await self._navigate(interaction, max(0, self.page - 1))
+
+    @discord.ui.button(label="Next", emoji="▶️", style=discord.ButtonStyle.secondary, row=1)
+    async def next_page(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await self._navigate(interaction, min((len(self.bans) - 1) // 25, self.page + 1))
+
+    @discord.ui.button(label="Intelligence Menu", emoji="◀️", style=discord.ButtonStyle.secondary, row=2)
     async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        _ = button
         await _replace_panel(interaction, embed=_intelligence_embed(), view=IntelligenceMenuView(self.owner_id))
 
 
