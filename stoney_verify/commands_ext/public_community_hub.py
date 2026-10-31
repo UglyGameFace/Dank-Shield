@@ -4835,7 +4835,7 @@ class ModeSelect(discord.ui.Select):
             discord.SelectOption(label="Smart", value="smart", description="Temporary discussion and voice when permissions allow", default=current == "smart"),
             discord.SelectOption(label="Managed", value="managed", description="Full managed Community Hub infrastructure", default=current == "managed"),
         ]
-        super().__init__(placeholder="Community Hub mode", options=options, custom_id="dank:hub:settings:mode:v1", row=0)
+        super().__init__(placeholder="Community Hub mode", options=options, custom_id="dank:hub:settings:mode:v1", row=1)
 
     async def callback(self, interaction: discord.Interaction) -> None:
         await _defer_update(interaction)
