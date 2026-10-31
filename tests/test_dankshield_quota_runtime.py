@@ -6,6 +6,8 @@ import ast
 import threading
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -120,3 +122,82 @@ def test_command_queue_storage_failure_is_rate_limited(monkeypatch) -> None:
     monkeypatch.setattr(mod.asyncio, "sleep", sleep)
     asyncio.run(mod._queue_loop())
     assert waits == [mod._DB_FAILURE_POLL_SECONDS]
+
+
+def test_app_starts_canonical_bot_command_worker_not_legacy_queue() -> None:
+    app = (ROOT / "stoney_verify/app.py").read_text()
+    worker = (ROOT / "stoney_verify/workers/bot_command_worker.py").read_text()
+    assert "from .workers.bot_command_worker import start_worker" in app
+    assert "worker_task = start_worker()" in app
+    assert "start_command_queue_worker(" not in app
+    assert "POLL_INTERVAL = 5.0" in worker
+    assert "DB_FAILURE_POLL_SECONDS = 30.0" in worker
+    ast.parse(worker)
+
+
+def test_active_command_worker_idle_queue_uses_five_second_poll(monkeypatch) -> None:
+    from stoney_verify.workers import bot_command_worker as mod
+
+    waits: list[float] = []
+
+    class FakeBot:
+        closed = False
+
+        async def wait_until_ready(self) -> None:
+            pass
+
+        def is_closed(self) -> bool:
+            return self.closed
+
+    bot = FakeBot()
+
+    async def empty_fetch():
+        bot.closed = True
+        return None
+
+    async def sleep(delay: float) -> None:
+        waits.append(delay)
+
+    monkeypatch.setattr(mod, "bot", bot)
+    monkeypatch.setattr(mod, "fetch_pending_command", empty_fetch)
+    monkeypatch.setattr(mod.asyncio, "sleep", sleep)
+    asyncio.run(mod.worker_loop())
+    assert waits == [mod.POLL_INTERVAL]
+
+
+def test_active_command_worker_storage_failure_backs_off(monkeypatch) -> None:
+    from stoney_verify.workers import bot_command_worker as mod
+
+    waits: list[float] = []
+
+    class FakeBot:
+        closed = False
+
+        async def wait_until_ready(self) -> None:
+            pass
+
+        def is_closed(self) -> bool:
+            return self.closed
+
+    bot = FakeBot()
+
+    async def failed_fetch():
+        bot.closed = True
+        raise RuntimeError("database unavailable")
+
+    async def sleep(delay: float) -> None:
+        waits.append(delay)
+
+    monkeypatch.setattr(mod, "bot", bot)
+    monkeypatch.setattr(mod, "fetch_pending_command", failed_fetch)
+    monkeypatch.setattr(mod.asyncio, "sleep", sleep)
+    asyncio.run(mod.worker_loop())
+    assert waits == [mod.DB_FAILURE_POLL_SECONDS]
+
+
+def test_active_command_worker_propagates_storage_failure(monkeypatch) -> None:
+    from stoney_verify.workers import bot_command_worker as mod
+
+    monkeypatch.setattr(mod, "get_supabase", lambda: None)
+    with pytest.raises(RuntimeError, match="Supabase unavailable"):
+        asyncio.run(mod.fetch_pending_command())

@@ -35,3 +35,11 @@ Read-back: new advert, collapse, and Atlas tables each started with **0 rows**; 
 5. Validate verification, member truth/cleanup fail-closed behavior, staff tickets, Community Hub and Share Router. Keep migration parity and historical data reconciliation separate.
 
 The current Free plan 5 GB egress over approximately 31 days means average steady use must be below ~0.16 GB/day (with additional growth margin). The already-billed overage is not retroactively removed by these changes. This document is an **implementation checkpoint**, not production acceptance.
+
+## October 31 canonical worker reconciliation (code pending release)
+
+The October 30 worker fix targeted `stoney_verify/tasks_new/command_queue.py`, but `stoney_verify/app.py` actually imports and starts `stoney_verify/workers/bot_command_worker.py:start_worker`. The active worker still polled `bot_commands` every three seconds, explaining why the October 31 API window still showed **27,841 GETs**. This is request-count evidence, not proof of a specific bill or a claim that the new source has reached Discloud.
+
+The canonical worker now uses a five-second idle interval and a 30-second failure cooldown. Its fetch helper distinguishes an empty queue from a database error and propagates errors to the worker loop; a failed Supabase call no longer silently becomes a normal empty poll. Normal commands still drain after processing with the existing one-second pacing, and all database operations remain offloaded via `asyncio.to_thread`. Regression tests assert the actual startup owner and exercise idle/error paths. Do not remove the alternate tasks queue until all callers and the ticket claim guard have been reconciled.
+
+Release proof remains necessary: exact PR-head CI, exact-main CI, a separately approved hosted release, and comparable post-release request-rate, pickup-latency, and billed-egress checks. The source change alone cannot establish production savings.
