@@ -1839,9 +1839,9 @@ async def _confirm_current_video_channel(interaction: discord.Interaction) -> No
         embed=discord.Embed(
             title="Confirm One-Channel Video Setup",
             description=(
-                f"**Members post links in:** {channel.mention}\\n"
-                f"**Finished videos post in:** {channel.mention}\\n"
-                "**DMs:** Off\\n\\n"
+                f"**Members post links in:** {channel.mention}\n"
+                f"**Finished videos post in:** {channel.mention}\n"
+                "**DMs:** Off\n\n"
                 "A successful video is posted before its source link is removed "
                 "(only if Dank Shield has Manage Messages). Failed requests keep "
                 "their original messages. Existing forwarding routes are unchanged."
