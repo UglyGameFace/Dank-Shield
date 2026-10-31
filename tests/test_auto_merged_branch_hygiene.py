@@ -83,3 +83,15 @@ def test_historical_owner_review_workflow_is_unchanged() -> None:
     assert "DELETE_VERIFIED_NEXT_BATCH" in workflow
     assert "DELETE_REVIEWED_HISTORICAL_BRANCHES" in workflow
     assert "CLEANUP_CONFIRMATION" in workflow
+
+def test_unverified_deployment_branch_allows_archival_but_never_deletion() -> None:
+    workflow = AUTO.read_text(encoding="utf-8")
+    assert "const canRetire = Boolean(deployedRef);" in workflow
+    assert "if (!canRetire) {" in workflow
+    assert "archivedOnly++;" in workflow
+    assert "archiveCreated = true;" in workflow
+    assert "if (archiveCreated) newArchives++;" in workflow
+    assert "archived-only verified: " in workflow
+    assert workflow.index("if (!canRetire) {", workflow.index("archive.object.sha !== sha")) < workflow.index(
+        "await github.rest.git.deleteRef({owner, repo, ref: 'heads/' + name})"
+    )
