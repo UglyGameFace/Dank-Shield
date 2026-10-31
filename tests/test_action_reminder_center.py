@@ -128,7 +128,7 @@ def test_owner_buttons_show_only_relevant_actions_and_require_staff() -> None:
     member = ui.ActionCenterView(11, snap, is_staff=False)
     labels = {c.label for c in member.children if isinstance(c, discord.ui.Button)}
     assert labels == {"Find Verification", "My Reminder Preferences", "Refresh", "Home", "Close"}
-    staff = ui.ActionCenterView(11, snap, is_staff=True)
+    staff = ui.ActionCenterView(11, snap, is_staff=True, section="staff")
     staff_labels = {c.label for c in staff.children if isinstance(c, discord.ui.Button)}
     assert "Verification Reminder Settings" in staff_labels
     assert "Member Setup Manager" in staff_labels
