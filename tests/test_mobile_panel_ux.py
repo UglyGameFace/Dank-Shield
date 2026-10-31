@@ -371,3 +371,67 @@ def test_universal_discord_panels_reuse_same_sections_on_desktop_and_mobile():
         first = exit_ui.ExitCardStudioView(owner_id=123, cfg={}, section=section)
         second = exit_ui.ExitCardStudioView(owner_id=456, cfg={}, section=section)
         assert _buttons(first) == _buttons(second)
+
+
+
+def test_join_card_studio_remains_small_on_all_discord_clients():
+    from stoney_verify import welcome_card_studio_ui as join
+    buttons = {name for items in join._JOIN_CARD_SECTIONS.values() for name in items}
+    assert buttons == {
+        "Use This Channel", "Enable / Disable", "Preview", "Theme",
+        "Font", "Colors", "Shuffle", "Uploads",
+    }
+    for section, names in join._JOIN_CARD_SECTIONS.items():
+        view = join.WelcomeCardStudioView(owner_id=9, section=section)
+        assert _buttons(view) == set(names) | {"Refresh", "Welcome & Join", "Close"}
+        _assert_compact(view)
+        assert sum(isinstance(item, join.WelcomeCardChannelSelect) for item in view.children) == (1 if section == "delivery" else 0)
+
+
+def test_action_center_member_and_staff_actions_have_distinct_pages():
+    from stoney_verify.action_center_service import ActionSnapshot
+    from stoney_verify.commands_ext import public_action_center as actions
+
+    snap = ActionSnapshot(
+        guild_id=42, user_id=7, items=(),
+        checked_sources=("verification", "member_setup"),
+        unavailable_sources=(),
+    )
+    regular = actions.ActionCenterView(7, snap, is_staff=False, section="staff")
+    assert regular.section == "my"
+    assert _buttons(regular) == {"My Reminder Preferences", "Refresh", "Home", "Close"}
+    assert not any(isinstance(item, actions._ActionSectionSelect) for item in regular.children)
+    _assert_compact(regular)
+
+    for section, names in actions._ACTION_SECTIONS.items():
+        staff = actions.ActionCenterView(7, snap, is_staff=True, section=section)
+        assert _buttons(staff) <= set(names) | set(actions._ACTION_COMMON)
+        assert set(actions._ACTION_COMMON) <= _buttons(staff)
+        assert len(staff.children) <= 9
+        embed = actions._embed(snap, section=section)
+        assert len(embed.fields) <= 2
+        assert len(embed.description) <= 250
+
+
+def test_advanced_settings_section_change_keeps_existing_setup_permission(monkeypatch):
+    from stoney_verify.commands_ext import public_setup_recommend as setup
+    calls = []
+
+    async def allow(_interaction):
+        return True
+
+    async def edit(_interaction, *, embed, view):
+        calls.append((embed, view))
+
+    async def defer(_interaction):
+        calls.append("defer")
+
+    monkeypatch.setattr(setup.solid, "_require_setup_permission", allow)
+    monkeypatch.setattr(setup.solid, "_safe_defer_update", defer)
+    monkeypatch.setattr(setup.solid, "_edit_or_followup", edit)
+    response = SimpleNamespace(is_done=lambda: False)
+    picker = setup._AdvancedHubSectionSelect("foundation")
+    picker._values = ["appearance"]
+    asyncio.run(picker.callback(SimpleNamespace(response=response)))
+    assert calls[0] == "defer"
+    assert calls[1][1].section == "appearance"
