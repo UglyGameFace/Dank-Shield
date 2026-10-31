@@ -1,0 +1,44 @@
+name: Mobile Panel UX Guardrails
+
+on:
+  pull_request:
+    paths:
+      - "stoney_verify/**"
+      - "tests/test_mobile_panel_ux.py"
+      - "tools/audit_discord_mobile_panels.py"
+      - ".github/workflows/mobile-panel-ux.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  mobile-panels:
+    name: All panels inventory and focused interaction tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - name: Install bot test requirements
+        run: |
+          python -m pip install -q -r requirements.txt
+          python -m pip install -q pytest
+      - name: Inventory all Python panel surfaces
+        run: |
+          python tools/audit_discord_mobile_panels.py --strict-parse --json-out /tmp/mobile-panel-inventory.json
+      - name: Validate mobile-sized panels and protected interactions
+        run: |
+          python -m pytest tests/test_mobile_panel_ux.py tests/test_protection_panel_load_fallback.py tests/test_public_protection_center_native_interaction_static.py tests/test_protection_refresh_ack.py -q --tb=short
+        env:
+          DANK_STARTUP_LOG_STYLE: quiet
+          DANK_COMMAND_LOG_STYLE: quiet
+      - name: Upload full panel inventory
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mobile-panel-inventory
+          path: /tmp/mobile-panel-inventory.json
+          if-no-files-found: ignore
