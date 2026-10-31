@@ -134,7 +134,10 @@ def test_footer_copy_uses_user_guidance_instead_of_implementation_notes() -> Non
     assert "Welcome & Exit setup • choose where join and exit messages are sent" in welcome
     assert "Setup check • review warnings before changing settings" in setup
     assert "Advanced options, safety checks, video testing and cleanup remain available in Tools." in share
-    assert "Dank Shield • open a feature center to manage settings" in help_surface
+    # The current help page has a short, actionable footer rather than the
+    # former repeated full-command directory.
+    assert "Private help • No command memorization needed" in help_surface
+    assert "Need something else? Change topic or use Find Feature" in help_surface
     assert "Dank Shield ticket panel • choose a category" in ticket
     assert "Dank Shield ticket panel • choose a category" in refresh
     assert "Repair changes only the selected setup areas and preserves join/leave channel visibility." in repair
