@@ -731,10 +731,13 @@ def test_owner_delivery_modes_are_guild_scoped_preserve_legacy_and_routes(tmp_pa
         assert await router.guild_download_channel_id(111) == 77
         assert await router.guild_download_delivery(111) == ("off", 0)
         assert await router.guild_routes(111) == routes
-        with pytest.raises(ValueError):
-            await router.configure_guild_download(
-                111, channel_id=77, mode="channel", destination_id=77,
-            )
+        # Request and results can share one text channel. Bot replies are
+        # excluded from request handling and cannot cause recursive requests.
+        await router.configure_guild_download(
+            111, channel_id=77, mode="channel", destination_id=77,
+        )
+        assert await router.guild_download_delivery(111) == ("channel", 77)
+        await router.configure_guild_download(111, channel_id=77, mode="off")
         with pytest.raises(ValueError):
             await router.configure_guild_download(
                 111, channel_id=77, mode="both",
@@ -817,6 +820,21 @@ def test_owner_can_select_server_channel_without_any_dm(monkeypatch):
     assert len(destination.sent) == 1
     assert destination.sent[0][1] is file
     assert destination.sent[0][2].everyone is False
+    assert message.author.sent == []
+    assert message.deleted
+    assert file.closed
+
+
+
+def test_server_video_results_can_return_to_private_request_channel(monkeypatch):
+    message, destination, file = _outbound_delivery_fixture(monkeypatch, mode="channel")
+    # A private request channel in the managed share hub can also be the
+    # selected destination. Its category name is not a forwarding-rule proof.
+    destination.category = SimpleNamespace(name="🔗 SHARE ROUTES")
+    message.channel = destination
+    assert run(downloads.handle_download_message(message))
+    assert len(destination.sent) == 1
+    assert destination.sent[0][1] is file
     assert message.author.sent == []
     assert message.deleted
     assert file.closed

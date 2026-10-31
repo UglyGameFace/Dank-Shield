@@ -10,6 +10,12 @@ not mandatory.
 1. Open **Share Router → Where Videos Go**. The screen shows the current request
    channel and saved delivery mode. Existing servers with a configured download
    channel but no delivery setting keep their original **Private DM** behavior.
+   **Fast option:** If you want the channel you're currently using to handle
+   both incoming video links and finished videos, choose **Requests + Results
+   Here**. Review the confirmation, then choose **Save Requests + Results Here**.
+   It saves one channel as both request and result, disables DMs, and does
+   not touch forwarding rules. It refuses an active forwarding source rather
+   than silently replacing that rule. No changes occur before confirmation.
 2. Choose **Private DM**, **Post in Server Channel**, **Both DM and Channel**, or
    **Pause Downloads**. For channel delivery, choose **Use This Channel** or the
    existing Search-Safe **Choose Channel** picker. Styled names and emojis use
@@ -40,11 +46,21 @@ not mandatory.
   Legacy per-guild download channel IDs default to DM-only so old working
   configurations are not silently altered. Absent or invalid explicit modes,
   missing destination IDs and paused channels never activate DMs.
-- Server-channel delivery requires a distinct, non-NSFW ordinary channel in
-  the same guild. The sender must be able to view and send there; Dank Shield
-  needs View, Send and Attach Files. Permissions are checked during selection,
-  confirmation and again before delivery. A missing/unsafe destination is
-  blocked without silently falling back to DMs.
+- Server-channel delivery supports **any non-NSFW text channel the bot can
+  access in this guild**, including a private channel inside the managed Share
+  Router category and the **same channel used for video requests**. Bot posts
+  do not recurse into member requests. The requesting member must be able to
+  view and send there; Dank Shield needs View, Send and Attach Files. The
+  confirmation and runtime recheck permissions. A failed destination never
+  silently falls back to DMs.
+- Request channels can be public or private server text channels. A channel
+  already configured as an independent forwarding **source** cannot also be
+  chosen as the video request source until that route is changed. The picker
+  lists all cached text channels rather than hiding candidates based on their
+  category or permissions; choosing a blocked channel explains what to fix.
+  For more than 25 channels, use Next/Previous or Search by name, mention or ID.
+  A channel absent from Discord's accessible guild cache cannot be listed until
+  Dank Shield has permission to see it.
 - Request channels are ordinary text channels and **not private inboxes**.
   Staff choose access using normal Discord roles and channel permissions.
   The sender must be able to view and post in the request channel. The bot
