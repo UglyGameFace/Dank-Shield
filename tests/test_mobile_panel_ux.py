@@ -419,18 +419,33 @@ def test_action_center_member_and_staff_actions_have_distinct_pages():
         assert len(embed.description) <= 250
 
 
-def test_compact_setup_section_picker_routes_without_changing_settings(monkeypatch):
+def test_compact_setup_section_picker_keeps_staff_permission_gate(monkeypatch):
     from stoney_verify.setup_ui import public_setup_compact as compact
+    from stoney_verify.commands_ext import public_command_surface_v2 as navigation
 
     calls = []
 
-    async def route(interaction, section):
-        calls.append((interaction, section))
+    async def deny(_interaction):
+        calls.append("denied")
+        return False
 
-    monkeypatch.setattr(compact, "_route_area", route)
+    async def allow(_interaction):
+        calls.append("allowed")
+        return True
+
+    async def open_category(interaction, category):
+        calls.append(("category", interaction, category))
+
+    monkeypatch.setattr(navigation, "_open_category", open_category)
     picker = compact.FeatureAreaSelect()
     chosen = compact.FEATURE_AREAS[0][0]
     picker._values = [chosen]
     interaction = SimpleNamespace()
+
+    monkeypatch.setattr(compact.setup.solid, "_require_setup_permission", deny)
     asyncio.run(picker.callback(interaction))
-    assert calls == [(interaction, chosen)]
+    assert calls == ["denied"]
+
+    monkeypatch.setattr(compact.setup.solid, "_require_setup_permission", allow)
+    asyncio.run(picker.callback(interaction))
+    assert calls == ["denied", "allowed", ("category", interaction, chosen)]
