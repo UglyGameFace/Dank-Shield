@@ -139,7 +139,7 @@ def _home_embed(guild: discord.Guild, options: Mapping[str, Any] | None = None) 
         ),
         inline=False,
     )
-    embed.set_footer(text="Names only • Existing permissions and roles are unchanged")
+    embed.set_footer(text="Names only • Preview batches • Narrow saved rules always win")
     return legacy._clean_design_embed(embed)  # type: ignore[attr-defined]
 
 
