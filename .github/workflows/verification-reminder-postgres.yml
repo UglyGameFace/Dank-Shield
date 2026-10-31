@@ -11,6 +11,7 @@ on:
       - "stoney_verify/verification_reminder_postgres.py"
       - "stoney_verify/verification_reminders.py"
       - "tests/test_verification_reminder_postgres.py"
+      - "tests/test_verification_reminder_diagnostics.py"
       - "tests/test_verification_reminders.py"
       - "tests/test_verification_reminder_manual_due.py"
       - "tests/test_verification_reminder_manual_send.py"
@@ -66,4 +67,4 @@ jobs:
           python -m stoney_verify.verification_reminder_postgres --apply-manual
           python -m stoney_verify.verification_reminder_postgres --apply-manual
       - name: Verify atomic claims and replay safety on PostgreSQL 16
-        run: python -m pytest tests/test_verification_reminder_postgres.py -q --tb=short
+        run: python -m pytest tests/test_verification_reminder_postgres.py tests/test_verification_reminder_diagnostics.py -q --tb=short
