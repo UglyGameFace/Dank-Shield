@@ -242,7 +242,7 @@ def test_voice_safety_is_separate_gated_scope(monkeypatch) -> None:
 
 
 def test_voice_safety_ui_is_accessible_from_existing_protection_and_persistent() -> None:
-    labels = {child.label for child in ProtectionCenterView(author_id=1).children if getattr(child, "label", None)}
+    labels = {child.label for child in ProtectionCenterView(author_id=1, section="tools").children if getattr(child, "label", None)}
     assert "Voice Safety" in labels
     staff = VoiceSafetyStaffView(1)
     assert not any(isinstance(child, discord.ui.ChannelSelect) for child in staff.children)

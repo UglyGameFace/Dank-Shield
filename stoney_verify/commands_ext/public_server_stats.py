@@ -106,68 +106,38 @@ def _center_embed(guild: discord.Guild, cfg: Any) -> discord.Embed:
     enabled = _cfg_bool(cfg, SECURITY_STATS_ENABLED_KEY, False)
     category = _tracked_category(guild, cfg)
     visible = tuple(prefs["visible_keys"])
-    custom_labels = dict(prefs["labels"])
-    custom_formats = dict(prefs["formats"])
-    design_sync = bool(prefs["inherit_design"])
-
-    if enabled and category is not None:
-        health = f"✅ Active • <#{int(category.id)}>"
-        color = discord.Color.green()
-    elif enabled:
-        health = "🟡 Enabled • display missing, **Repair Display** will recreate it"
-        color = discord.Color.gold()
-    else:
-        health = "⚪ Disabled"
-        color = discord.Color.blurple()
-
-    embed = discord.Embed(
-        title="📊 Dank Shield Server Stats",
-        description=(
-            "Build the live locked voice-channel counters your server actually wants. "
-            "Every option below is saved per server and uses the same owned display that "
-            "the protection/ticket counters update."
-        ),
-        color=color,
-        timestamp=discord.utils.utcnow(),
+    health = (
+        f"✅ Active in <#{int(category.id)}>"
+        if enabled and category is not None else
+        "⚠️ Display missing. Use Repair Display."
+        if enabled else
+        "⚪ Disabled"
     )
-    embed.add_field(name="Status", value=health, inline=False)
+    embed = discord.Embed(
+        title="📊 Server Stats",
+        description=(
+            f"**Status:** {health}\n"
+            "Choose what to change below. Counters remain owned by Server Stats; "
+            "Server Design only supplies their optional style."
+        ),
+        color=discord.Color.green() if enabled and category is not None else discord.Color.gold() if enabled else discord.Color.blurple(),
+    )
     embed.add_field(
-        name="Display",
+        name="Current display",
         value=(
-            f"**Category:** {security_stats_category_display_name(prefs)}\n"
-            f"**Placement:** {str(prefs['placement']).title()}\n"
-            f"**Numbers:** {str(prefs['number_style']).title()}\n"
-            f"**Design Sync:** {'On' if design_sync else 'Off'}\n"
-            f"**Visible counters:** {len(visible)}/{len(DEFAULT_SECURITY_STATS_VISIBLE_KEYS)}"
+            f"Category: **{security_stats_category_display_name(prefs)}**\n"
+            f"Placement: **{str(prefs['placement']).title()}** • "
+            f"Numbers: **{str(prefs['number_style']).title()}** • "
+            f"Design Sync: **{'On' if prefs['inherit_design'] else 'Off'}**"
         ),
         inline=False,
     )
     embed.add_field(
-        name="Visible counters",
+        name=f"Visible counters ({len(visible)}/{len(DEFAULT_SECURITY_STATS_VISIBLE_KEYS)})",
         value=" • ".join(_METRIC_TITLES[key] for key in visible) or "None",
         inline=False,
     )
-    embed.add_field(
-        name="Customization",
-        value=(
-            f"**Legacy custom labels:** {len(custom_labels)}\n"
-            f"**Structured counter formats:** {len(custom_formats)}\n"
-            "Use **Choose Visible Counters** to select provider-backed metrics. "
-            "Use **Customize Counter Format** to edit icon/prefix, label, separator, and "
-            "the value wrapper without disconnecting the live value source."
-        ),
-        inline=False,
-    )
-    embed.add_field(
-        name="Repair behavior",
-        value=(
-            "If an enabled stats category is deleted, refresh repairs the same owned display. "
-            "Server Design never directly renames live stat resources; Design Sync reads the saved design "
-            "as a visual source while Server Stats remains the sole live-name owner."
-        ),
-        inline=False,
-    )
-    embed.set_footer(text="Server Stats • settings apply only to this server.")
+    embed.set_footer(text="Use the controls below to edit labels, formats or visibility")
     return embed
 
 
