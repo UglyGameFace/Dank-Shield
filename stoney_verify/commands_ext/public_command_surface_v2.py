@@ -112,49 +112,86 @@ def _home_embed() -> discord.Embed:
     return embed
 
 
+# Help is a small guided doorway, not a second handwritten command directory.
+# Destinations and visible labels are always resolved from the canonical registry.
+_HELP_TOPICS: tuple[tuple[str, str, str, tuple[str, ...]], ...] = (
+    (
+        "start",
+        "Getting started",
+        "Set up entry, verification, and welcome messages.",
+        ("setup_center", "verification", "welcome"),
+    ),
+    (
+        "safety",
+        "Members & safety",
+        "Review members, protection, and roles.",
+        ("members_moderation", "protection", "roles_profiles"),
+    ),
+    (
+        "messages",
+        "Messages & reminders",
+        "Set reminders, notifications, and shared media.",
+        ("verification_reminders", "action_reminder_center", "share_router"),
+    ),
+    (
+        "community",
+        "Tickets & community",
+        "Manage support, events, and community pings.",
+        ("tickets", "community_hub", "community_pings_manager"),
+    ),
+    (
+        "design",
+        "Design & voice",
+        "Create posts, customize the server, or use captions.",
+        ("embed_studio", "server_design", "live_captions"),
+    ),
+    (
+        "troubleshoot",
+        "My profile & bot health",
+        "View personal settings, status, and diagnostics.",
+        ("my_profile", "status", "diagnostics"),
+    ),
+)
+
+
+def _help_topic(topic_key: str) -> tuple[str, str, str, tuple[str, ...]]:
+    for item in _HELP_TOPICS:
+        if item[0] == topic_key:
+            return item
+    raise ValueError("Unknown Dank Shield help topic")
+
+
 def _help_embed() -> discord.Embed:
     embed = discord.Embed(
-        title="❓ Dank Shield Help",
-        description="Pick a section, search by what you need, or browse every tool. Each feature checks your server permissions before making changes.",
+        title="❓ What do you need help with?",
+        description=(
+            "Choose a topic below to see its useful tools.\n\n"
+            "Know what you need? Tap **Find Feature** and search in everyday words. "
+            "The **Directory** holds everything else."
+        ),
         color=discord.Color.blurple(),
     )
-    embed.add_field(
-        name="Start here",
-        value="`/dank home` — categorized control center\n**🔎 Find** — search by normal words and aliases\n**📚 Directory** — complete categorized feature list",
-        inline=False,
+    embed.set_footer(text="Private help • No command memorization needed")
+    return embed
+
+
+def _help_topic_embed(topic_key: str) -> discord.Embed:
+    _, label, summary, feature_keys = _help_topic(topic_key)
+    embed = discord.Embed(
+        title=f"❓ {label}",
+        description=f"{summary}\n\nTap a tool below to open it.",
+        color=discord.Color.blurple(),
     )
-    embed.add_field(
-        name="Quick commands",
-        value=(
-            "`/captions` — ordinary server voice captions and personal consent\n"
-            "`/mod` — moderation/member center\n"
-            "`/role` — smart Roles & Profiles doorway with member/role shortcuts\n"
-            "`/ticket` — current ticket controls\n"
-            "`/tickets` — queues, ticket setup, routing, categories\n"
-            "`/toke` — ping the configured opt-in crowd with optional text/media (Community & Pings starter role required)\n"
-            "`/verify` — verification status/repair center"
-        ),
-        inline=False,
-    )
-    embed.add_field(
-        name="Other shortcuts",
-        value=(
-            "`/dank protection` • `/dank voice-safety` • `/dank diagnostics` • "
-            "`/dank stats` • `/dank status` • `/dank logs`\n"
-            "`/dank welcome` • `/dank design` • `/dank share` • "
-            "`/dank pings` • `/dank community` • `/dank profile` • `/dank help`"
-        ),
-        inline=False,
-    )
-    embed.add_field(
-        name="Uploads",
-        value=(
-            "`/dank upload` — choose **Join Card Background**, **Exit Card Background**, or **Custom Card Font**, "
-            "then attach the file. Every non-upload card action remains in the Welcome/Exit menus."
-        ),
-        inline=False,
-    )
-    embed.set_footer(text="Dank Shield • open a feature center to manage settings")
+    for key in feature_keys:
+        feature = feature_by_key(key)
+        if feature is None:
+            raise RuntimeError(f"Help destination {key!r} has no canonical feature")
+        embed.add_field(
+            name=f"{feature.emoji} {feature.label}" + (" • Staff" if feature.manager_only else ""),
+            value=feature.description[:220],
+            inline=False,
+        )
+    embed.set_footer(text="Need something else? Change topic or use Find Feature")
     return embed
 
 
@@ -830,20 +867,91 @@ class FeatureSearchEmptyView(_OwnedView):
         self.add_item(_CloseNavigationButton(row=0))
 
 
-class CompactHelpView(_OwnedView):
-    @discord.ui.button(label="Control Center", emoji="🏠", style=discord.ButtonStyle.primary, custom_id="dank:help:home:v1")
-    async def home(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        _ = button
-        await interaction.response.edit_message(
-            embed=_home_embed(),
-            view=CompactDankHomeView(self.owner_id),
-            allowed_mentions=discord.AllowedMentions.none(),
+class _HelpTopicSelect(discord.ui.Select):
+    def __init__(self) -> None:
+        super().__init__(
+            placeholder="What do you need help with?",
+            options=[
+                discord.SelectOption(
+                    label=label,
+                    value=key,
+                    description=summary[:100],
+                )
+                for key, label, summary, _features in _HELP_TOPICS
+            ],
+            min_values=1,
+            max_values=1,
+            custom_id="dank:help:topics:v2",
+            row=0,
         )
 
-    @discord.ui.button(label="Close", emoji="✖️", style=discord.ButtonStyle.secondary, custom_id="dank:help:close:v1")
-    async def close(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        _ = button
-        await interaction.response.edit_message(content="Help closed.", embed=None, view=None)
+    async def callback(self, interaction: discord.Interaction) -> None:
+        topic_key = self.values[0]
+        await _replace_panel(
+            interaction,
+            embed=_help_topic_embed(topic_key),
+            view=HelpTopicView(int(interaction.user.id), topic_key),
+        )
+
+
+class _HelpFeatureButton(discord.ui.Button):
+    def __init__(self, feature: NavigationFeature) -> None:
+        super().__init__(
+            label=feature.label[:80],
+            emoji=feature.emoji,
+            style=discord.ButtonStyle.primary,
+            custom_id=f"dank:help:feature:{feature.key}:v2",
+            row=1,
+        )
+        self.feature_key = feature.key
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await _route_feature(interaction, self.feature_key)
+
+
+class _HelpOverviewButton(discord.ui.Button):
+    def __init__(self) -> None:
+        super().__init__(
+            label="Help Topics",
+            emoji="❓",
+            style=discord.ButtonStyle.secondary,
+            custom_id="dank:help:overview:v2",
+            row=2,
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await _replace_panel(
+            interaction,
+            embed=_help_embed(),
+            view=CompactHelpView(int(interaction.user.id)),
+        )
+
+
+class CompactHelpView(_OwnedView):
+    def __init__(self, owner_id: int) -> None:
+        super().__init__(owner_id)
+        self.add_item(_HelpTopicSelect())
+        self.add_item(_FindFeatureButton(row=1))
+        self.add_item(_AllFeaturesButton(row=1))
+        self.add_item(_HomeButton(row=1))
+        self.add_item(_CloseNavigationButton(row=1))
+
+
+class HelpTopicView(_OwnedView):
+    def __init__(self, owner_id: int, topic_key: str) -> None:
+        super().__init__(owner_id)
+        self.topic_key = topic_key
+        self.add_item(_HelpTopicSelect())
+        _, _, _, feature_keys = _help_topic(topic_key)
+        for key in feature_keys:
+            feature = feature_by_key(key)
+            if feature is None:
+                raise RuntimeError(f"Help destination {key!r} has no canonical feature")
+            self.add_item(_HelpFeatureButton(feature))
+        self.add_item(_HelpOverviewButton())
+        self.add_item(_FindFeatureButton(row=2))
+        self.add_item(_HomeButton(row=2))
+        self.add_item(_CloseNavigationButton(row=2))
 
 
 class CardAssetView(_OwnedView):

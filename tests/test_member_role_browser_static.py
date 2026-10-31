@@ -54,7 +54,17 @@ def test_members_entry_survives_final_dank_compaction() -> None:
     assert 'for name in ("setup", "status", "diagnostics", "members")' in hub
     assert 'await _invoke_saved("members", interaction)' in hub
     assert "from .public_members_group import members_scan" not in hub
-    assert '`/dank members` — complete member command center' in hub
+    # /dank members is now a hidden legacy alias. Help must not advertise it,
+    # but both /mod and Home → Members & Moderation must still reach its owner.
+    surface = _source(ROOT / "stoney_verify" / "commands_ext" / "public_command_surface_v2.py")
+    registry = _source(ROOT / "stoney_verify" / "navigation_registry.py")
+    contract = _source(ROOT / "stoney_verify" / "command_surface_contract.py")
+    assert 'if key == "members_moderation":' in surface
+    assert "from .public_mod_command_center import open_mod_command_center" in surface
+    assert '"members_moderation",' in registry
+    assert '"mod",' in contract
+    assert '"members",' in contract
+    assert '`/dank members` — complete member command center' not in hub
 
 
 def test_member_center_has_button_driven_categories() -> None:
