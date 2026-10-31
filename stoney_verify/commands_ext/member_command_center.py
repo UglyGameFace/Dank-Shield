@@ -912,10 +912,10 @@ def _connection_embed(report: dict[str, Any]) -> discord.Embed:
     embed = discord.Embed(
         title="🔗 Member Connection Intelligence",
         description=(
-            f"Account: \`{target}\`\\n"
+            f"Account: `{target}`\n"
             "Only relationships recorded inside this server are considered. "
             "**No result proves that anyone leaked information or owns another account.**"
-        ).replace("\\n", "\n"),
+        ).replace("\n", "\n"),
         color=discord.Color.blurple(),
     )
     matches = report.get("matches") or []
@@ -937,7 +937,7 @@ def _connection_embed(report: dict[str, Any]) -> discord.Embed:
         )
     if not matches:
         embed.add_field(
-            name="No relationship established",
+            name="No verified relationship in available records",
             value="No supported link was found in the records checked. This is not proof the accounts are unrelated.",
             inline=False,
         )
@@ -1035,7 +1035,7 @@ class RecentBanConnectionView(OwnedView):
 
 class ConnectionByIdModal(discord.ui.Modal, title="Connection Intelligence"):
     user_id = discord.ui.TextInput(
-        label="Discord user ID (including departed accounts)",
+        label="Discord user ID (even if banned)",
         placeholder="Enter a user ID, not a username",
         max_length=22,
     )
