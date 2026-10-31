@@ -39,7 +39,7 @@ Automatic production migration runs must satisfy all of these conditions:
 - Production migration runs remain serialized with `cancel-in-progress: false`.
 - The GitHub Actions `SUPABASE_PROJECT_ID` secret must match the live DankShield project `viamriafkbqhquvrsnua`; **all other project IDs fail before link or SQL**.
 - A throwaway CLI project directory is initialized in the runner and populated with the **live database's own previously applied** migration SQL, not `supabase/migrations/` or `supabase_fresh/migrations/`.
-- The exact remotely applied baseline versions recorded in `supabase_live/production_baseline_versions.txt` must be present. No unreviewed remote history is accepted. Only new, version-unique migration SQL from `supabase_live/migrations/` is allowed for production.
+- The original 27 applied baseline versions in `supabase_live/production_baseline_versions.txt` and the three explicitly reviewed, already-applied compact-RPC versions in `supabase_live/approved_postcutover_versions.txt` must all be present. The verifier pins the latter three; unknown or missing remote history fails closed. Only new, version-unique migration SQL from `supabase_live/migrations/` is allowed for production.
 - `supabase migration list` and `supabase db push --dry-run --include-all` run before the real `supabase db push --include-all`.
 
 The deploy workflow intentionally runs after every successful canonical `main` CI completion. When no migrations are pending, the Supabase migration commands are a no-op. If a newer commit reaches `main` before an older CI run completes, the older deployment attempt fails closed as stale and the newer current-head CI run owns promotion.
@@ -137,3 +137,20 @@ left pointing to the retired project. CI history and live migration history
 must pass their independently enforced checks before automatic SQL promotion.
 The old project may later be retired separately after all runtime consumers and
 rollback dependencies have been audited.
+
+## October 31 migration-history and authentication status
+
+The dedicated project's connected migration-history listing contains the original
+27 baseline entries plus the three compact-RPC entries from October 28.
+Those three were approved for recognition in the offline history verifier,
+not for SQL replay. The original baseline remains unchanged. Remote SQL bytes
+for the three approved versions have not been compared with repository source.
+The October 30 manual advert, Atlas and heartbeat repairs need separate
+history reconciliation and are not silently marked applied by this approval.
+
+GitHub Actions migration run 41107334032 failed after successful project
+identity and CLI link checks: the fetch step received PostgreSQL 28P01.
+The owner must correct the dedicated project's SUPABASE_DB_PASSWORD in the
+GitHub production environment (which overrides same-named repository secrets).
+No password or other credential belongs in this document or chat. No migration
+promotion or Discloud deployment is authorized by this reconciliation.
