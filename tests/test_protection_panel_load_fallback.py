@@ -138,6 +138,7 @@ def test_protection_embed_caps_dynamic_antinuke_health_field(monkeypatch) -> Non
         {},
         {"enabled": False, "mode": "unknown"},
         "loaded",
+        section="antinuke",
     )
 
     field = next(
