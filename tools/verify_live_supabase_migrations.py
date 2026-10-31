@@ -12,6 +12,15 @@ import shutil
 from pathlib import Path
 
 
+# Verified from the dedicated project's authoritative migration-history listing.
+# Treat any future expansion as a separate reviewed change, never an automatic repair.
+KNOWN_POSTCUTOVER_VERSIONS = {
+    "20261028232821",  # compact guild config RPC
+    "20261028234027",  # compact role config RPC
+    "20261028235128",  # compact patch response RPC
+}
+
+
 class MigrationHistoryMismatch(ValueError):
     """Unapproved migration history, malformed version, or edited applied SQL."""
 
@@ -38,9 +47,10 @@ def stage_live_migrations(repo: Path, workdir: Path) -> tuple[int, int, int]:
     target project ref before any link or fetch.
     """
     baseline_file = repo / "supabase_live" / "production_baseline_versions.txt"
+    approved_file = repo / "supabase_live" / "approved_postcutover_versions.txt"
     source = repo / "supabase_live" / "migrations"
     destination = workdir / "supabase" / "migrations"
-    if not baseline_file.is_file() or not source.is_dir() or not destination.is_dir():
+    if not baseline_file.is_file() or not approved_file.is_file() or not source.is_dir() or not destination.is_dir():
         raise MigrationHistoryMismatch("Live baseline or isolated migration directory missing")
     versions = [
         line.strip()
@@ -54,12 +64,25 @@ def stage_live_migrations(repo: Path, workdir: Path) -> tuple[int, int, int]:
         raise MigrationHistoryMismatch("Invalid baseline timestamp format")
     if not {"20261023014508", "20261023014518"}.issubset(baseline):
         raise MigrationHistoryMismatch("Known applied live 4:20 migration versions missing")
+    approved_versions = [
+        line.strip()
+        for line in approved_file.read_text(encoding="utf-8").splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    ]
+    approved = set(approved_versions)
+    if (approved != KNOWN_POSTCUTOVER_VERSIONS
+            or len(approved_versions) != len(approved)
+            or approved_versions != sorted(approved_versions)):
+        raise MigrationHistoryMismatch("Unreviewed or malformed post-cutover migration approval")
+    if baseline & approved or min(approved) <= max(baseline):
+        raise MigrationHistoryMismatch("Post-cutover approvals overlap original baseline")
+    expected = baseline | approved
     remote = _migration_map(destination)
     future = _migration_map(source)
-    if any(version <= max(baseline) for version in future):
+    if any(version <= max(expected) for version in future):
         raise MigrationHistoryMismatch("New migration timestamp predates live baseline")
-    missing = baseline - set(remote)
-    unexpected = set(remote) - baseline - set(future)
+    missing = expected - set(remote)
+    unexpected = set(remote) - expected - set(future)
     if missing or unexpected:
         raise MigrationHistoryMismatch(
             f"Live migration history drift: missing={sorted(missing)} "
@@ -73,7 +96,7 @@ def stage_live_migrations(repo: Path, workdir: Path) -> tuple[int, int, int]:
                 )
         else:
             shutil.copyfile(file, destination / file.name)
-    return len(baseline), len(future), len(set(future) - set(remote))
+    return len(expected), len(future), len(set(future) - set(remote))
 
 
 def main() -> None:
@@ -86,7 +109,7 @@ def main() -> None:
     except MigrationHistoryMismatch as exc:
         parser.exit(1, f"Blocked unsafe production migration: {exc}\n")
     print(
-        f"Verified {original} applied live versions, {reviewed} reviewed future "
+        f"Verified {original} applied live versions (original baseline plus reviewed post-cutover), {reviewed} reviewed future "
         f"migrations, {pending} pending. Legacy project SQL excluded."
     )
 

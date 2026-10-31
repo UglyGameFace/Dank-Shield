@@ -21,9 +21,17 @@ def _fixture(tmp_path: Path) -> tuple[Path, Path, set[str]]:
     baseline_lines = (
         ROOT / "supabase_live/production_baseline_versions.txt"
     ).read_text(encoding="utf-8").splitlines()
-    versions = {line for line in baseline_lines if line and not line.startswith("#")}
+    original_versions = {line for line in baseline_lines if line and not line.startswith("#")}
+    approved_lines = (
+        ROOT / "supabase_live/approved_postcutover_versions.txt"
+    ).read_text(encoding="utf-8").splitlines()
+    approved_versions = {line for line in approved_lines if line and not line.startswith("#")}
+    (repo / "supabase_live/approved_postcutover_versions.txt").write_text(
+        "\n".join(sorted(approved_versions)) + "\n", encoding="utf-8"
+    )
+    versions = original_versions | approved_versions
     (repo / "supabase_live/production_baseline_versions.txt").write_text(
-        "\n".join(sorted(versions)) + "\n", encoding="utf-8"
+        "\n".join(sorted(original_versions)) + "\n", encoding="utf-8"
     )
     for version in versions:
         (workdir / "supabase/migrations" / f"{version}_applied.sql").write_text(
@@ -60,21 +68,27 @@ def test_baseline_matches_verified_live_database_snapshot() -> None:
     assert "20261023014508" in versions
     assert "20261023014518" in versions
     assert versions == sorted(versions)
+    approved = [
+        line for line in (ROOT / "supabase_live/approved_postcutover_versions.txt")
+        .read_text(encoding="utf-8").splitlines()
+        if line and not line.startswith("#")
+    ]
+    assert approved == ["20261028232821", "20261028234027", "20261028235128"]
 
 
 def test_verified_baseline_is_noop_without_new_reviewed_migrations(tmp_path: Path) -> None:
     repo, workdir, _ = _fixture(tmp_path)
-    assert stage_live_migrations(repo, workdir) == (27, 0, 0)
+    assert stage_live_migrations(repo, workdir) == (30, 0, 0)
 
 
 def test_stages_only_future_migrations_and_blocks_unreviewed_history(tmp_path: Path) -> None:
     repo, workdir, versions = _fixture(tmp_path)
-    planned = repo / "supabase_live/migrations/20261024000100_add_new_safe_column.sql"
+    planned = repo / "supabase_live/migrations/20261031000100_add_new_safe_column.sql"
     planned.write_text("select 1;\n")
-    assert stage_live_migrations(repo, workdir) == (27, 1, 1)
+    assert stage_live_migrations(repo, workdir) == (30, 1, 1)
     staged = workdir / "supabase/migrations" / planned.name
     assert staged.read_text() == planned.read_text()
-    assert stage_live_migrations(repo, workdir) == (27, 1, 0)
+    assert stage_live_migrations(repo, workdir) == (30, 1, 0)
     planned.write_text("select 2;\n")
     with pytest.raises(MigrationHistoryMismatch, match="differs"):
         stage_live_migrations(repo, workdir)
@@ -87,7 +101,7 @@ def test_missing_remote_baseline_or_unknown_remote_version_stops_deploy(tmp_path
     with pytest.raises(MigrationHistoryMismatch, match="missing"):
         stage_live_migrations(repo, workdir)
     (workdir / "supabase/migrations" / f"{v}_applied.sql").write_text("select 1;")
-    (workdir / "supabase/migrations/20261024000200_unreviewed.sql").write_text(
+    (workdir / "supabase/migrations/20261031000200_unreviewed.sql").write_text(
         "select 1;"
     )
     with pytest.raises(MigrationHistoryMismatch, match="unreviewed_remote"):
@@ -109,4 +123,26 @@ def test_invalid_migration_filename_fails_closed(tmp_path: Path) -> None:
     path = repo / "supabase_live/migrations/20261024_unsafe.sql"
     path.write_text("select 1;")
     with pytest.raises(MigrationHistoryMismatch, match="Invalid migration filename"):
+        stage_live_migrations(repo, workdir)
+
+
+def test_postcutover_history_is_required_and_cannot_be_silently_extended(tmp_path: Path) -> None:
+    repo, workdir, versions = _fixture(tmp_path)
+    approved = repo / "supabase_live/approved_postcutover_versions.txt"
+    approved.unlink()
+    with pytest.raises(MigrationHistoryMismatch, match="missing"):
+        stage_live_migrations(repo, workdir)
+    approved.write_text("20261028232821\n20261028234027\n20261028235128\n20261031000000\n")
+    with pytest.raises(MigrationHistoryMismatch, match="Unreviewed"):
+        stage_live_migrations(repo, workdir)
+    approved.write_text("20261028232821\n20261028234027\n20261028235128\n")
+    (workdir / "supabase/migrations/20261031000000_unapproved.sql").write_text("select 1;")
+    with pytest.raises(MigrationHistoryMismatch, match="unreviewed_remote"):
+        stage_live_migrations(repo, workdir)
+
+
+def test_missing_approved_remote_history_stops_deploy(tmp_path: Path) -> None:
+    repo, workdir, _ = _fixture(tmp_path)
+    (workdir / "supabase/migrations/20261028234027_applied.sql").unlink()
+    with pytest.raises(MigrationHistoryMismatch, match="20261028234027"):
         stage_live_migrations(repo, workdir)
