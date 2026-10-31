@@ -234,8 +234,10 @@ def manual_ready_sync() -> bool:
                 )
                 for table in (MANUAL_GUILD_TABLE, MANUAL_MEMBER_TABLE):
                     cursor.execute(
-                        "select has_table_privilege(current_user, %s, 'SELECT,INSERT,UPDATE')",
-                        (table,),
+                        "select has_table_privilege(current_user, %s, 'SELECT') "
+                        "and has_table_privilege(current_user, %s, 'INSERT') "
+                        "and has_table_privilege(current_user, %s, 'UPDATE')",
+                        (table, table, table),
                     )
                     row = cursor.fetchone()
                     if not (row and row[0] is True):
@@ -341,12 +343,16 @@ def diagnose_reminder_ledgers_sync() -> dict[str, object]:
                         # Static identifiers from _DIAGNOSTIC_TABLES only.
                         # No table rows read; privilege check is read-only too.
                         cursor.execute(f"select {columns} from {table} limit 0")
-                        cursor.execute(
-                            "select has_table_privilege(current_user, %s, %s)",
-                            (table, privileges),
-                        )
-                        row = cursor.fetchone()
-                        status[key] = "ok" if row and row[0] is True else "permission_denied"
+                        granted = True
+                        for privilege in privileges.split(","):
+                            cursor.execute(
+                                "select has_table_privilege(current_user, %s, %s)",
+                                (table, privilege),
+                            )
+                            row = cursor.fetchone()
+                            if not row or row[0] is not True:
+                                granted = False
+                        status[key] = "ok" if granted else "permission_denied"
                 except Exception as error:
                     status[key] = _diagnostic_error_code(error)
                     # A missing relation aborts its transaction; roll back the
@@ -359,6 +365,7 @@ def diagnose_reminder_ledgers_sync() -> dict[str, object]:
         if status["connection"] != "ok":
             status["connection"] = _diagnostic_error_code(error, connecting=True)
         else:
+            status["connection"] = "query_failed"
             for key in ("scheduled", "manual_budget", "manual_member"):
                 if status[key] == "not_checked":
                     status[key] = "query_failed"
