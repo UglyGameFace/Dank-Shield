@@ -1875,62 +1875,73 @@ async def _open_advanced_danger_zone(
     )
 
 
-_ADVANCED_HUB_SECTIONS = {
-    "foundation": (
-        "Setup Plan & Server Items", "Tickets", "Verification", "Security & SpamGuard",
-    ),
-    "appearance": ("Server Design", "Welcome & Join", "Profile Signatures"),
-    "operations": ("Logs & Activity", "Backups & History"),
-}
-_ADVANCED_HUB_LABELS = {
-    "foundation": "Features & Protection",
-    "appearance": "Appearance & Welcome",
-    "operations": "Logs & Backups",
-}
-
-
-def _advanced_hub_embed(*, section: str = "foundation") -> discord.Embed:
-    section = section if section in _ADVANCED_HUB_SECTIONS else "foundation"
-    guidance = {
-        "foundation": "Configure the essential features and safety settings used by your server.",
-        "appearance": "Customize the visual design, welcome experience and member profiles.",
-        "operations": "Manage logging, activity coverage and backed-up configuration.",
-    }
-    return discord.Embed(
-        title=f"🧰 Settings • {_ADVANCED_HUB_LABELS[section]}",
-        description=f"{guidance[section]}\nChoose a feature below. Quick Setup remains available separately.",
-        color=discord.Color.blurple(),
-    )
-
-
 async def _open_advanced_settings(
-    interaction: discord.Interaction, *, section: str = "foundation",
+    interaction: discord.Interaction,
 ) -> None:
     if not await solid._require_setup_permission(interaction):
         return
-    if not interaction.response.is_done():
-        await solid._safe_defer_update(interaction)
+
+    embed = discord.Embed(
+        title="🧰 All Features & Settings",
+        description=(
+            "Everything Dank Shield can configure is grouped by purpose below. "
+            "The normal Quick Setup only asks for required items."
+        ),
+        color=discord.Color.blurple(),
+        timestamp=now_utc(),
+    )
+    embed.add_field(
+        name="🧩 Setup Plan & Server Items",
+        value="Change core modules, roles, channels, folders, timers, and rules.",
+        inline=False,
+    )
+    embed.add_field(
+        name="🎫 Tickets",
+        value="Ticket panels, staff routing, folders, and member ticket choices.",
+        inline=False,
+    )
+    embed.add_field(
+        name="✅ Verification",
+        value="Simple Verify, Voice Verify, approved ID/Web flows, roles, and channels.",
+        inline=False,
+    )
+    embed.add_field(
+        name="🛡️ Security & SpamGuard",
+        value="SpamGuard, raids, AntiNuke, access checks, and permission repairs.",
+        inline=False,
+    )
+    embed.add_field(
+        name="🧾 Logs & Activity",
+        value="Logging choices, log channels, and activity-tracking access.",
+        inline=False,
+    )
+    embed.add_field(
+        name="🎨 Server Design",
+        value="Smart Auto-Detect, previews, styling, and undo tools.",
+        inline=False,
+    )
+    embed.add_field(
+        name="👋 Welcome & Join",
+        value="Static welcome/start-here message, join-only image cards, and join/leave announcements.",
+        inline=False,
+    )
+    embed.add_field(
+        name="🪪 Profile Signatures",
+        value="Compact live signatures, member appearance, privacy, platforms, roles, and server defaults.",
+        inline=False,
+    )
+    embed.add_field(
+        name="💾 Backups & History",
+        value="Back up selected configuration areas and restore only what you choose.",
+        inline=False,
+    )
+    embed.set_footer(text="All Features & Settings • choose one category")
+
     await solid._edit_or_followup(
         interaction,
-        embed=_advanced_hub_embed(section=section),
-        view=AdvancedSettingsHubView(section=section),
+        embed=embed,
+        view=AdvancedSettingsHubView(),
     )
-
-
-class _AdvancedHubSectionSelect(discord.ui.Select):
-    def __init__(self, section: str) -> None:
-        super().__init__(
-            placeholder="Choose settings category",
-            options=[
-                discord.SelectOption(label=label, value=key, default=key == section)
-                for key, label in _ADVANCED_HUB_LABELS.items()
-            ],
-            row=0,
-            custom_id="dank_setup_features:section:v2",
-        )
-
-    async def callback(self, interaction: discord.Interaction) -> None:
-        await _open_advanced_settings(interaction, section=self.values[0])
 
 
 async def _open_manage_setup(
@@ -3653,17 +3664,8 @@ class ManageSetupView(discord.ui.View):
 class AdvancedSettingsHubView(discord.ui.View):
     """AIO feature categories with predictable navigation."""
 
-    def __init__(self, *, section: str = "foundation") -> None:
+    def __init__(self) -> None:
         super().__init__(timeout=900)
-        self.section = section if section in _ADVANCED_HUB_SECTIONS else "foundation"
-        original = {str(getattr(item, "label", "")): item for item in self.children}
-        self.clear_items()
-        self.add_item(_AdvancedHubSectionSelect(self.section))
-        names = (*_ADVANCED_HUB_SECTIONS[self.section], "Back to Manage Setup", "Setup Home", "Close")
-        for index, name in enumerate(names):
-            item = original[name]
-            item.row = 1 + index // 4
-            self.add_item(item)
 
     @discord.ui.button(
         label="Setup Plan & Server Items",
