@@ -1,9 +1,11 @@
-# Dank Shield mobile UI overhaul
+# Dank Shield universal Discord UI overhaul (mobile and desktop)
 
 ## Objective
 
 Every Discord feature center, settings page, picker, list, inspection card and
-confirmation should be readable on a narrow Android screen. Do not replace a
+confirmation must be readable and easy to navigate on **both desktop and mobile**.
+Discord renders the same interaction components on both clients, so one
+focused shared layout is the product requirement, not a narrow-phone workaround. Do not replace a
 laundry-list embed with a laundry-list of buttons or with a menu that no longer
 explains how to use the feature. Preserve every supported control, actual
 permission check, existing configuration, persistence owner, and confirmation
@@ -27,7 +29,9 @@ the latest PR finishes every view.
   relevant status and keep sensitive actions disabled. Do not invent values.
 - **One navigation language:** Choose area; inspect; edit; preview/confirm;
   back. Avoid repeated descriptive fields that merely name visible buttons.
-- **Mobile and privacy:** keep cards ephemeral/owner-locked where previously
+- **Desktop, mobile and privacy:** use the same focused layouts everywhere;
+  don't expand into a wall of buttons just because desktop has extra space.
+  Keep cards ephemeral/owner-locked where previously
   private. Avoid spawning duplicate response messages on every navigation
   click or exposing private staff metadata.
 - **Accessible pickers:** use Search-Safe resources and show blocked options
@@ -65,6 +69,17 @@ python tools/audit_discord_mobile_panels.py --strict-parse --json-out mobile-pan
 - Automated checks: menu/section action coverage and max controls, partial
   outage safety, field limits, whole-repo density inventory, Design regression.
 
+- Welcome & Exit: focused static message, live join, live exit, and other tools.
+- Join Card Studio and Exit Card Studio: delivery, design, and artwork pages;
+  refresh and navigation preserve working handlers and confirmation boundaries.
+- Advanced Settings: core features, appearance, and operations instead of nine
+  unrelated instruction fields.
+- Trusted Advertising Bots: approval and retention/preview pages, with exact
+  bot/channel identity and 24h+ retention safeguards still enforced.
+- Action & Reminder Center: member tasks vs staff settings, no hidden scheduler.
+- The legacy /dank home fallback: personal tools vs server tools, with the
+  same owner check and feature dispatch; canonical v2 navigation remains intact.
+
 ## Not finished / remaining integration
 
 Evaluate the rest of the inventory before claiming whole-bot coverage, with
@@ -78,5 +93,6 @@ integrating.
 
 **Release gate:** all exact-head checks green, conflict/review resolution,
 merged main verified, protected Discloud release with backup validation, then
-Android smoke tests for different roles and for unavailable dependencies.
+Android **and desktop Discord** smoke tests for different roles and for unavailable dependencies.
+The automatic component-count tests cover shared layout contracts, not screenshot-level visual acceptance.
 Successful code CI is not live UI acceptance.
