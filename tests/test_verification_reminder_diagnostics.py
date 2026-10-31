@@ -17,6 +17,8 @@ class FakeCursor:
     def __init__(self, connection):
         self.connection = connection
         self.current_table = ""
+        self.current_privilege = ""
+        self.multi_privilege_query = False
 
     def __enter__(self):
         return self
@@ -35,9 +37,16 @@ class FakeCursor:
                 raise FakePgError(code)
         elif "has_table_privilege" in normalized:
             self.current_table = params[0]
+            self.multi_privilege_query = len(params) == 3
+            self.current_privilege = params[1] if not self.multi_privilege_query else ""
 
     def fetchone(self):
-        return (self.current_table not in self.connection.denied,)
+        if self.multi_privilege_query:
+            allowed = all((self.current_table, p) not in self.connection.denied
+                          for p in ("SELECT", "INSERT", "UPDATE"))
+        else:
+            allowed = (self.current_table, self.current_privilege) not in self.connection.denied
+        return (allowed,)
 
 
 class FakeConnection:
@@ -78,9 +87,9 @@ def test_success_checks_all_three_ledgers_without_reading_rows_or_writing(monkey
     monkeypatch.setattr(ledger, "_connect", lambda: db)
     report = ledger.diagnose_reminder_ledgers_sync()
     assert report["all_ready"] is True
-    assert len(db.queries) == 6
+    assert len(db.queries) == 13
     assert sum(" limit 0" in sql for sql, _ in db.queries) == 3
-    assert sum("has_table_privilege" in sql for sql, _ in db.queries) == 3
+    assert sum("has_table_privilege" in sql for sql, _ in db.queries) == 10
     assert db.rollbacks == 0
     message = ledger.format_reminder_ledger_diagnostics(report)
     assert "Scheduled reminder ledger" in message
@@ -111,7 +120,7 @@ def test_missing_column_and_permissions_are_distinct(monkeypatch):
     monkeypatch.setenv(ledger.DATABASE_URL_ENV, "private-url")
     db = FakeConnection(
         failures={ledger.TABLE: "42703"},
-        denied={ledger.MANUAL_MEMBER_TABLE},
+        denied={(ledger.MANUAL_MEMBER_TABLE, "UPDATE")},
     )
     monkeypatch.setattr(ledger, "_connect", lambda: db)
     report = ledger.diagnose_reminder_ledgers_sync()
@@ -136,6 +145,15 @@ def test_error_classification_never_echoes_exception_text(code, expected):
 
 def test_driver_absent_is_distinguishable():
     assert ledger._diagnostic_error_code(ModuleNotFoundError("psycopg"), connecting=True) == "driver_missing"
+
+
+
+def test_manual_sender_readiness_requires_all_three_privileges(monkeypatch):
+    monkeypatch.setenv(ledger.DATABASE_URL_ENV, "private-url")
+    db = FakeConnection(denied={(ledger.MANUAL_MEMBER_TABLE, "UPDATE")})
+    monkeypatch.setattr(ledger, "_connect", lambda: db)
+    assert ledger.manual_ready_sync() is False
+    assert ledger.diagnose_reminder_ledgers_sync()["status"]["manual_member"] == "permission_denied"
 
 
 def test_connection_failures_avoid_leaking_secrets(monkeypatch):
