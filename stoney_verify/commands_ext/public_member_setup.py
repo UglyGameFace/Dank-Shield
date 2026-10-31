@@ -1269,10 +1269,59 @@ class GateSuspendConfirmModal(discord.ui.Modal):
         )
 
 
+_MEMBER_SETUP_SECTIONS = {
+    "roles": ("Setup Channel", "Use This Channel", "Member Access Role",
+              "Create Member Access", "Eligibility Prerequisite", "Clear Eligibility Rule"),
+    "categories": ("Add Protected Category", "Clear Protected Categories"),
+    "publish": ("Publish Minor", "Publish Recommended", "Publish Required",
+                "Publish Access-Gated", "Refresh Public Panel"),
+    "gate": ("Activate Strict Gate", "Suspend Strict Gate"),
+}
+
+
+class _MemberSetupSectionSelect(discord.ui.Select):
+    def __init__(self, current: str):
+        labels = {
+            "roles": "Channels & Roles",
+            "categories": "Protected Categories",
+            "publish": "Publish & Public Panel",
+            "gate": "Strict Gate",
+        }
+        super().__init__(
+            placeholder="Choose Member Setup area",
+            options=[
+                discord.SelectOption(label=label, value=key, default=current == key)
+                for key, label in labels.items()
+            ],
+            row=0,
+            custom_id="dank:member_setup:admin:section:v2",
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        if not await _staff_authorized(interaction):
+            return
+        await _defer_panel_update(interaction)
+        state = await load_guild_setup_state(int(interaction.guild_id), refresh=True)
+        await _replace(
+            interaction,
+            embed=_admin_embed(interaction.guild, state),
+            view=MemberSetupAdminView(int(interaction.user.id), section=self.values[0]),
+        )
+
+
 class MemberSetupAdminView(discord.ui.View):
-    def __init__(self, owner_id: int) -> None:
+    def __init__(self, owner_id: int, *, section: str = "roles") -> None:
         super().__init__(timeout=900)
         self.owner_id = int(owner_id)
+        self.section = section if section in _MEMBER_SETUP_SECTIONS else "roles"
+        all_items = {str(getattr(item, "label", "")): item for item in self.children}
+        self.clear_items()
+        self.add_item(_MemberSetupSectionSelect(self.section))
+        labels = (*_MEMBER_SETUP_SECTIONS[self.section], "Refresh", "Close")
+        for index, label in enumerate(labels):
+            item = all_items[label]
+            item.row = 1 + index // 4
+            self.add_item(item)
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if int(interaction.user.id) != self.owner_id:
@@ -1307,7 +1356,7 @@ class MemberSetupAdminView(discord.ui.View):
             setup_channel_id=channel.id,
             actor_id=interaction.user.id,
         )
-        await _replace(interaction, embed=_admin_embed(guild, state), view=MemberSetupAdminView(self.owner_id))
+        await _replace(interaction, embed=_admin_embed(guild, state), view=MemberSetupAdminView(self.owner_id, section=self.section))
 
     @discord.ui.button(label="Member Access Role", emoji="🔑", style=discord.ButtonStyle.secondary, row=0)
     async def access_role(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -1361,12 +1410,12 @@ class MemberSetupAdminView(discord.ui.View):
                     "Choose a different prerequisite or a different dedicated Member Access role."
                 ),
                 embed=_admin_embed(guild, state),
-                view=MemberSetupAdminView(self.owner_id),
+                view=MemberSetupAdminView(self.owner_id, section=self.section),
             )
             return
 
         state = await configure_guild_setup(guild.id, access_role_id=role.id, actor_id=interaction.user.id)
-        await _replace(interaction, embed=_admin_embed(guild, state), view=MemberSetupAdminView(self.owner_id))
+        await _replace(interaction, embed=_admin_embed(guild, state), view=MemberSetupAdminView(self.owner_id, section=self.section))
 
     @discord.ui.button(label="Eligibility Prerequisite", emoji="✅", style=discord.ButtonStyle.secondary, row=1)
     async def prerequisite(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -1394,7 +1443,7 @@ class MemberSetupAdminView(discord.ui.View):
             prerequisite_role_id=0,
             actor_id=interaction.user.id,
         )
-        await _replace(interaction, embed=_admin_embed(guild, state), view=MemberSetupAdminView(self.owner_id))
+        await _replace(interaction, embed=_admin_embed(guild, state), view=MemberSetupAdminView(self.owner_id, section=self.section))
 
     @discord.ui.button(label="Add Protected Category", emoji="🔒", style=discord.ButtonStyle.secondary, row=1)
     async def add_category(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -1418,7 +1467,7 @@ class MemberSetupAdminView(discord.ui.View):
             return await _reply(interaction, "Suspend Strict Gate before changing protected categories.", ok=False)
         await _defer_panel_update(interaction)
         state = await configure_guild_setup(guild.id, protected_category_ids=[], actor_id=interaction.user.id)
-        await _replace(interaction, embed=_admin_embed(guild, state), view=MemberSetupAdminView(self.owner_id))
+        await _replace(interaction, embed=_admin_embed(guild, state), view=MemberSetupAdminView(self.owner_id, section=self.section))
 
     @discord.ui.button(label="Publish Minor", emoji="📝", style=discord.ButtonStyle.secondary, row=2)
     async def publish_minor(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -1460,7 +1509,7 @@ class MemberSetupAdminView(discord.ui.View):
             interaction,
             content=f"✅ Refreshed the Member Setup & Profile panel in {message.channel.mention}.",
             embed=_admin_embed(guild, state),
-            view=MemberSetupAdminView(self.owner_id),
+            view=MemberSetupAdminView(self.owner_id, section=self.section),
         )
 
     @discord.ui.button(label="Activate Strict Gate", emoji="🛡️", style=discord.ButtonStyle.danger, row=3)
@@ -1497,8 +1546,15 @@ class MemberSetupAdminView(discord.ui.View):
     @discord.ui.button(label="Refresh", emoji="🔄", style=discord.ButtonStyle.secondary, row=3)
     async def refresh(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
-        await open_member_setup_admin(interaction)
-
+        if not await _staff_authorized(interaction):
+            return
+        await _defer_panel_update(interaction)
+        state = await load_guild_setup_state(int(interaction.guild_id), refresh=True)
+        await _replace(
+            interaction,
+            embed=_admin_embed(interaction.guild, state),
+            view=MemberSetupAdminView(self.owner_id, section=self.section),
+        )
 
     @discord.ui.button(label="Close", emoji="✖️", style=discord.ButtonStyle.secondary, row=4)
     async def close(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
