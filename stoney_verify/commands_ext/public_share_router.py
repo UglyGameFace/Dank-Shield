@@ -1769,6 +1769,89 @@ async def _choose_request_channel(interaction: discord.Interaction) -> None:
     )
 
 
+class ShareRouterSameChannelConfirmView(_OwnedView):
+    """Atomic no-DM setup: the current text channel is both intake and result."""
+
+    def __init__(self, owner_id: int, channel_id: int) -> None:
+        super().__init__(owner_id)
+        self.channel_id = int(channel_id)
+
+    @discord.ui.button(label="Save Requests + Results Here", emoji="✅", style=discord.ButtonStyle.success)
+    async def save(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        if not await _require_manage(interaction):
+            return
+        guild = interaction.guild
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        try:
+            async with _guild_source_lock(int(guild.id)):
+                channel = guild.get_channel(self.channel_id)
+                blocker = await _request_channel_blocker(
+                    guild, channel, await guild_routes(int(guild.id)),
+                )
+                if not blocker:
+                    blocker = _video_destination_blocker(
+                        guild, interaction.user, channel, self.channel_id,
+                    )
+                if blocker:
+                    raise ValueError(blocker)
+                await configure_guild_download(
+                    int(guild.id),
+                    channel_id=self.channel_id,
+                    mode="channel",
+                    destination_id=self.channel_id,
+                )
+        except (ValueError, OSError, discord.HTTPException) as exc:
+            return await interaction.edit_original_response(
+                content=f"❌ Settings unchanged: {exc}",
+                embed=None,
+                view=ShareRouterVideoDeliveryView(self.owner_id),
+            )
+        await interaction.edit_original_response(
+            content="✅ Members can request videos and receive finished results in the same channel. DMs are off.",
+            embed=await _video_delivery_embed(guild),
+            view=ShareRouterVideoDeliveryView(self.owner_id),
+            allowed_mentions=_ALLOWED_MENTIONS,
+        )
+
+    @discord.ui.button(label="Cancel", emoji="↩️", style=discord.ButtonStyle.secondary)
+    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await open_share_router_video_delivery(interaction)
+
+
+async def _confirm_current_video_channel(interaction: discord.Interaction) -> None:
+    if not await _require_manage(interaction):
+        return
+    guild = interaction.guild
+    channel = interaction.channel
+    blocker = await _request_channel_blocker(
+        guild, channel, await guild_routes(int(guild.id)),
+    )
+    if not blocker:
+        blocker = _video_destination_blocker(
+            guild, interaction.user, channel, int(getattr(channel, "id", 0)),
+        )
+    if blocker:
+        return await _private(interaction, "❌ " + blocker)
+    await _replace(
+        interaction,
+        embed=discord.Embed(
+            title="Confirm One-Channel Video Setup",
+            description=(
+                f"**Members post links in:** {channel.mention}\\n"
+                f"**Finished videos post in:** {channel.mention}\\n"
+                "**DMs:** Off\\n\\n"
+                "A successful video is posted before its source link is removed "
+                "(only if Dank Shield has Manage Messages). Failed requests keep "
+                "their original messages. Existing forwarding routes are unchanged."
+            ),
+            color=discord.Color.blurple(),
+        ),
+        view=ShareRouterSameChannelConfirmView(int(interaction.user.id), int(channel.id)),
+    )
+
+
 class ShareRouterVideoDeliveryView(_OwnedView):
     @discord.ui.button(label="Private DM", emoji="✉️", style=discord.ButtonStyle.primary, row=0)
     async def dm(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -1789,6 +1872,11 @@ class ShareRouterVideoDeliveryView(_OwnedView):
     async def stop(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await _open_download_delivery_confirmation(interaction, "off")
+
+    @discord.ui.button(label="Requests + Results Here", emoji="📍", style=discord.ButtonStyle.success, row=2)
+    async def one_channel(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _confirm_current_video_channel(interaction)
 
     @discord.ui.button(label="Choose Request Channel", emoji="📍", style=discord.ButtonStyle.secondary, row=2)
     async def request_channel(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
