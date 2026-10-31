@@ -257,7 +257,7 @@ def _history_embed(
                 f"{_format_timestamp(row.get('created_at'))}"
             )
         embed.add_field(
-            name="Recent Saved Versions",
+            name=f"Recent Saved Versions (showing {min(len(versions), 8)} of {len(versions)} loaded)",
             value="\n\n".join(lines)[:1024] or "No saved versions yet.",
             inline=False,
         )
@@ -442,7 +442,7 @@ def _selective_picker_embed(
         inline=False,
     )
     embed.add_field(
-        name=f"Selected — {len(selected)}",
+        name=f"Selected — {len(selected)} (first 10 shown)",
         value=_display_items(plan, selected, limit=10),
         inline=False,
     )
