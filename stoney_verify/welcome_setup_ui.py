@@ -275,7 +275,9 @@ class WelcomeSetupView(discord.ui.View):
             picker = WelcomeChannelSelect()
             picker.row = 1
             self.add_item(picker)
-        actions = (*_WELCOME_SECTIONS[self.section], "Refresh", "Back to All Features", "Setup Home", "Close")
+        actions = (*_WELCOME_SECTIONS[self.section], "Refresh", "Back to All Features", "Close")
+        if self.section == "tools":
+            actions += ("Setup Home",)
         for index, name in enumerate(actions):
             item = original[name]
             item.row = (2 if self.section == "static" else 1) + index // 4
