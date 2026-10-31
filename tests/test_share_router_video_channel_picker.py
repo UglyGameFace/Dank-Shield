@@ -126,3 +126,106 @@ def test_request_picker_does_not_hide_managed_category_or_conflicting_rows(monke
     assert asyncio.run(ui._request_channel_blocker(
         guild, channels[1], asyncio.run(routes(guild.id))
     ))
+
+
+def test_one_channel_shortcut_confirms_before_atomic_no_dm_save(monkeypatch):
+    from contextlib import asynccontextmanager
+
+    guild, actor, channels = _fixture(monkeypatch)
+    channel = channels[0]
+    interaction = SimpleNamespace(
+        guild=guild,
+        user=actor,
+        channel=channel,
+    )
+    displayed, saved = [], []
+
+    async def allowed(_):
+        return True
+
+    async def routes(_):
+        return []
+
+    async def render(_, **kwargs):
+        displayed.append(kwargs)
+
+    @asynccontextmanager
+    async def lock_context():
+        yield
+
+    async def persist(gid, *, channel_id, mode, destination_id):
+        saved.append((gid, channel_id, mode, destination_id))
+
+    async def current_embed(_):
+        return discord.Embed(title="Video Downloads")
+
+    edits = []
+
+    async def defer(**kwargs):
+        assert kwargs["ephemeral"] and kwargs["thinking"]
+
+    async def edit(**kwargs):
+        edits.append(kwargs)
+
+    interaction.response = SimpleNamespace(defer=defer)
+    interaction.edit_original_response = edit
+
+    monkeypatch.setattr(ui, "_require_manage", allowed)
+    monkeypatch.setattr(ui, "guild_routes", routes)
+    monkeypatch.setattr(ui, "_replace", render)
+    monkeypatch.setattr(ui, "_guild_source_lock", lambda _gid: lock_context())
+    monkeypatch.setattr(ui, "configure_guild_download", persist)
+    monkeypatch.setattr(ui, "_video_delivery_embed", current_embed)
+
+    asyncio.run(ui._confirm_current_video_channel(interaction))
+    assert not saved
+    assert "DMs:** Off" in displayed[-1]["embed"].description
+    view = displayed[-1]["view"]
+    assert isinstance(view, ui.ShareRouterSameChannelConfirmView)
+
+    button = next(child for child in view.children if child.label == "Save Requests + Results Here")
+    asyncio.run(button.callback(interaction))
+    assert saved == [(guild.id, channel.id, "channel", channel.id)]
+    assert "DMs are off" in edits[-1]["content"]
+
+
+def test_one_channel_shortcut_rechecks_forwarding_conflicts_before_save(monkeypatch):
+    from contextlib import asynccontextmanager
+
+    guild, actor, channels = _fixture(monkeypatch)
+    channel = channels[0]
+    edits, writes = [], []
+
+    async def allowed(_):
+        return True
+
+    async def routes(_):
+        return [{"source_channel_id": channel.id, "target_channel_id": 250}]
+
+    @asynccontextmanager
+    async def lock():
+        yield
+
+    async def persist(*args, **kwargs):
+        writes.append((args, kwargs))
+
+    async def defer(**kwargs):
+        return None
+
+    async def edit(**kwargs):
+        edits.append(kwargs)
+
+    monkeypatch.setattr(ui, "_require_manage", allowed)
+    monkeypatch.setattr(ui, "guild_routes", routes)
+    monkeypatch.setattr(ui, "_guild_source_lock", lambda _gid: lock())
+    monkeypatch.setattr(ui, "configure_guild_download", persist)
+    interaction = SimpleNamespace(
+        guild=guild, user=actor, channel=channel,
+        response=SimpleNamespace(defer=defer),
+        edit_original_response=edit,
+    )
+    view = ui.ShareRouterSameChannelConfirmView(actor.id, channel.id)
+    button = next(item for item in view.children if item.label == "Save Requests + Results Here")
+    asyncio.run(button.callback(interaction))
+    assert not writes
+    assert "forwarding rule" in edits[-1]["content"].lower()
