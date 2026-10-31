@@ -4765,8 +4765,9 @@ def _settings_embed(settings: dict[str, Any], bot: Any) -> discord.Embed:
 
 
 class ModeSelect(discord.ui.Select):
-    def __init__(self, owner_id: int, current: str) -> None:
+    def __init__(self, owner_id: int, current: str, *, section: str = "general") -> None:
         self.owner_id = int(owner_id)
+        self.section = section
         options = [
             discord.SelectOption(label="Minimal", value="minimal", description="Session cards and member controls only", default=current == "minimal"),
             discord.SelectOption(label="Smart", value="smart", description="Temporary discussion and voice when permissions allow", default=current == "smart"),
@@ -4783,7 +4784,7 @@ class ModeSelect(discord.ui.Select):
             actor_id=int(interaction.user.id),
         )
         runtime.invalidate_settings(int(interaction.guild_id or 0))
-        await _edit_private_original(interaction, content=None, embed=_settings_embed(settings, interaction.client), view=HubSettingsView(self.owner_id, settings))
+        await _edit_private_original(interaction, content=None, embed=_settings_embed(settings, interaction.client), view=HubSettingsView(self.owner_id, settings, section=self.section))
 
 
 class LimitsModal(discord.ui.Modal, title="Community Hub Limits"):
@@ -5287,11 +5288,63 @@ class PublicRecruitingSettingsView(_OwnedView):
         )
 
 
+_HUB_SETTINGS_GROUPS = {
+    "general": ("Maintenance", "Member Creation", "Public Recruiting"),
+    "rooms": ("Auto Voice", "Auto Discussion", "Parent Category", "Archive Ended Threads"),
+    "limits": ("Limits", "Lifecycle", "Abuse Limits"),
+    "notifications": (
+        "Notifications", "Notification Safety", "Presence Analytics",
+        "Aggregate Analytics", "The100.io Discovery",
+    ),
+}
+
+
+class HubSettingsSectionSelect(discord.ui.Select):
+    def __init__(self, owner_id: int, current: str) -> None:
+        self.owner_id = int(owner_id)
+        super().__init__(
+            placeholder="Choose Community Hub settings",
+            options=[
+                discord.SelectOption(label=label, value=key, default=(key == current))
+                for key, label in (
+                    ("general", "General"),
+                    ("rooms", "Rooms & Threads"),
+                    ("limits", "Session Limits"),
+                    ("notifications", "Notifications & Analytics"),
+                )
+            ],
+            custom_id="dank:hub:settings:section:v2",
+            row=0,
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        if int(interaction.user.id) != self.owner_id:
+            return await _private(interaction, "Open your own Community Hub settings.")
+        await _defer_update(interaction)
+        settings = await hub.get_settings(int(interaction.guild_id or 0))
+        await _edit_private_original(
+            interaction,
+            content=None,
+            embed=_settings_embed(settings, interaction.client),
+            view=HubSettingsView(self.owner_id, settings, section=self.values[0]),
+        )
+
+
 class HubSettingsView(_OwnedView):
-    def __init__(self, owner_id: int, settings: dict[str, Any]) -> None:
+    def __init__(self, owner_id: int, settings: dict[str, Any], *, section: str = "general") -> None:
         super().__init__(owner_id)
         self.settings = dict(settings)
-        self.add_item(ModeSelect(owner_id, _safe_str(settings.get("mode"), "minimal")))
+        self.section = section if section in _HUB_SETTINGS_GROUPS else "general"
+        existing = {str(getattr(item, "label", "")): item for item in self.children}
+        self.clear_items()
+        self.add_item(HubSettingsSectionSelect(self.owner_id, self.section))
+        if self.section == "general":
+            self.add_item(ModeSelect(owner_id, _safe_str(settings.get("mode"), "minimal"), section=self.section))
+        labels = (*_HUB_SETTINGS_GROUPS[self.section], "Staff Dashboard")
+        for index, label in enumerate(labels):
+            item = existing[label]
+            item.row = (2 if self.section == "general" else 1) + index // 4
+            self.add_item(item)
 
     @discord.ui.button(label="Maintenance", emoji="🚧", style=discord.ButtonStyle.secondary, custom_id="dank:hub:settings:maintenance:v1", row=1)
     async def maintenance(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -5300,7 +5353,7 @@ class HubSettingsView(_OwnedView):
         new_value = not bool(self.settings.get("maintenance_mode"))
         settings = await hub.update_settings(int(interaction.guild_id or 0), {"maintenance_mode": new_value}, actor_id=int(interaction.user.id))
         ensure_community_hub_runtime(interaction.client).invalidate_settings(int(interaction.guild_id or 0))
-        await _edit_private_original(interaction, content=None, embed=_settings_embed(settings, interaction.client), view=HubSettingsView(self.owner_id, settings))
+        await _edit_private_original(interaction, content=None, embed=_settings_embed(settings, interaction.client), view=HubSettingsView(self.owner_id, settings, section=self.section))
 
     @discord.ui.button(label="Auto Voice", emoji="🎙️", style=discord.ButtonStyle.secondary, custom_id="dank:hub:settings:voice:v1", row=1)
     async def voice(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -5312,7 +5365,7 @@ class HubSettingsView(_OwnedView):
             actor_id=int(interaction.user.id),
         )
         ensure_community_hub_runtime(interaction.client).invalidate_settings(int(interaction.guild_id or 0))
-        await _edit_private_original(interaction, content=None, embed=_settings_embed(settings, interaction.client), view=HubSettingsView(self.owner_id, settings))
+        await _edit_private_original(interaction, content=None, embed=_settings_embed(settings, interaction.client), view=HubSettingsView(self.owner_id, settings, section=self.section))
 
     @discord.ui.button(label="Auto Discussion", emoji="💬", style=discord.ButtonStyle.secondary, custom_id="dank:hub:settings:thread:v1", row=1)
     async def thread(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -5324,7 +5377,7 @@ class HubSettingsView(_OwnedView):
             actor_id=int(interaction.user.id),
         )
         ensure_community_hub_runtime(interaction.client).invalidate_settings(int(interaction.guild_id or 0))
-        await _edit_private_original(interaction, content=None, embed=_settings_embed(settings, interaction.client), view=HubSettingsView(self.owner_id, settings))
+        await _edit_private_original(interaction, content=None, embed=_settings_embed(settings, interaction.client), view=HubSettingsView(self.owner_id, settings, section=self.section))
 
     @discord.ui.button(label="Presence Analytics", emoji="📡", style=discord.ButtonStyle.secondary, custom_id="dank:hub:settings:presence:v1", row=1)
     async def presence(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -5341,7 +5394,7 @@ class HubSettingsView(_OwnedView):
             actor_id=int(interaction.user.id),
         )
         ensure_community_hub_runtime(interaction.client).invalidate_settings(int(interaction.guild_id or 0))
-        await _edit_private_original(interaction, content=None, embed=_settings_embed(settings, interaction.client), view=HubSettingsView(self.owner_id, settings))
+        await _edit_private_original(interaction, content=None, embed=_settings_embed(settings, interaction.client), view=HubSettingsView(self.owner_id, settings, section=self.section))
 
     @discord.ui.button(label="Notifications", emoji="🔔", style=discord.ButtonStyle.secondary, custom_id="dank:hub:settings:notifications:v1", row=2)
     async def notifications(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -5357,7 +5410,7 @@ class HubSettingsView(_OwnedView):
             interaction,
             content=None,
             embed=_settings_embed(settings, interaction.client),
-            view=HubSettingsView(self.owner_id, settings),
+            view=HubSettingsView(self.owner_id, settings, section=self.section),
         )
 
     @discord.ui.button(label="Limits", emoji="📏", style=discord.ButtonStyle.secondary, custom_id="dank:hub:settings:limits:v1", row=2)
@@ -5414,7 +5467,7 @@ class HubSettingsView(_OwnedView):
             actor_id=int(interaction.user.id),
         )
         ensure_community_hub_runtime(interaction.client).invalidate_settings(int(interaction.guild_id or 0))
-        await _edit_private_original(interaction, content=None, embed=_settings_embed(settings, interaction.client), view=HubSettingsView(self.owner_id, settings))
+        await _edit_private_original(interaction, content=None, embed=_settings_embed(settings, interaction.client), view=HubSettingsView(self.owner_id, settings, section=self.section))
 
     @discord.ui.button(label="Archive Ended Threads", emoji="🗄️", style=discord.ButtonStyle.secondary, custom_id="dank:hub:settings:archive:v1", row=3)
     async def archive_threads(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -5426,7 +5479,7 @@ class HubSettingsView(_OwnedView):
             actor_id=int(interaction.user.id),
         )
         ensure_community_hub_runtime(interaction.client).invalidate_settings(int(interaction.guild_id or 0))
-        await _edit_private_original(interaction, content=None, embed=_settings_embed(settings, interaction.client), view=HubSettingsView(self.owner_id, settings))
+        await _edit_private_original(interaction, content=None, embed=_settings_embed(settings, interaction.client), view=HubSettingsView(self.owner_id, settings, section=self.section))
 
     @discord.ui.button(label="Aggregate Analytics", emoji="📊", style=discord.ButtonStyle.secondary, custom_id="dank:hub:settings:analytics:v1", row=3)
     async def aggregate_analytics(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -5438,7 +5491,7 @@ class HubSettingsView(_OwnedView):
             actor_id=int(interaction.user.id),
         )
         ensure_community_hub_runtime(interaction.client).invalidate_settings(int(interaction.guild_id or 0))
-        await _edit_private_original(interaction, content=None, embed=_settings_embed(settings, interaction.client), view=HubSettingsView(self.owner_id, settings))
+        await _edit_private_original(interaction, content=None, embed=_settings_embed(settings, interaction.client), view=HubSettingsView(self.owner_id, settings, section=self.section))
 
     @discord.ui.button(label="Abuse Limits", emoji="🚦", style=discord.ButtonStyle.secondary, custom_id="dank:hub:settings:abuse:v1", row=3)
     async def abuse_limits(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -5483,7 +5536,7 @@ class HubSettingsView(_OwnedView):
         except hub.CommunityHubError as exc:
             return await _followup(interaction, f"❌ {_error_text(exc)}")
         ensure_community_hub_runtime(interaction.client).invalidate_settings(int(interaction.guild_id or 0))
-        await _edit_private_original(interaction, content=None, embed=_settings_embed(settings, interaction.client), view=HubSettingsView(self.owner_id, settings))
+        await _edit_private_original(interaction, content=None, embed=_settings_embed(settings, interaction.client), view=HubSettingsView(self.owner_id, settings, section=self.section))
 
     @discord.ui.button(label="Staff Dashboard", emoji="↩️", style=discord.ButtonStyle.secondary, custom_id="dank:hub:settings:back:v1", row=3)
     async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
