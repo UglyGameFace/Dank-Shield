@@ -481,54 +481,22 @@ async def _role_embed(guild: discord.Guild, role: discord.Role) -> discord.Embed
     return embed
 
 
-def _center_embed(*, staff: bool, role_manager: bool, setup_manager: bool) -> discord.Embed:
+def _center_embed(*, staff: bool, role_manager: bool, setup_manager: bool, section: str = "profile") -> discord.Embed:
+    messages = {
+        "profile": "Manage your profile, setup requirements and optional cosmetic roles.",
+        "staff": "Manage member roles and server-approved profile choices.",
+        "roles": "Create, inspect or edit server roles using Discord's current role hierarchy.",
+    }
+    selected = section if section in messages else "profile"
     embed = discord.Embed(
         title="🎭 Roles & Profiles",
-        description=(
-            "Profiles and cosmetic roles stay member-safe. Server role administration only appears "
-            "for people who currently have Discord's Manage Roles authority."
-        ),
+        description=messages[selected] + "\\n\\nChoose an action below; sensitive permissions are checked again before changes.",
         color=discord.Color.blurple(),
-        timestamp=discord.utils.utcnow(),
     )
-    profile_tools = [
-        "🪪 **Member Setup**",
-        "👤 **My Profile**",
-        "🎭 **Profile Tags & Cosmetics**",
-    ]
-    if not staff:
-        profile_tools.append("🌿 **My Community & Pings**")
-    embed.add_field(
-        name="Your profile",
-        value=" • ".join(profile_tools),
-        inline=False,
-    )
-    if staff:
-        staff_tools = ["👥 **Member Role Manager**"]
-        if setup_manager:
-            staff_tools.append("🧭 **Member Setup Manager**")
-            staff_tools.append("🌿 **Profile Builder**")
-            staff_tools.append("🌿 **Community & Pings Manager**")
-        embed.add_field(
-            name="Staff tools",
-            value=" • ".join(staff_tools),
-            inline=False,
-        )
-    if role_manager:
-        embed.add_field(
-            name="Server role administration",
-            value=(
-                "🛠️ **Server Role Editor** • ➕ **Create Role** • 🩺 **Role Health**\n"
-                "Rename, colours/icons, permissions, hierarchy, duplication, and confirmed deletion."
-            ),
-            inline=False,
-        )
-    else:
-        embed.add_field(
-            name="Server role administration",
-            value="Hidden unless your account currently has **Manage Roles**, Administrator, or server-owner authority.",
-            inline=False,
-        )
+    if selected == "roles" and not role_manager:
+        embed.add_field(name="Role management", value="Manage Roles or server-owner authority is required.", inline=False)
+    if selected == "staff" and not staff:
+        embed.add_field(name="Staff controls", value="These controls require staff authority.", inline=False)
     return embed
 
 
@@ -609,6 +577,49 @@ class _OwnedView(discord.ui.View):
                 pass
 
 
+_ROLES_PROFILES_SECTIONS = {
+    "profile": ("Member Setup", "My Profile", "Profile Tags & Cosmetics", "My Community & Pings"),
+    "staff": ("Member Role Manager", "Member Setup Manager", "Profile Builder", "Community & Pings Manager"),
+    "roles": ("Server Role Editor", "Create Role", "Role Health"),
+}
+
+
+class RolesProfilesSectionSelect(discord.ui.Select):
+    def __init__(self, owner_id: int, section: str, *, staff: bool, role_manager: bool, setup_manager: bool) -> None:
+        self.owner_id = int(owner_id)
+        self.staff = staff
+        self.role_manager = role_manager
+        self.setup_manager = setup_manager
+        super().__init__(
+            placeholder="Choose roles or profile settings",
+            options=[
+                discord.SelectOption(label=label, value=key, default=section == key)
+                for key, label in (
+                    ("profile", "My Profile & Choices"),
+                    ("staff", "Staff Role Tools"),
+                    ("roles", "Server Role Administration"),
+                )
+            ],
+            row=0, custom_id="dank:role:home:section:v2",
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        if int(interaction.user.id) != self.owner_id:
+            return await _reply(interaction, "Open your own Roles & Profiles panel.")
+        section = self.values[0]
+        await _replace(
+            interaction,
+            embed=_center_embed(
+                staff=self.staff, role_manager=self.role_manager,
+                setup_manager=self.setup_manager, section=section,
+            ),
+            view=RolesProfilesView(
+                self.owner_id, staff=self.staff, role_manager=self.role_manager,
+                setup_manager=self.setup_manager, section=section,
+            ),
+        )
+
+
 class RolesProfilesView(_OwnedView):
     def __init__(
         self,
@@ -617,8 +628,10 @@ class RolesProfilesView(_OwnedView):
         staff: bool,
         role_manager: bool,
         setup_manager: bool,
+        section: str = "profile",
     ) -> None:
         super().__init__(owner_id)
+        self.section = section if section in _ROLES_PROFILES_SECTIONS else "profile"
         self.staff = bool(staff)
         self.role_manager = bool(role_manager)
         self.setup_manager = bool(setup_manager)
@@ -637,6 +650,23 @@ class RolesProfilesView(_OwnedView):
             self.remove_item(self.server_roles)
             self.remove_item(self.create_role)
             self.remove_item(self.role_health)
+
+        eligible = {
+            str(getattr(item, "label", "")): item
+            for item in self.children
+        }
+        self.clear_items()
+        self.add_item(RolesProfilesSectionSelect(
+            self.owner_id, self.section,
+            staff=self.staff, role_manager=self.role_manager,
+            setup_manager=self.setup_manager,
+        ))
+        for index, name in enumerate((*_ROLES_PROFILES_SECTIONS[self.section], "Dank Shield Home")):
+            if name not in eligible:
+                continue
+            item = eligible[name]
+            item.row = 1 + index // 4
+            self.add_item(item)
 
     @discord.ui.button(label="Member Setup", emoji="🪪", style=discord.ButtonStyle.primary, row=0)
     async def member_setup(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
