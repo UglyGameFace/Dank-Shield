@@ -820,7 +820,7 @@ async def _refresh_security_stats_after_panel(
         )
 
 
-async def _refresh_panel(interaction: discord.Interaction, *, content: str | None = None) -> None:
+async def _refresh_panel(interaction: discord.Interaction, *, content: str | None = None, section: str | None = None) -> None:
     guild = interaction.guild
     if guild is None:
         await _send_ephemeral(interaction, "❌ This must be used inside a server.")
@@ -862,6 +862,9 @@ async def _refresh_panel(interaction: discord.Interaction, *, content: str | Non
         )
 
     degraded = bool(load_warnings)
+    selected_section = section or _protection_section_for_interaction(interaction)
+    if selected_section not in _PROTECTION_SECTION_BUTTONS:
+        selected_section = "overview"
     try:
         embed = _protection_embed(
             guild,
@@ -870,12 +873,14 @@ async def _refresh_panel(interaction: discord.Interaction, *, content: str | Non
             spam_source,
             channel=getattr(interaction, "channel", None),
             load_warning="\n".join(load_warnings),
+            section=selected_section,
         )
         view = ProtectionCenterView(
             author_id=int(interaction.user.id),
             cfg=cfg,
             spam=spam,
             degraded=degraded,
+            section=selected_section,
         )
     except Exception as exc:
         record = log_interaction_failure(
@@ -2191,6 +2196,27 @@ class RestoreMemberModal(discord.ui.Modal, title="Restore Member"):
         )
 
 
+class _ProtectionSectionSelect(discord.ui.Select):
+    def __init__(self, current: str) -> None:
+        super().__init__(
+            placeholder="Choose what to manage",
+            options=[
+                discord.SelectOption(
+                    label=label, value=key, description=hint,
+                    default=(current == key),
+                )
+                for key, label, hint in _PROTECTION_SECTIONS
+            ],
+            min_values=1, max_values=1, row=0,
+            custom_id="dank_protection:section:v2",
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        if not await _require_setup_permission(interaction):
+            return
+        await _refresh_panel(interaction, section=self.values[0])
+
+
 class ProtectionCenterView(discord.ui.View):
     def __init__(
         self,
@@ -2199,13 +2225,28 @@ class ProtectionCenterView(discord.ui.View):
         cfg: Any | None = None,
         spam: dict[str, Any] | None = None,
         degraded: bool = False,
+        section: str = "overview",
     ) -> None:
         super().__init__(timeout=PRIVATE_MENU_TTL_SECONDS)
         self.author_id = int(author_id)
         self.cfg = cfg
         self.spam = dict(spam or {})
         self.degraded = bool(degraded)
+        self.section = section if section in _PROTECTION_SECTION_BUTTONS else "overview"
         _decorate_quick_mode_buttons(self, cfg, self.spam)
+
+        # Keep each original handler and custom_id; move controls into one
+        # section at a time. Rebuild rows rather than crowding five full rows.
+        existing = {str(getattr(item, "custom_id", "")): item
+                    for item in self.children}
+        self.clear_items()
+        self.add_item(_ProtectionSectionSelect(self.section))
+        visible = _PROTECTION_SECTION_BUTTONS[self.section] + ("refresh", "close")
+        for index, name in enumerate(visible):
+            item = existing[f"dank_protection:{name}"]
+            item.row = 1 + index // 4
+            self.add_item(item)
+
         if self.degraded:
             for child in list(self.children):
                 custom_id = str(getattr(child, "custom_id", "") or "")
@@ -2466,7 +2507,7 @@ class ProtectionCenterView(discord.ui.View):
         async def action() -> None:
             if not await _require_setup_permission(interaction):
                 return
-            await _refresh_panel(interaction)
+            await _refresh_panel(interaction, section=self.section)
 
         await _guard_protection_action(interaction, "protection.refresh", action, defer=True)
 
