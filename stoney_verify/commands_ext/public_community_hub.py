@@ -4706,78 +4706,61 @@ class AnalyticsView(_OwnedView):
 
 def _settings_embed(settings: dict[str, Any], bot: Any) -> discord.Embed:
     presence_runtime = bool(getattr(getattr(bot, "intents", None), "presences", False))
+    on = lambda key, default=False: "On" if bool(settings.get(key, default)) else "Off"
     embed = discord.Embed(
         title="⚙️ Community Hub Settings",
         description=(
-            "Minimal uses public session cards only. Smart adds managed temporary discussion and voice spaces. "
-            "Managed is the full Community Hub infrastructure mode."
+            f"**Mode: {_safe_str(settings.get('mode'), 'minimal').title()}** • "
+            f"Maintenance: **{on('maintenance_mode')}**\n"
+            "Minimal posts session cards; Smart manages temporary spaces; "
+            "Managed adds full Hub infrastructure. Choose the area you need below."
         ),
         color=discord.Color.blurple(),
     )
-    embed.add_field(name="Mode", value=_safe_str(settings.get("mode"), "minimal").title(), inline=True)
-    embed.add_field(name="Maintenance", value="On" if bool(settings.get("maintenance_mode")) else "Off", inline=True)
-    embed.add_field(name="Public Recruiting", value="On" if bool(settings.get("public_lfg_enabled")) else "Off", inline=True)
-    embed.add_field(name="Member-created sessions", value="On" if bool(settings.get("allow_member_creation", True)) else "Off", inline=True)
-    embed.add_field(name="Aggregate analytics", value="On" if bool(settings.get("analytics_enabled", True)) else "Off", inline=True)
     embed.add_field(
-        name="Presence analytics",
+        name="Participation & safety",
         value=(
-            ("On" if bool(settings.get("presence_analytics_enabled")) else "Off")
-            if presence_runtime
-            else "Unavailable until privileged Presence intent is explicitly authorized and enabled"
+            f"Public recruiting: **{on('public_lfg_enabled')}** • "
+            f"Member-created: **{on('allow_member_creation', True)}**\n"
+            f"Analytics: **{on('analytics_enabled', True)}** • "
+            f"Presence: **{on('presence_analytics_enabled') if presence_runtime else 'Intent unavailable'}**"
         ),
         inline=False,
     )
     embed.add_field(
-        name="Limits",
+        name="Session limits",
         value=(
-            f"Active sessions: {_safe_int(settings.get('max_active_sessions'), 20)}\n"
-            f"Per member: {_safe_int(settings.get('max_active_sessions_per_member'), 2)}\n"
-            f"Temporary voice rooms: {_safe_int(settings.get('max_temporary_voice_rooms'), 12)}\n"
-            f"Max group size: {_safe_int(settings.get('max_session_capacity'), 25)}\n"
-            f"Minimum to start: {_safe_int(settings.get('minimum_players_to_start'), 1)} • "
-            f"Ready required: {'Yes' if bool(settings.get('require_ready_to_start')) else 'No'} • "
-            f"Ready expires: {_safe_int(settings.get('ready_timeout_seconds'), 300)}s"
+            f"Active: **{_safe_int(settings.get('max_active_sessions'), 20)}** • "
+            f"Per member: **{_safe_int(settings.get('max_active_sessions_per_member'), 2)}** • "
+            f"Voice rooms: **{_safe_int(settings.get('max_temporary_voice_rooms'), 12)}**\n"
+            f"Group size: **{_safe_int(settings.get('max_session_capacity'), 25)}** • "
+            f"Minimum: **{_safe_int(settings.get('minimum_players_to_start'), 1)}** • "
+            f"Ready required: **{on('require_ready_to_start')}**"
         ),
         inline=False,
     )
     embed.add_field(
-        name="Abuse controls",
+        name="Notifications & outside groups",
         value=(
-            f"Create cooldown: {_safe_int(settings.get('session_creation_cooldown_seconds'), 30)}s • "
-            f"max {_safe_int(settings.get('max_session_creations_per_hour_per_member'), 10)} sessions/member/hour • "
-            f"max {_safe_int(settings.get('max_reports_per_hour_per_member'), 5)} reports/member/hour"
+            f"Notices: **{on('notifications_enabled', True)}** • "
+            f"Max/hour: **{_safe_int(settings.get('max_notifications_per_hour'), 5)}**\n"
+            f"The100.io: **{on('external_the100_enabled')}** "
+            f"({'API ready' if external.the100_configured() else 'No host token'}) • Read-only"
         ),
         inline=False,
     )
     embed.add_field(
-        name="Notifications",
+        name="Cleanup and abuse limits",
         value=(
-            f"{'On' if bool(settings.get('notifications_enabled', True)) else 'Off'} • "
-            f"max {_safe_int(settings.get('max_notifications_per_hour'), 5)}/member/hour • "
-            f"dispatch cap {_safe_int(settings.get('max_notification_targets_per_dispatch'), 50)}"
+            f"Cooldown: **{_safe_int(settings.get('session_creation_cooldown_seconds'), 30)}s** • "
+            f"Reports/hour: **{_safe_int(settings.get('max_reports_per_hour_per_member'), 5)}**\n"
+            f"Idle: **{_safe_int(settings.get('idle_timeout_seconds'), 1800)}s** • "
+            f"Lifetime: **{_safe_int(settings.get('max_session_lifetime_seconds'), 43200)}s** • "
+            f"End: **{'Archive' if bool(settings.get('archive_threads_on_end', True)) else 'Delete'}**"
         ),
         inline=False,
     )
-    embed.add_field(
-        name="External groups • The100.io",
-        value=(
-            ("On" if bool(settings.get("external_the100_enabled")) else "Off")
-            + (" • API configured" if external.the100_configured() else " • host token missing")
-            + " • read-only, no external join actions"
-        ),
-        inline=False,
-    )
-    embed.add_field(
-        name="Cleanup",
-        value=(
-            f"Grace: {_safe_int(settings.get('cleanup_grace_seconds'), 300)}s • "
-            f"Idle: {_safe_int(settings.get('idle_timeout_seconds'), 1800)}s • "
-            f"Hard lifetime: {_safe_int(settings.get('max_session_lifetime_seconds'), 43200)}s • "
-            f"Ended discussions: {'Archive' if bool(settings.get('archive_threads_on_end', True)) else 'Delete'}"
-        ),
-        inline=False,
-    )
+    embed.set_footer(text="Detailed limits, ready timers and dispatch caps are in their settings controls")
     return embed
 
 
