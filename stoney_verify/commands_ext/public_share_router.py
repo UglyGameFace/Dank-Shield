@@ -1357,10 +1357,8 @@ def _video_destination_blocker(
     if (
         not isinstance(channel, discord.TextChannel)
         or getattr(channel.guild, "id", None) != int(guild.id)
-        or int(channel.id) == int(request_id)
-        or is_share_router_design_resource(channel)
     ):
-        return "Choose a normal channel in this server, different from the request channel."
+        return "Choose a server text channel that still exists."
     try:
         if channel.is_nsfw():
             return "Video destinations cannot be age-restricted."
@@ -1618,11 +1616,10 @@ async def _request_channel_blocker(guild: discord.Guild, channel: Any, routes: l
     if (
         not isinstance(channel, discord.TextChannel)
         or getattr(channel.guild, "id", None) != int(guild.id)
-        or is_share_router_design_resource(channel)
     ):
-        return "Select an ordinary text channel in this server."
+        return "Choose a server text channel. Channels in Share Router categories are allowed."
     if any(_safe_int(route.get("source_channel_id")) == int(channel.id) for route in routes):
-        return "This channel already forwards posts elsewhere. Choose a different request channel."
+        return "This channel already forwards posts elsewhere. Remove that forwarding rule before using it for video requests."
     try:
         if channel.is_nsfw():
             return "A video request channel cannot be age-restricted."
