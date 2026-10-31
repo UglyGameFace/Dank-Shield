@@ -338,15 +338,23 @@ def test_reminder_database_check_is_staff_only_and_live(monkeypatch):
     async def staff(interaction):
         return True
 
-    async def status():
+    def status():
         assert interaction.response.is_done()
-        return False
+        return {
+            "status": {
+                "connection": "connection_failed",
+                "scheduled": "not_checked",
+                "manual_budget": "not_checked",
+                "manual_member": "not_checked",
+            },
+            "all_ready": False,
+        }
 
     async def private(interaction, message):
         events.append(message)
 
     monkeypatch.setattr(ui, "_require_staff", staff)
-    monkeypatch.setattr(ui, "ledger_ready", status)
+    monkeypatch.setattr(ui, "diagnose_reminder_ledgers_sync", status)
     monkeypatch.setattr(ui, "_private", private)
 
     async def invoke():
@@ -356,7 +364,8 @@ def test_reminder_database_check_is_staff_only_and_live(monkeypatch):
 
     run(invoke())
     assert events[0] == "defer"
-    assert any("unavailable" in event for event in events[1:])
+    assert any("Cannot connect to the private PostgreSQL service" in event for event in events[1:])
+    assert any("No reminders were sent" in event for event in events[1:])
 
 
 def test_worker_registration_is_idempotent(monkeypatch):

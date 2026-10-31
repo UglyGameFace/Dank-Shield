@@ -173,8 +173,8 @@ FEATURES: tuple[NavigationFeature, ...] = (
         "Verification Reminders",
         "📩",
         "access",
-        "Remind members using this server's mapped Unverified role. Preview the entire eligible audience, choose members, and send early by channel or DM.",
-        ("verify reminders", "unverified reminders", "verification notices", "verification database", "pending members", "check scheduled due", "send due now", "send reminder now", "unverified role", "remind all unverified", "verification dm reminders", "custom verification roles"),
+        "Remind members using this server's mapped Unverified role. Preview eligible members, send early by channel or DM, and check private reminder database health.",
+        ("verify reminders", "unverified reminders", "verification notices", "verification database", "check database", "reminder database status", "reminder database problems", "manual reminder history", "pending members", "check scheduled due", "send due now", "send reminder now", "unverified role", "remind all unverified", "verification dm reminders", "custom verification roles"),
         True,
     ),
     NavigationFeature(
