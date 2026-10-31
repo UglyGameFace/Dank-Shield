@@ -1509,14 +1509,15 @@ async def on_member_join(member: discord.Member):
             try:
                 from .member_connection_intelligence import verified_ban_connections
 
-                banned_links = await verified_ban_connections(guild, join_context, risk_profile)
+                banned_links = (await verified_ban_connections(guild, join_context, risk_profile)
+                                if not getattr(member, "bot", False) else [])
                 if banned_links:
-                    linked_ids = ", ".join(f"\u0060{x['user_id']}\u0060" for x in banned_links[:5])
+                    linked_ids = ", ".join(f"`{x['user_id']}`" for x in banned_links[:5])
                     notice = discord.Embed(
                         title="🔗 Connection Intelligence • Banned-account link",
                         description=(
-                            f"<@{member.id}> has a stored relationship to a banned account.\\n"
-                            f"Related banned account(s): {linked_ids}\\n"
+                            f"Account `{member.id}` has a stored relationship to a banned account.\n"
+                            f"Related banned account(s): {linked_ids}\n"
                             "This is a staff review lead, **not** proof of ban evasion or a leak."
                         ),
                         color=discord.Color.orange(),
