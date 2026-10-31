@@ -1738,15 +1738,15 @@ async def on_member_ban(guild: discord.Guild, user: discord.User):
             matches = connection_report.get("matches") or []
             if matches:
                 lines = [
-                    f"• \u0060{row['user_id']}\u0060: {row['category']}"
+                    f"• `{row['user_id']}`: {row['category']}"
                     for row in matches[:5]
                 ]
                 notice = discord.Embed(
                     title="🔗 Connection Intelligence • Ban review",
                     description=(
-                        f"Banned account: \u0060{user.id}\u0060\\n"
-                        + "\\n".join(lines)
-                        + "\\nThese records identify possible relationships, **not** leaks or guilt. "
+                        f"Banned account: `{user.id}`\n"
+                        + "\n".join(lines)
+                        + "\nThese records identify possible relationships, **not** leaks or guilt. "
                         "Use /dank members → Intelligence → Recent Ban Connections to review evidence."
                     )[:4000],
                     color=discord.Color.orange(),
