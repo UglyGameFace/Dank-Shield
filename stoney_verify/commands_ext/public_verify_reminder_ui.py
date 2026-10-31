@@ -2,6 +2,7 @@ from __future__ import annotations
 
 """Staff-only reminder controls inside the existing Verification Center."""
 
+import asyncio
 from dataclasses import replace
 from typing import Any, Mapping
 
@@ -19,6 +20,10 @@ from ..verification_reminders import (
     delivery_channel,
     ManualReminderUnavailable,
     send_due_now_in_designated_channel,
+)
+from ..verification_reminder_postgres import (
+    diagnose_reminder_ledgers_sync,
+    format_reminder_ledger_diagnostics,
 )
 from ..verification_reminder_manual import (
     ManualPreview,
@@ -622,10 +627,10 @@ class ReminderSettingsView(_OwnedView):
             return
         if not interaction.response.is_done():
             await interaction.response.defer(ephemeral=True, thinking=True)
-        if await ledger_ready():
-            await _private(interaction, "✅ Private PostgreSQL reminder ledger is reachable and readable. This checks storage only, not whether a member has been sent a reminder.")
-        else:
-            await _private(interaction, "❌ Private PostgreSQL reminder ledger is unavailable. Reminder sending pauses until the connection and table are healthy. Check the private database URL, VLAN and PostgreSQL service.")
+        # Read-only diagnostics run off the Discord event loop and never reveal
+        # raw PostgreSQL exceptions, credentials, or connection settings.
+        report = await asyncio.to_thread(diagnose_reminder_ledgers_sync)
+        await _private(interaction, format_reminder_ledger_diagnostics(report))
 
     @discord.ui.button(label="Refresh", emoji="🔄", style=discord.ButtonStyle.secondary, row=3)
     async def refresh(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
