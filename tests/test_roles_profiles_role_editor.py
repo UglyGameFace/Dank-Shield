@@ -60,6 +60,7 @@ def test_staff_without_manage_roles_still_cannot_see_role_definition_mutations()
             staff=True,
             role_manager=False,
             setup_manager=True,
+            section="staff",
         )
     )
     assert {"Member Role Manager", "Profile Builder"} <= labels
@@ -75,15 +76,15 @@ def test_manage_roles_surface_exposes_server_role_editor() -> None:
             staff=True,
             role_manager=True,
             setup_manager=True,
+            section="roles",
         )
     )
-    assert {
-        "Server Role Editor",
-        "Create Role",
-        "Role Health",
-        "Member Role Manager",
-        "Profile Builder",
-    } <= labels
+    assert {"Server Role Editor", "Create Role", "Role Health"} <= labels
+    assert "Member Role Manager" not in labels
+    staff_labels = _labels(RolesProfilesView(
+        1, staff=True, role_manager=True, setup_manager=True, section="staff",
+    ))
+    assert {"Member Role Manager", "Profile Builder"} <= staff_labels
 
     editor = RoleEditorHomeView(1)
     assert any(isinstance(item, DankRoleSelect) for item in editor.children)

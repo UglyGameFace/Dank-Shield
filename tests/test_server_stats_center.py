@@ -107,7 +107,8 @@ def test_protection_legacy_stats_button_routes_to_canonical_stats_center(
         monkeypatch.setattr(stats_ui, "open_server_stats_center", fake_open)
         monkeypatch.setattr(protection, "_guard_protection_action", fake_guard)
 
-        view = protection.ProtectionCenterView(author_id=1, cfg={}, spam={})
+        view = protection.ProtectionCenterView(author_id=1, cfg={}, spam={}, section="tools")
+        assert not any(getattr(item, "custom_id", None) == "dank_protection:live_stats" for item in protection.ProtectionCenterView(author_id=1, cfg={}, spam={}).children)
         button = _item(view, "dank_protection:live_stats")
         interaction = SimpleNamespace(user=SimpleNamespace(id=1))
 

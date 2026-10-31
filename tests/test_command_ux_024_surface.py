@@ -87,27 +87,27 @@ def test_current_ticket_center_preserves_complete_action_menu() -> None:
     assert {"add", "remove", "rename", "lock", "unlock", "owner", "access", "delete"} <= actions
 
 
+
 def test_ticket_operations_preserve_queue_lookup_and_setup_families() -> None:
-    labels = _labels(TicketOperationsView(1))
-    assert {
-        "Active",
-        "Unassigned",
-        "Mine",
-        "Recent Closed",
-        "Overdue",
-        "Find Ticket",
-        "Current Ticket",
-        "Public Panel",
-        "Intake & Routing",
-        "Categories",
-    } <= labels
+    queues = _labels(TicketOperationsView(1, section="queues"))
+    setup = _labels(TicketOperationsView(1, section="setup"))
+    assert {"Active", "Unassigned", "Mine", "Recent Closed", "Overdue", "Find Ticket"} <= queues
+    assert {"Current Ticket", "Public Panel", "Intake & Routing", "Categories", "Staff Alerts"} <= setup
+    assert "Public Panel" not in queues
+    assert "Active" not in setup
+    for section in ("queues", "setup"):
+        picker = next(
+            item for item in TicketOperationsView(1, section=section).children
+            if isinstance(item, discord.ui.Select)
+            and getattr(item, "custom_id", "") == "dank:tickets:operations:section:v2"
+        )
+        assert {str(option.value) for option in picker.options} == {"queues", "setup"}
     assert _select_values(TicketIntakeToolsView(1), "dank:tickets:intake:action:v1") == {
         "categories", "status", "match", "preview", "post-actions"
     }
     assert _select_values(TicketCategoryToolsView(1), "dank:tickets:categories:action:v1") == {
         "sync", "create", "edit", "delete", "set-default", "reorder", "keywords"
     }
-
 
 def test_ticket_staff_alerts_fit_mobile_discord_component_rows() -> None:
     # Discord selects consume the entire row. Construct the real views so
@@ -117,12 +117,14 @@ def test_ticket_staff_alerts_fit_mobile_discord_component_rows() -> None:
         item for item in operations.children
         if isinstance(item, discord.ui.UserSelect)
     )
+    setup = TicketOperationsView(1, section="setup")
     alerts_button = next(
-        item for item in operations.children
+        item for item in setup.children
         if getattr(item, "label", None) == "Staff Alerts"
     )
     assert history.row == 2
-    assert alerts_button.row == 3
+    assert alerts_button.row == 2
+    assert "Staff Alerts" not in _labels(operations)
 
     settings = TicketNotificationSettingsView(1, [("support", "Support")])
     assert len(settings.children) == 9

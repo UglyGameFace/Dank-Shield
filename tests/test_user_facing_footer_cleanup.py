@@ -13,8 +13,10 @@ def _source(path: str) -> str:
 def test_member_setup_explains_eligibility_access_and_visibility_chain() -> None:
     source = _source("stoney_verify/commands_ext/public_member_setup.py")
 
-    assert 'name="Member Access role (automatic)"' in source
-    assert 'name="Eligibility prerequisite (optional)"' in source
+    assert 'name="Role meanings"' in source
+    assert '**Member Access role (automatic):**' in source
+    assert '**Eligibility prerequisite (optional):**' in source
+    assert 'name="How Strict Gate works"' in source
     assert 'name="How Strict Gate works"' in source
     assert 'label="Member Access Role"' in source
     assert 'label="Eligibility Prerequisite"' in source

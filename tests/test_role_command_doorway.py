@@ -133,12 +133,15 @@ def test_role_center_separates_member_and_staff_community_pings_surfaces() -> No
             staff=True,
             role_manager=True,
             setup_manager=True,
+            section="staff",
         )
     )
     assert "My Community & Pings" not in staff_labels
     assert "Community & Pings Manager" in staff_labels
     assert "Member Role Manager" in staff_labels
-    assert "Server Role Editor" in staff_labels
+    role_labels = _labels(RolesProfilesView(1, staff=True, role_manager=True, setup_manager=True, section="roles"))
+    assert "Server Role Editor" in role_labels
+    assert "Server Role Editor" not in staff_labels
 
     limited_staff_labels = _labels(
         RolesProfilesView(

@@ -35,7 +35,8 @@ def test_native_import_merge_respects_character_budget(monkeypatch) -> None:
 
 
 def test_native_protection_view_contains_exactly_one_import_pack_button() -> None:
-    view = center.ProtectionCenterView(author_id=123, cfg={}, spam={})
+    view = center.ProtectionCenterView(author_id=123, cfg={}, spam={}, section="filters")
+    assert not any(getattr(item, "custom_id", None) == "dank_protection:import_pack" for item in center.ProtectionCenterView(author_id=123, cfg={}, spam={}).children)
     buttons = [
         child
         for child in view.children

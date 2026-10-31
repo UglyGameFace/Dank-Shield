@@ -245,9 +245,11 @@ def test_new_profile_panel_persists_canonical_message_ownership() -> None:
 
 
 def test_member_setup_manager_explains_prerequisite_vs_access_role_chain() -> None:
-    assert 'name="Member Access role (automatic)"' in RUNTIME
-    assert 'name="Eligibility prerequisite (optional)"' in RUNTIME
+    assert 'name="Role meanings"' in RUNTIME
+    assert '**Member Access role (automatic):**' in RUNTIME
+    assert '**Eligibility prerequisite (optional):**' in RUNTIME
     assert 'name="How Strict Gate works"' in RUNTIME
+    assert '_strict_gate_flow_value(guild, state)' in RUNTIME
     assert "Dank Shield **does not grant** the eligibility prerequisite" in RUNTIME
     assert 'label="Member Access Role"' in RUNTIME
     assert 'label="Eligibility Prerequisite"' in RUNTIME
