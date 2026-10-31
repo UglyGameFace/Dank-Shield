@@ -234,15 +234,23 @@ jobs:
             const allBranches = await github.paginate(
               github.rest.repos.listBranches, { owner, repo, per_page: 100 }
             );
+            // Repository size is never deletion authority. Keep a bounded
+            // per-run batch even when the repository grows beyond 250 refs.
             if (allBranches.length > 250) {
-              throw new Error('Branch count too large for automatic cleanup; use guarded owner workflow');
+              core.warning('Large repository: processing only a bounded opt-in batch');
             }
-            const candidates = allBranches.filter(
+            const eligibleCandidates = allBranches.filter(
               branch => !branch.protected &&
                 !protectedHeads.has(branch.name) && isEligible(branch.name)
             );
-            if (candidates.length > 20) {
-              throw new Error('More than 20 temporary branches need review; refusing bulk deletion');
+            // A large backlog must not prevent the safe first 20 from being
+            // reviewed. Remaining candidates wait for a later scheduled run.
+            const candidates = eligibleCandidates
+              .sort((a, b) => a.name.localeCompare(b.name))
+              .slice(0, 20);
+            if (eligibleCandidates.length > candidates.length) {
+              core.warning('Opt-in backlog: ' + eligibleCandidates.length +
+                ' eligible; examining ' + candidates.length + ' this run');
             }
 
             const rows = [];
