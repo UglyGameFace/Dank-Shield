@@ -146,7 +146,7 @@ def test_staff_builder_private_buttons_without_member_exposure() -> None:
         checked_sources=("verification", "member_setup"), unavailable_sources=(),
     )
     private = public_action_center.ActionCenterView(42, snapshot, is_staff=False)
-    staff = public_action_center.ActionCenterView(42, snapshot, is_staff=True)
+    staff = public_action_center.ActionCenterView(42, snapshot, is_staff=True, section="staff")
     assert "Action Builder (Draft)" not in [x.label for x in private.children]
     assert "Action Builder (Draft)" in [x.label for x in staff.children]
 
