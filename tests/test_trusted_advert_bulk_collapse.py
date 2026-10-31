@@ -168,7 +168,7 @@ def test_missing_channel_permission_never_scans(monkeypatch):
 
 def test_status_and_cancel_are_staff_only_and_old_cleanup_independent():
     view = ui.TrustedAdsView(OWNER, SimpleNamespace(), CHANNEL,
-                             rules=trust.clean_rules(_policy()))
+                             rules=trust.clean_rules(_policy()), section="retention")
     labels = [getattr(child, "label", "") for child in view.children]
     assert "Bulk Progress" in labels
     assert "Cancel Bulk" in labels
