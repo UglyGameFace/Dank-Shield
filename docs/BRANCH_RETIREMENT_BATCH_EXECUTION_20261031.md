@@ -13,7 +13,7 @@
 
 The single scheduled/push cleanup workflow already archives verified zero-ahead, exact-head merged branches and may delete them **only when** the configured `DANK_DISCLOUD_DEPLOY_BRANCH` resolves. Its 75-branch check is a warning, **not** a deletion gate. The old `allBranches.length > 250` and `candidates.length > 20` exceptions, however, would stop safe opt-in cleanup entirely once a backlog grew.
 
-This change retains the same eligibility, open-PR, commit-ancestry, archive-tag, exact-SHA, and verified-deployment-ref gates. It replaces size-triggered exceptions with a deterministic **maximum 20 opt-in branches per run**, preserving the separate eight-per-run historical cap. Larger backlogs continue across scheduled runs rather than failing. No automatic deletion is authorized merely by branch count.
+This change retains the same eligibility, open-PR, commit-ancestry, archive-tag, exact-SHA, and verified-deployment-ref gates. It replaces size-triggered exceptions with a rotating **maximum 20 opt-in branches per run**, preserving the separate eight-per-run historical cap. Larger backlogs continue across scheduled runs rather than failing. No automatic deletion is authorized merely by branch count.
 
 ## Safety and next proof
 
