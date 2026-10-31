@@ -1,6 +1,7 @@
 """Static guardrails for opt-in branch hygiene.
 
-The historical owner's manual cleanup workflow is deliberately separate.
+The broad reviewed path remains owner-only; scheduled retirement is limited to
+exact-head merged PR branches already fully integrated into main.
 """
 from pathlib import Path
 
@@ -13,8 +14,8 @@ def test_auto_retirement_only_opt_in_namespaces() -> None:
     workflow = AUTO.read_text(encoding="utf-8")
     assert "migration\\/dankshield-" in workflow
     assert "work\\/dankshield-" in workflow
-    # Broad feat/fix review is owner-dispatched only; scheduled cleanup still
-    # uses the two opt-in patterns and never auto-retires those namespaces.
+    # Broad squash/diverged history remains owner-reviewed. Automatic
+    # historical retirement must prove zero unique commits first.
     assert "const eligible = [" in workflow
     assert "const reviewed = mode === 'preview-reviewed-merged'" in workflow
     assert "if (reviewed) {" in workflow
@@ -29,6 +30,33 @@ def test_auto_retirement_only_opt_in_namespaces() -> None:
     assert "openPRs.length" in workflow
     assert "fresh.protected || fresh.commit.sha !== branch.commit.sha" in workflow
     assert "gitRef.object.sha !== branch.commit.sha" in workflow
+
+
+
+def test_fully_integrated_historical_cleanup_is_archive_first_and_bounded() -> None:
+    workflow = AUTO.read_text(encoding="utf-8")
+    assert "cron: '*/5 * * * *'" in workflow
+    assert "DANK_DISCLOUD_DEPLOY_BRANCH is not verified" in workflow
+    assert "const historicalPrefixes = ['feat/', 'fix/', 'extract/', 'docs/', 'audit/', 'chore/']" in workflow
+    assert "const scanLimit = Math.min(24, historical.length)" in workflow
+    assert "integratedRemoved < 8" in workflow
+    assert "graph.ahead_by !== 0" in workflow
+    assert "['behind', 'identical'].includes(graph.status)" in workflow
+    assert "prs.length !== 1" in workflow
+    assert "pr.head?.sha !== sha" in workflow
+    assert "Date.parse(pr.merged_at) > cutoff" in workflow
+    assert "currentMain !== startMain" in workflow
+    assert "mainLease !== startMain || lease.object.sha !== sha" in workflow
+    assert "branch-retirement-integrated/" in workflow
+    assert "archive.object.sha !== sha" in workflow
+    assert workflow.index("archive.object.sha !== sha") < workflow.index(
+        "await github.rest.git.deleteRef({owner, repo, ref: 'heads/' + name})"
+    )
+    assert "latestOpen.some(pr =>" in workflow
+    for protected in ("'backup/'", "'recovery/'", "'integration/'",
+                      "'migration/'", "'supabase'", "'postgres'",
+                      "'rollback'", "'discloud'"):
+        assert protected in workflow
 
 
 def test_never_force_clean_unverified_or_prod_branches() -> None:
