@@ -217,8 +217,8 @@ FEATURES: tuple[NavigationFeature, ...] = (
         "Members & Moderation",
         "👮",
         "safety",
-        "Moderate members, clean up messages, review activity, and use recovery tools.",
-        ("members", "moderation", "mod", "ban", "timeout", "cleanup", "purge", "member activity"),
+        "Moderate members, inspect ban-related connections and activity, and use recovery tools.",
+        ("members", "moderation", "mod", "ban", "timeout", "cleanup", "purge", "member activity", "member connections", "connection intelligence", "recent ban connections", "alt accounts", "ban evasion", "investigate banned user"),
         True,
     ),
     NavigationFeature(
