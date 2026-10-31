@@ -12,14 +12,13 @@ The feature does **not** reveal Discord friendships, other private servers, DMs,
 
 ## Evidence model
 
-The read-only analyzer uses existing guild-scoped `guild_members`, `member_joins`, `manual_alt_links`, and `identity_proof_matches` data. It never queries other guilds or gathers private identity/device information.
+The read-only analyzer uses existing guild-scoped `guild_members`, `member_joins`, and `manual_alt_links` data. The dedicated primary Supabase project has `identity_proofs` but no `identity_proof_matches` relationship table, so this feature deliberately does **not** query the nonexistent table or infer another account from a single proof. It never queries other guilds or gathers private identity/device information.
 
-The five distinct evidence classes are:
+The four distinct evidence classes are:
 1. Reviewed duplicate account relationship recorded by staff.
-2. Existing identity-proof record, with provenance to be reviewed.
-3. Staff-marked possible same person.
-4. Member invite or vouch relationship recorded by the server.
-5. Unconfirmed invite attribution, clearly labeled as weak.
+2. Staff-marked possible same person.
+3. Member invite or vouch relationship recorded by the server.
+4. Unconfirmed invite attribution, clearly labeled as weak.
 
 A `not_linked` staff decision suppresses same-identity claims but does not erase a legitimate historical invitation. Unresolved joins do not become proven links. No evidence available, incomplete data, and insufficient coverage are not clean bills of health. Findings are never considered proof of leaking information.
 
