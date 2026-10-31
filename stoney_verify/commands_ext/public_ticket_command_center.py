@@ -589,22 +589,17 @@ class TicketDeleteModal(discord.ui.Modal, title="Delete Ticket"):
         )
 
 
-def _operations_embed() -> discord.Embed:
-    embed = discord.Embed(
-        title="🎛️ Ticket Operations Center",
-        description=(
-            "Queues, history, current-ticket controls, public panel setup, routing tests, "
-            "and custom category administration are all here. The old separate ticket "
-            "command families are implementation details, not something staff must memorize."
-        ),
+def _operations_embed(*, section: str = "queues") -> discord.Embed:
+    labels = {
+        "queues": ("Ticket Queues", "Review active, unassigned, overdue and closed tickets, or inspect a member's ticket history."),
+        "setup": ("Ticket Setup", "Configure the public panel, intake routing, ticket categories and staff alerts."),
+    }
+    label, text = labels.get(section, labels["queues"])
+    return discord.Embed(
+        title=f"🎛️ {label}",
+        description=f"{text}\n\nChoose one task below. Ticket authority and confirmations still apply.",
         color=discord.Color.blurple(),
-        timestamp=discord.utils.utcnow(),
     )
-    embed.add_field(name="Queues", value="Active • Unassigned • Mine • Recently Closed • Overdue", inline=False)
-    embed.add_field(name="Lookup", value="Find by ticket number • User history • Current ticket history/activity", inline=False)
-    embed.add_field(name="Setup", value="Public panel • Intake/routing • Managed/custom categories", inline=False)
-    embed.set_footer(text="/tickets • one staff doorway")
-    return embed
 
 
 async def _run_queue(interaction: discord.Interaction, name: str) -> None:
@@ -641,10 +636,53 @@ class TicketHistoryUserSelect(discord.ui.UserSelect):
         await _invoke(command, interaction, member=member)
 
 
+_TICKET_OPERATIONS_SECTIONS = {
+    "queues": ("Active", "Unassigned", "Mine", "Recent Closed", "Overdue", "Find Ticket"),
+    "setup": ("Current Ticket", "Public Panel", "Intake & Routing", "Categories", "Staff Alerts"),
+}
+
+
+class TicketOperationsSectionSelect(discord.ui.Select):
+    def __init__(self, owner_id: int, section: str) -> None:
+        self.owner_id = int(owner_id)
+        super().__init__(
+            placeholder="Choose ticket task",
+            options=[
+                discord.SelectOption(
+                    label=label, value=key, default=key == section,
+                )
+                for key, label in (
+                    ("queues", "Review Tickets"),
+                    ("setup", "Manage Ticket Settings"),
+                )
+            ],
+            row=0, custom_id="dank:tickets:operations:section:v2",
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        if not await _require_staff(interaction):
+            return
+        await _replace(
+            interaction, embed=_operations_embed(section=self.values[0]),
+            view=TicketOperationsView(self.owner_id, section=self.values[0]),
+        )
+
+
 class TicketOperationsView(_OwnedView):
-    def __init__(self, owner_id: int) -> None:
+    def __init__(self, owner_id: int, *, section: str = "queues") -> None:
         super().__init__(owner_id)
-        self.add_item(TicketHistoryUserSelect())
+        self.section = section if section in _TICKET_OPERATIONS_SECTIONS else "queues"
+        existing = {str(getattr(item, "label", "")): item for item in self.children}
+        self.clear_items()
+        self.add_item(TicketOperationsSectionSelect(owner_id, self.section))
+        if self.section == "queues":
+            history = TicketHistoryUserSelect()
+            history.row = 1
+            self.add_item(history)
+        for index, label in enumerate(_TICKET_OPERATIONS_SECTIONS[self.section]):
+            item = existing[label]
+            item.row = (2 if self.section == "queues" else 1) + index // 4
+            self.add_item(item)
 
     @discord.ui.button(label="Active", emoji="🎫", style=discord.ButtonStyle.primary, row=0)
     async def active(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
