@@ -4818,7 +4818,7 @@ def _settings_embed(
             value=(
                 f"The100.io: **{enabled('external_the100_enabled')}** • "
                 f"{'API ready' if external.the100_configured() else 'Host token missing'}\n"
-                "Discovery is read-only; it does not join third-party groups."
+                "Discovery is read-only, no external join actions are performed."
             ),
             inline=False,
         )
