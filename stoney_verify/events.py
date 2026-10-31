@@ -1504,6 +1504,24 @@ async def on_member_join(member: discord.Member):
                     f"{type(exc).__name__}: {exc}"
                 )
 
+            safe_state_ok = await _ensure_member_verification_safe_state(
+                member,
+                source="on_member_join",
+                risk_profile=risk_profile,
+                fail_closed=True,
+            )
+            if not safe_state_ok:
+                return
+
+            if not getattr(member, "bot", False):
+                try:
+                    _schedule_join_verification_watchdog(member)
+                except Exception as exc:
+                    print(
+                        f"⚠️ Failed to schedule join verification watchdog "
+                        f"for {member.id}: {type(exc).__name__}: {exc}"
+                    )
+
             # Reuse the current join-risk evidence: no separate broad scan and
             # no outside-server data. Only an actual Discord ban confirms ban status.
             try:
@@ -1529,24 +1547,6 @@ async def on_member_join(member: discord.Member):
                     )
             except Exception as exc:
                 print(f"⚠️ ban connection join check failed: {type(exc).__name__}")
-
-            safe_state_ok = await _ensure_member_verification_safe_state(
-                member,
-                source="on_member_join",
-                risk_profile=risk_profile,
-                fail_closed=True,
-            )
-            if not safe_state_ok:
-                return
-
-            if not getattr(member, "bot", False):
-                try:
-                    _schedule_join_verification_watchdog(member)
-                except Exception as exc:
-                    print(
-                        f"⚠️ Failed to schedule join verification watchdog "
-                        f"for {member.id}: {type(exc).__name__}: {exc}"
-                    )
 
     except Exception as exc:
         print("⚠️ on_member_join error:", exc)
