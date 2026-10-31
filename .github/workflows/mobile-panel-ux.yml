@@ -6,6 +6,7 @@ on:
       - "stoney_verify/**"
       - "tests/test_mobile_panel_ux.py"
       - "tools/audit_discord_mobile_panels.py"
+      - "tools/enforce_mobile_panel_regressions.py"
       - ".github/workflows/mobile-panel-ux.yml"
 
 permissions:
@@ -18,6 +19,8 @@ jobs:
     timeout-minutes: 12
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
@@ -29,6 +32,8 @@ jobs:
       - name: Inventory all Python panel surfaces
         run: |
           python tools/audit_discord_mobile_panels.py --strict-parse --json-out /tmp/mobile-panel-inventory.json
+      - name: Block new oversized UI layouts
+        run: python tools/enforce_mobile_panel_regressions.py --base "origin/${{ github.base_ref }}"
       - name: Validate mobile-sized panels and protected interactions
         run: |
           python -m pytest tests/test_mobile_panel_ux.py tests/test_protection_panel_load_fallback.py tests/test_public_protection_center_native_interaction_static.py tests/test_protection_refresh_ack.py -q --tb=short
