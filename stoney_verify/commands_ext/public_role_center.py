@@ -596,8 +596,8 @@ class RolesProfilesSectionSelect(discord.ui.Select):
                 discord.SelectOption(label=label, value=key, default=section == key)
                 for key, label in (
                     ("profile", "My Profile & Choices"),
-                    ("staff", "Staff Role Tools"),
-                    ("roles", "Server Role Administration"),
+                    *( [("staff", "Staff Role Tools")] if staff else [] ),
+                    *( [("roles", "Server Role Administration")] if role_manager else [] ),
                 )
             ],
             row=0, custom_id="dank:role:home:section:v2",
@@ -631,7 +631,11 @@ class RolesProfilesView(_OwnedView):
         section: str = "profile",
     ) -> None:
         super().__init__(owner_id)
-        self.section = section if section in _ROLES_PROFILES_SECTIONS else "profile"
+        self.section = section if (
+            section == "profile"
+            or (section == "staff" and staff)
+            or (section == "roles" and role_manager)
+        ) else "profile"
         self.staff = bool(staff)
         self.role_manager = bool(role_manager)
         self.setup_manager = bool(setup_manager)
