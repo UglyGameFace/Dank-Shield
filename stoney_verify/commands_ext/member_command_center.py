@@ -149,7 +149,7 @@ def _intelligence_embed() -> discord.Embed:
         title="🧠 Member Intelligence",
         description=(
             "Select a member, review recent bans, or inspect a historical account. "
-            "Connection evidence and join history share this one staff-only screen. "
+            "Connection evidence, join history and three simple server controls share this screen. "
             "Links do not prove leaked information, friendship, or ban evasion."
         ),
         color=discord.Color.blurple(),
@@ -667,6 +667,12 @@ class IntelligenceMenuView(OwnedView):
     async def connections_by_id(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await interaction.response.send_modal(ConnectionByIdModal())
+
+    @discord.ui.button(label="Connection Controls", emoji="⚙️", style=discord.ButtonStyle.secondary, row=2)
+    async def connection_controls(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        from .member_connection_controls_ui import open_connection_controls
+        await open_connection_controls(interaction, self.owner_id)
 
     @discord.ui.button(label="Command Center", emoji="🏠", style=discord.ButtonStyle.secondary, row=2)
     async def command_center(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:

@@ -1527,8 +1527,10 @@ async def on_member_join(member: discord.Member):
             try:
                 from .member_connection_intelligence import verified_ban_connections
 
+                from .member_connection_controls import auto_review_enabled
+                should_review = await auto_review_enabled(guild.id, "review")
                 banned_links = (await verified_ban_connections(guild, join_context, risk_profile)
-                                if not getattr(member, "bot", False) else [])
+                                if should_review and not getattr(member, "bot", False) else [])
                 if banned_links:
                     linked_ids = ", ".join(f"`{x['user_id']}`" for x in banned_links[:5])
                     notice = discord.Embed(
@@ -1540,10 +1542,9 @@ async def on_member_join(member: discord.Member):
                         ),
                         color=discord.Color.orange(),
                     )
-                    await _post_modlog(
-                        guild, notice,
-                        event_key=f"ban_connection_join:{member.id}",
-                        dedupe_window_seconds=900,
+                    from .member_connection_controls import post_private_connection_alert
+                    await post_private_connection_alert(
+                        guild, notice, event_key=f"ban_connection_join:{member.id}",
                     )
             except Exception as exc:
                 print(f"⚠️ ban connection join check failed: {type(exc).__name__}")
@@ -1734,8 +1735,12 @@ async def on_member_ban(guild: discord.Guild, user: discord.User):
         try:
             from .member_connection_intelligence import analyze_member_connections
 
-            connection_report = await analyze_member_connections(guild.id, user.id)
-            matches = connection_report.get("matches") or []
+            from .member_connection_controls import auto_review_enabled
+            if await auto_review_enabled(guild.id, "monitor"):
+                connection_report = await analyze_member_connections(guild.id, user.id)
+                matches = connection_report.get("matches") or []
+            else:
+                connection_report, matches = {}, []
             if matches:
                 lines = [
                     f"• `{row['user_id']}`: {row['category']}"
@@ -1753,10 +1758,9 @@ async def on_member_ban(guild: discord.Guild, user: discord.User):
                 )
                 if connection_report.get("coverage") != "available":
                     notice.set_footer(text="Evidence incomplete; some storage reads failed.")
-                await _post_modlog(
-                    guild, notice,
-                    event_key=f"ban_connections:{user.id}",
-                    dedupe_window_seconds=900,
+                from .member_connection_controls import post_private_connection_alert
+                await post_private_connection_alert(
+                    guild, notice, event_key=f"ban_connections:{user.id}",
                 )
         except Exception as exc:
             print(f"⚠️ ban connection review unavailable: {type(exc).__name__}")
