@@ -138,61 +138,90 @@ def _template_text(cfg: Any) -> tuple[str, str]:
     return title, body
 
 
-def _studio_embed(guild: discord.Guild, cfg: Any) -> discord.Embed:
-    channel, reason = resolve_exit_card_channel(guild, cfg)
-    theme_key = configured_exit_theme_key(cfg)
-    theme = BUILTIN_THEMES.get(theme_key)
-    primary, secondary = configured_exit_custom_colors(cfg)
-    color_mode = configured_exit_color_mode(cfg)
-    title, body = _template_text(cfg)
-    enabled = exit_cards_enabled(cfg)
+_EXIT_SECTIONS = {
+    "delivery": ("Use This Channel", "Enable / Disable", "Edit Text", "Preview"),
+    "style": ("Theme", "Font", "Colors", "Shuffle", "Preview"),
+    "artwork": ("Clear Artwork", "Reset Design", "Uploads", "Preview"),
+}
+_EXIT_SECTION_LABELS = {
+    "delivery": "Delivery & Message",
+    "style": "Design",
+    "artwork": "Artwork & Reset",
+}
 
+
+def _studio_embed(
+    guild: discord.Guild, cfg: Any, *, section: str = "delivery",
+) -> discord.Embed:
+    section = section if section in _EXIT_SECTIONS else "delivery"
+    enabled = exit_cards_enabled(cfg)
     embed = discord.Embed(
-        title="🚪 Exit Card Studio",
-        description=(
-            "This is the **authoritative live leave-card setup**. It controls the "
-            "one member-facing card sent when someone leaves. Staff audit logs stay separate."
-        ),
+        title=f"🚪 Exit Card Studio • {_EXIT_SECTION_LABELS[section]}",
+        description="Set up the live leave card, or switch sections to manage its design and artwork.",
         color=discord.Color.orange() if enabled else discord.Color.blurple(),
-        timestamp=discord.utils.utcnow(),
     )
-    embed.add_field(
-        name="Live delivery",
-        value=(
-            f"**Status:** {'✅ ON' if enabled else '⚪ OFF'}\n"
-            f"**Channel:** {channel.mention if isinstance(channel, discord.TextChannel) else 'not set'}\n"
-            f"**Route:** {reason}"
-        ),
-        inline=False,
-    )
-    embed.add_field(
-        name="Design",
-        value=(
-            f"**Theme:** {getattr(theme, 'label', theme_key)}\n"
-            f"**Font:** {_font_label(cfg)}\n"
-            f"**Colors:** {color_mode.replace('_', ' ').title()}"
-            + (f" `{primary}` → `{secondary}`" if color_mode == "custom" and primary and secondary else "")
-            + f"\n**Background:** {_background_label(cfg)}\n"
-            f"**Shuffle:** {SHUFFLE_LABELS.get(configured_exit_shuffle_mode(cfg), 'Off')}"
-        ),
-        inline=False,
-    )
-    embed.add_field(
-        name="Exit message",
-        value=f"**Title:** {title[:180]}\n**Body:** {body[:500]}",
-        inline=False,
-    )
-    embed.add_field(
-        name="Placeholders",
-        value=(
-            "`{username}` `{display_name}` `{server_name}` `{member_count}` "
-            "`{account_age}` `{joined_at}` `{rules_channel}` `{verify_channel}` "
-            "`{support_channel}`. Names are case-insensitive and tolerate spaces."
-        ),
-        inline=False,
-    )
-    embed.set_footer(text="Exit Card Studio")
+    if section == "delivery":
+        channel, reason = resolve_exit_card_channel(guild, cfg)
+        title, body = _template_text(cfg)
+        embed.add_field(
+            name="Live delivery",
+            value=(
+                f"Status: **{'On' if enabled else 'Off'}**\n"
+                f"Channel: {channel.mention if isinstance(channel, discord.TextChannel) else 'Not set'}\n"
+                f"Route: **{reason}**"
+            ),
+            inline=False,
+        )
+        embed.add_field(
+            name="Message",
+            value=f"Title: **{title[:120]}**\n{body[:220]}",
+            inline=False,
+        )
+    elif section == "style":
+        theme_key = configured_exit_theme_key(cfg)
+        theme = BUILTIN_THEMES.get(theme_key)
+        color_mode = configured_exit_color_mode(cfg)
+        embed.add_field(
+            name="Current design",
+            value=(
+                f"Theme: **{getattr(theme, 'label', theme_key)}** • "
+                f"Font: **{_font_label(cfg)}**\n"
+                f"Colors: **{color_mode.replace('_', ' ').title()}** • "
+                f"Shuffle: **{SHUFFLE_LABELS.get(configured_exit_shuffle_mode(cfg), 'Off')}**"
+            ),
+            inline=False,
+        )
+    else:
+        embed.add_field(
+            name="Artwork status",
+            value=f"Background: **{_background_label(cfg)}**\n"
+                  "Clear Artwork or Reset Design changes the saved design. Channel, enabled status and message text are preserved.",
+            inline=False,
+        )
+    embed.set_footer(text="Changes affect this server • Preview before relying on the card")
     return embed
+
+
+class _ExitSectionSelect(discord.ui.Select):
+    def __init__(self, owner_id: int, section: str) -> None:
+        self.owner_id = int(owner_id)
+        super().__init__(
+            placeholder="Choose Exit Card settings",
+            options=[
+                discord.SelectOption(label=label, value=key, default=key == section)
+                for key, label in _EXIT_SECTION_LABELS.items()
+            ],
+            row=0, custom_id="dank:exit:studio:section:v2",
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        if int(interaction.user.id) != self.owner_id:
+            return await _private(interaction, content="Open your own Exit Card Studio.")
+        if not await _require_setup_permission(interaction):
+            return
+        if not interaction.response.is_done():
+            await interaction.response.defer()
+        await _refresh(interaction, section=self.values[0])
 
 
 async def send_exit_studio_preview(interaction: discord.Interaction) -> None:
@@ -223,15 +252,15 @@ async def send_exit_studio_preview(interaction: discord.Interaction) -> None:
         )
 
 
-async def _refresh(interaction: discord.Interaction, *, notice: str = "") -> None:
+async def _refresh(interaction: discord.Interaction, *, notice: str = "", section: str = "delivery") -> None:
     guild = interaction.guild
     if guild is None:
         return await _private(interaction, content="❌ Use this inside a server.")
     cfg = await get_guild_config(int(guild.id), refresh=True)
-    embed = _studio_embed(guild, cfg)
+    embed = _studio_embed(guild, cfg, section=section)
     if notice:
         embed.add_field(name="Last action", value=notice[:1024], inline=False)
-    view = ExitCardStudioView(owner_id=int(interaction.user.id), cfg=cfg)
+    view = ExitCardStudioView(owner_id=int(interaction.user.id), cfg=cfg, section=section)
     try:
         if interaction.response.is_done():
             await interaction.edit_original_response(content=None, embed=embed, view=view)
@@ -440,10 +469,22 @@ class ExitAdvancedColorsModal(discord.ui.Modal):
 
 
 class ExitCardStudioView(_OwnedView):
-    def __init__(self, *, owner_id: int, cfg: Any) -> None:
+    def __init__(self, *, owner_id: int, cfg: Any, section: str = "delivery") -> None:
         super().__init__(owner_id=owner_id, timeout=900)
         self.cfg = cfg
-        self.add_item(ExitCardChannelSelect())
+        self.section = section if section in _EXIT_SECTIONS else "delivery"
+        original = {str(getattr(item, "label", "")): item for item in self.children}
+        self.clear_items()
+        self.add_item(_ExitSectionSelect(self.owner_id, self.section))
+        if self.section == "delivery":
+            channel_picker = ExitCardChannelSelect()
+            channel_picker.row = 1
+            self.add_item(channel_picker)
+        actions = (*_EXIT_SECTIONS[self.section], "Refresh", "Welcome & Join", "Close")
+        for index, name in enumerate(actions):
+            item = original[name]
+            item.row = (2 if self.section == "delivery" else 1) + index // 4
+            self.add_item(item)
 
     @discord.ui.button(label="Use This Channel", emoji="📍", style=discord.ButtonStyle.success, row=0)
     async def use_this_channel(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -471,7 +512,7 @@ class ExitCardStudioView(_OwnedView):
                 "leave_message_enabled": enabled,
             },
         )
-        await _refresh(interaction, notice=f"✅ Exit cards {'enabled' if enabled else 'disabled'}.")
+        await _refresh(interaction, notice=f"✅ Exit cards {'enabled' if enabled else 'disabled'}.", section=self.section)
 
     @discord.ui.button(label="Edit Text", emoji="✏️", style=discord.ButtonStyle.primary, row=1)
     async def edit_text(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -659,7 +700,7 @@ class ExitCardStudioView(_OwnedView):
                 "exit_card_background_name": "",
             },
         )
-        await _refresh(interaction, notice="✅ Custom Exit artwork cleared. Built-in theme background is active.")
+        await _refresh(interaction, notice="✅ Custom Exit artwork cleared. Built-in theme background is active.", section=self.section)
 
     @discord.ui.button(label="Reset Design", emoji="♻️", style=discord.ButtonStyle.secondary, row=2)
     async def reset_design(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -680,7 +721,7 @@ class ExitCardStudioView(_OwnedView):
                 "exit_card_background_name": "",
             },
         )
-        await _refresh(interaction, notice="✅ Exit design reset. Channel, enabled state, and message text were preserved.")
+        await _refresh(interaction, notice="✅ Exit design reset. Channel, enabled state, and message text were preserved.", section=self.section)
 
     @discord.ui.button(label="Uploads", emoji="📎", style=discord.ButtonStyle.secondary, row=3)
     async def uploads(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -706,7 +747,7 @@ class ExitCardStudioView(_OwnedView):
     async def refresh(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await _defer(interaction)
-        await _refresh(interaction, notice="🔄 Refreshed.")
+        await _refresh(interaction, notice="🔄 Refreshed.", section=self.section)
 
     @discord.ui.button(label="Welcome & Join", emoji="↩️", style=discord.ButtonStyle.secondary, row=3)
     async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
