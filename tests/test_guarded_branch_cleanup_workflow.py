@@ -1312,3 +1312,12 @@ def test_cinema_source_extraction_defers_legacy_branch_retirements_without_delet
     )
     assert "Cinema branch retirement is paused after source extraction" in final_pair
     assert "if (branchNames.includes('feat/cinema-library-intelligence'))" in final_pair
+
+
+def test_both_owner_cleanup_jobs_require_real_deployment_reference() -> None:
+    text = _workflow()
+    assert text.count("LINKED_PRODUCTION_BRANCH: ${{ vars.DANK_DISCLOUD_DEPLOY_BRANCH }}") == 2
+    assert text.count("if (deleting) {\n              if (!linkedProductionBranch)") == 2
+    assert text.count("github.rest.repos.getBranch({\n                owner, repo, branch: linkedProductionBranch") == 2
+    assert "linkedProductionBranch\n            ]);" in text
+    assert "name === linkedProductionBranch" in text
