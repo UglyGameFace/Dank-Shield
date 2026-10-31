@@ -147,8 +147,8 @@ def test_staff_builder_private_buttons_without_member_exposure() -> None:
     )
     private = public_action_center.ActionCenterView(42, snapshot, is_staff=False)
     staff = public_action_center.ActionCenterView(42, snapshot, is_staff=True, section="staff")
-    assert "Action Builder (Draft)" not in [x.label for x in private.children]
-    assert "Action Builder (Draft)" in [x.label for x in staff.children]
+    assert "Action Builder (Draft)" not in [getattr(x, "label", None) for x in private.children]
+    assert "Action Builder (Draft)" in [getattr(x, "label", None) for x in staff.children]
 
 
 def test_never_creates_new_ledger_scheduler_root_commands_or_guild_scans() -> None:
