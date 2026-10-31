@@ -298,9 +298,16 @@ jobs:
                       held.push(name + ': no exact-head merged-to-main PR older than 48h');
                       continue;
                     }
+                    const currentMain = (await github.rest.repos.getBranch({
+                      owner, repo, branch: 'main'
+                    })).data.commit.sha;
                     const current = (await github.rest.repos.getBranch({
                       owner, repo, branch: name
                     })).data;
+                    if (currentMain !== startMain) {
+                      held.push(name + ': main changed before archive');
+                      break;
+                    }
                     const latestOpen = await github.paginate(github.rest.pulls.list, {
                       owner, repo, state: 'open', per_page: 100
                     });
