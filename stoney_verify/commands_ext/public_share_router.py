@@ -1390,9 +1390,11 @@ async def _video_delivery_embed(guild: discord.Guild) -> discord.Embed:
     embed = discord.Embed(
         title="🎬 Where Videos Go",
         description=(
-            "People post one public video link in a request channel. "
-            "You choose what happens next. **DMs are optional**, not required. "
-            "Choose an option to see what will change before saving."
+            "**Step 1 • Request channel:** where members paste a public video link. "
+            "Choose an existing channel below or keep the saved one.\n"
+            "**Step 2 • Results:** choose Server Channel, Private DM, Both or Pause. "
+            "For server delivery, you may use the same request channel.\n"
+            "Only Save This Choice changes where downloads are delivered."
         ),
         color=discord.Color.blurple(),
     )
@@ -1402,7 +1404,7 @@ async def _video_delivery_embed(guild: discord.Guild) -> discord.Embed:
                else "Not set up yet. Choose an existing channel or let Dank Shield create one."),
         inline=False,
     )
-    embed.add_field(name="Current delivery", value=details, inline=False)
+    embed.add_field(name="Video results go to", value=details, inline=False)
     embed.add_field(
         name="What happens to the original link?",
         value=("It is removed only after every chosen destination receives an actual "
