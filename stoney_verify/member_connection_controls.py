@@ -137,6 +137,9 @@ def _check_grants(channel: discord.TextChannel, trusted: discord.Role) -> None:
     for principal, overwrite in channel.overwrites.items():
         if principal.id in {channel.guild.default_role.id, trusted.id}:
             continue
+        if isinstance(principal, discord.Member) and principal.id == getattr(channel.guild.me, "id", None):
+            # Bot-specific access is required in some least-privilege guilds.
+            continue
         if overwrite.view_channel is True:
             if isinstance(principal, discord.Role):
                 perms = principal.permissions
@@ -151,6 +154,29 @@ def _check_grants(channel: discord.TextChannel, trusted: discord.Role) -> None:
                 "An ordinary role or individual member has explicit channel access. "
                 "Remove that allowance in Discord first; no permissions were changed."
             )
+
+
+def _check_bot_recovery_access(guild: discord.Guild, channel: discord.TextChannel, role: discord.Role) -> None:
+    me = guild.me
+    if me is None:
+        raise ConnectionControlError("Dank Shield's server member cannot be verified.")
+    if me.guild_permissions.administrator:
+        return
+    roles = list(getattr(me, "roles", ()) or ())
+    retains_access = (
+        role in roles
+        or _permission_value(channel, me) is True
+        or any(
+            _permission_value(channel, member_role) is True
+            for member_role in roles
+            if member_role.id != guild.default_role.id
+        )
+    )
+    if not retains_access:
+        raise ConnectionControlError(
+            "Dank Shield would lose channel access after @everyone is denied. "
+            "Give the bot the trusted role or an explicit bot-only View Channel allowance first."
+        )
 
 
 def _check_role(guild: discord.Guild, role: discord.Role) -> None:
@@ -194,6 +220,7 @@ async def protect_channel(
     _check_owner_and_bot(guild, channel, actor)
     _check_role(guild, role)
     _check_grants(channel, role)
+    _check_bot_recovery_access(guild, channel, role)
     gid, cid = guild.id, str(channel.id)
     lock = _LOCKS.setdefault(gid, asyncio.Lock())
     async with lock:
@@ -219,6 +246,7 @@ async def protect_channel(
         try:
             _check_owner_and_bot(guild, channel, actor)
             _check_grants(channel, role)
+            _check_bot_recovery_access(guild, channel, role)
             if (_permission_value(channel, guild.default_role) != original["everyone"]
                     or _permission_value(channel, role) != original["role"]):
                 raise ConnectionControlError("Channel permissions changed during confirmation.")
