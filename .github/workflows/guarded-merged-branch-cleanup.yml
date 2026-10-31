@@ -787,6 +787,7 @@ jobs:
             for (const branch of branches) {
               const name = branch.name;
               if (name === defaultBranch || branch.protected) continue;
+              if (name === linkedProductionBranch) continue;
               // The Discloud dashboard is still linked to this branch.
               if (name === 'aaa-cinema-pre-pregateway-bind') continue;
               if (inUseByOpenPR.has(name)) continue;
