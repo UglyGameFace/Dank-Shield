@@ -206,7 +206,11 @@ def test_all_section_selectors_are_read_only_navigation(monkeypatch):
     monkeypatch.setattr(setup, "_staff_authorized", allowed)
     monkeypatch.setattr(setup, "_defer_panel_update", pending)
     monkeypatch.setattr(setup, "load_guild_setup_state", load_setup)
-    monkeypatch.setattr(setup, "_admin_embed", lambda *_args: "summary")
+    selected_sections = []
+    def fake_embed(*_args, section="roles"):
+        selected_sections.append(section)
+        return "summary"
+    monkeypatch.setattr(setup, "_admin_embed", fake_embed)
     monkeypatch.setattr(setup, "_replace", replace)
     interaction = SimpleNamespace(
         user=SimpleNamespace(id=123),
@@ -217,6 +221,7 @@ def test_all_section_selectors_are_read_only_navigation(monkeypatch):
     asyncio.run(select.callback(interaction))
     assert isinstance(events[-1], setup.MemberSetupAdminView)
     assert events[-1].section == "gate"
+    assert selected_sections == ["gate"]
 
 
 def test_ticket_operations_sections_keep_all_actions_and_history():
