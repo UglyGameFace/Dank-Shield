@@ -86,7 +86,9 @@ def test_historical_owner_review_workflow_is_unchanged() -> None:
 
 def test_unverified_deployment_branch_allows_archival_but_never_deletion() -> None:
     workflow = AUTO.read_text(encoding="utf-8")
-    assert "const canRetire = Boolean(deployedRef);" in workflow
+    assert "const canRetire = deploymentBranchConfigured;" in workflow
+    assert "deploymentBranchConfigured = Boolean(deployed.commit?.sha);" in workflow
+    assert "if (deleteReviewed && !deploymentBranchConfigured)" in workflow
     assert "if (!canRetire) {" in workflow
     assert "archivedOnly++;" in workflow
     assert "archiveCreated = true;" in workflow
