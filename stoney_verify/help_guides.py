@@ -100,10 +100,10 @@ HELP_GUIDES: dict[str, HelpGuide] = {
         "Review exceptions for approved advertising bots; knowing another member is not proof of misconduct."),
     "members_moderation": HelpGuide(
         "Review members, activity, account history and moderation tools.",
-        ("Open Members & Moderation, then Member Command Center.",
-         "Choose Live Members for a current account or Intelligence for stored history and review evidence.",
-         "Inspect evidence and choose a specific moderation action only when justified; confirm any destructive action."),
-        "Member history and connection information are staff review leads, not automatic proof of guilt.",
+        ("Open Members & Moderation, then Member Command Center. Choose Live Members for a current account.",
+         "For banned users, open Intelligence → Recent Ban Connections and select the account. Connections by ID covers historical accounts.",
+         "Read connection evidence and Stored History before taking any staff action; confirm destructive moderation separately."),
+        "Relationship and identity records are staff review leads, not proof of ban evasion or leaked messages.",
         "Ban and cleanup controls require staff authority and must never be tested on real members casually."),
     "roles_profiles": HelpGuide(
         "Create and maintain Discord roles and member profile options.",
