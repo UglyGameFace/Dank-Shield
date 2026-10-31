@@ -1,14 +1,23 @@
 name: Deploy Supabase migrations
 
+# A green CI run is evidence, not approval to modify the live database.
 on:
-  workflow_run:
-    workflows: ["Dank Shield CI"]
-    types: [completed]
-    branches: [main]
   workflow_dispatch:
     inputs:
       target_sha:
         description: "Exact CI-green current main SHA to deploy"
+        required: true
+        type: string
+      approval:
+        description: "Type APPROVE_CURRENT_MAIN_SUPABASE_MIGRATION after reviewing deployment risk"
+        required: true
+        type: string
+      backup_verified:
+        description: "Type VERIFIED_OFF_DISCLOUD_BACKUP after independently testing the off-host backup"
+        required: true
+        type: string
+      rollback_tested:
+        description: "Type ROLLBACK_TESTED after validating recovery and canary plan"
         required: true
         type: string
 
@@ -23,11 +32,7 @@ concurrency:
 jobs:
   deploy:
     name: Push pending migrations
-    if: >-
-      github.event_name == 'workflow_dispatch' ||
-      (github.event.workflow_run.conclusion == 'success' &&
-       github.event.workflow_run.event == 'push' &&
-       github.event.workflow_run.head_branch == 'main')
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     environment: production
@@ -35,9 +40,25 @@ jobs:
       SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
       SUPABASE_PROJECT_ID: ${{ secrets.SUPABASE_PROJECT_ID }}
       SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
-      TARGET_SHA: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || inputs.target_sha }}
+      TARGET_SHA: ${{ inputs.target_sha }}
 
     steps:
+      - name: Require explicit release approval and independently verified recovery evidence
+        shell: bash
+        env:
+          RELEASE_APPROVAL: ${{ inputs.approval }}
+          BACKUP_VERIFIED: ${{ inputs.backup_verified }}
+          ROLLBACK_TESTED: ${{ inputs.rollback_tested }}
+        run: |
+          set -euo pipefail
+          if [ "$RELEASE_APPROVAL" != 'APPROVE_CURRENT_MAIN_SUPABASE_MIGRATION' ] ||
+             [ "$BACKUP_VERIFIED" != 'VERIFIED_OFF_DISCLOUD_BACKUP' ] ||
+             [ "$ROLLBACK_TESTED" != 'ROLLBACK_TESTED' ]; then
+            echo "::error title=Production approval missing::Explicit risk approval, independently verified off-host backup and tested rollback/canary plan are required."
+            exit 1
+          fi
+          echo "Release operator attestations accepted; exact-main CI and live-project checks still required."
+
       - name: Check out validated release commit
         uses: actions/checkout@v4
         with:
@@ -69,8 +90,7 @@ jobs:
 
           echo "Validated current production migration target: $TARGET_SHA"
 
-      - name: Verify manual target passed canonical CI
-        if: github.event_name == 'workflow_dispatch'
+      - name: Verify exact target passed canonical CI
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
