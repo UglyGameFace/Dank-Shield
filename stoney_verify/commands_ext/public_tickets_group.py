@@ -323,7 +323,7 @@ async def tickets_history(
 
 @tickets_group.command(
     name="activity",
-    description="Show recent activity-feed events for the current ticket.",
+    description="Show the most recent ticket activity events (limited preview).",
 )
 @app_commands.describe(channel="Ticket channel to inspect. Leave empty to use the current channel.")
 async def tickets_activity(
@@ -353,13 +353,13 @@ async def tickets_activity(
 
     embed = discord.Embed(
         title="📜 Ticket Activity",
-        description=f"{ch.mention}",
+        description=f"{ch.mention}\nShowing up to 10 latest events. This is not the complete ticket history.",
         color=discord.Color.blurple(),
         timestamp=legacy.now_utc(),
     )
 
     if not events:
-        embed.add_field(name="Activity", value="No recent activity-feed events found for this ticket.", inline=False)
+        embed.add_field(name="Activity", value="No events found in the latest 10-event query. Older history is not checked.", inline=False)
         return await reply_once(interaction, {"embed": embed, "ephemeral": True})
 
     lines = []
@@ -373,7 +373,7 @@ async def tickets_activity(
             line += f"\n  {desc}"
         lines.append(line)
 
-    embed.add_field(name="Recent Events", value="\n".join(lines)[:1024], inline=False)
+    embed.add_field(name=f"Recent Events ({len(lines)} shown, latest 10 queried)", value="\n".join(lines)[:1024], inline=False)
     await reply_once(interaction, {"embed": embed, "ephemeral": True})
 
 
