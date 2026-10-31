@@ -194,6 +194,8 @@ def _manager_embed(
     guild: discord.Guild,
     raw_config: Mapping[str, Any],
     model: CommunityPingsConfig,
+    *,
+    section: str = "options",
 ) -> discord.Embed:
     starter_id, notify_id = toke_role_ids(model, raw_config)
     starter = guild.get_role(starter_id) if starter_id else None
@@ -244,6 +246,20 @@ def _manager_embed(
         embed.add_field(
             name="First step",
             value="Choose Add Option and select a safe role to offer to members.",
+            inline=False,
+        )
+    if section == "toke":
+        embed.add_field(
+            name="/toke setup",
+            value="Use **Toke Starter**, **Toke Notify**, and **Toke Channel** below. "
+                  "Choose enabled roles first; settings are stored separately.",
+            inline=False,
+        )
+    elif section == "movie":
+        embed.add_field(
+            name="Movie Night mapping",
+            value="Movie Night uses the capability mapping, not the role name. "
+                  "Choose an enabled notification option with Movie Night Notify.",
             inline=False,
         )
     embed.set_footer(text="Exact option settings stay in the editor • Protected/staff roles are blocked")
@@ -371,7 +387,7 @@ async def _open_manager_message(interaction: discord.Interaction, *, owner_id: O
     raw, model = await _load(guild)
     await _replace(
         interaction,
-        embed=_manager_embed(guild, raw, model),
+        embed=_manager_embed(guild, raw, model, section=section),
         view=CommunityPingsManagerView(owner_id or int(interaction.user.id), section=section),
     )
 
@@ -942,7 +958,7 @@ class CommunityPingsSectionSelect(discord.ui.Select):
         raw, model = await _load(guild)
         await _replace(
             interaction,
-            embed=_manager_embed(guild, raw, model),
+            embed=_manager_embed(guild, raw, model, section=self.values[0]),
             view=CommunityPingsManagerView(self.owner_id, section=self.values[0]),
         )
 
