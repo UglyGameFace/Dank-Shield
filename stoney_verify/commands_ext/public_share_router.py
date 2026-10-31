@@ -1580,9 +1580,9 @@ class ShareRouterDestinationChoiceView(_OwnedView):
             custom_id="dank:share_router:download_destination",
             placeholder="Choose where the videos will be posted…",
             title="Choose Video Destination",
-            predicate=lambda resource: not _video_destination_blocker(
-                guild, interaction.user, resource, request_id,
-            ),
+            # List all server text channels. Validate the picked channel after
+            # selection so permission or state blockers are explained instead
+            # of silently hiding legitimate channels.
             on_home=home,
             home_label="Where Videos Go",
         )
@@ -1602,9 +1602,11 @@ async def _choose_video_destination(interaction: discord.Interaction, mode: str)
         embed=discord.Embed(
             title="Where Should Videos Be Posted?",
             description=(
-                "Choose a normal server channel. Members must be allowed to view and "
-                "send messages there, and Dank Shield needs permission to attach files. "
-                "This does not turn on DMs unless you also selected **Both**."
+                "**Step 2: Where the finished videos appear.** Choose any server "
+                "text channel you can use, including the same request channel. "
+                "The requesting member must be able to view and post there; "
+                "Dank Shield needs View Channel, Send Messages and Attach Files. "
+                "DMs are off unless you choose Both."
             ),
             color=discord.Color.blurple(),
         ),
@@ -1732,10 +1734,8 @@ class ShareRouterRequestChoiceView(_OwnedView):
             custom_id="dank:share_router:download_request_channel",
             placeholder="Choose where members will post links…",
             title="Choose Video Request Channel",
-            predicate=lambda resource: not (
-                isinstance(resource, discord.TextChannel)
-                and is_share_router_design_resource(resource)
-            ) and isinstance(resource, discord.TextChannel),
+            # Show all text channels, including those inside the share hub.
+            # The confirmation step explains any actual permission conflict.
             on_home=home,
             home_label="Where Videos Go",
         )
@@ -1755,9 +1755,11 @@ async def _choose_request_channel(interaction: discord.Interaction) -> None:
         embed=discord.Embed(
             title="Choose Where Members Request Videos",
             description=(
-                "Use an existing text channel, or go back and choose a delivery "
-                "option to create a new #video-downloads channel. "
-                "Selecting an existing request channel never enables delivery by itself."
+                "**Step 1: Choose where members paste video links.** "
+                "Use This Channel or Choose Channel to pick a server text channel, "
+                "including channels inside Share Router categories. "
+                "Saving a request channel pauses delivery until you choose "
+                "DM, server channel or both in Step 2."
             ),
             color=discord.Color.blurple(),
         ),
