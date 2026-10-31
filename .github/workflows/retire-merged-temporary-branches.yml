@@ -4,7 +4,7 @@ name: Retire merged temporary branches
 # separate from the owner-reviewed historical cleanup workflow.
 on:
   schedule:
-    - cron: '0 7,8 * * *' # 03:00 New York, checked against DST below
+    - cron: '*/5 * * * *' # Frequent guarded cleanup; GitHub may delay scheduled starts
   workflow_dispatch:
     inputs:
       mode:
@@ -78,15 +78,6 @@ jobs:
             }
             const deleting = mode === 'delete';
 
-            if (!isManual) {
-              const localHour = new Intl.DateTimeFormat('en-US', {
-                timeZone: 'America/New_York', hour: '2-digit', hourCycle: 'h23'
-              }).format(new Date());
-              if (localHour !== '03') {
-                core.info('Skip second UTC cron outside 03:00 New York.');
-                return;
-              }
-            }
             const reviewed = mode === 'preview-reviewed-merged' || mode === 'delete-reviewed-merged';
             if (reviewed) {
               if (!isManual || context.actor !== 'UglyGameFace') {
