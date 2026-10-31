@@ -69,8 +69,8 @@ def parse_controls(raw: Any) -> dict[str, Any]:
     }
 
 
-async def load_controls(guild_id: int) -> tuple[Any, dict[str, Any]]:
-    cfg = await get_guild_config(guild_id, force_refresh=True)
+async def load_controls(guild_id: int, *, refresh: bool = True) -> tuple[Any, dict[str, Any]]:
+    cfg = await get_guild_config(guild_id, force_refresh=refresh)
     if str(cfg.get("source", "")).startswith("unavailable:"):
         raise ConnectionControlError("Server configuration storage is unavailable.")
     raw = cfg.get(CONFIG_KEY)
@@ -82,7 +82,7 @@ async def auto_review_enabled(guild_id: int, action: str) -> bool:
     if action not in {"monitor", "review"}:
         return False
     try:
-        _, policy = await load_controls(guild_id)
+        _, policy = await load_controls(guild_id, refresh=False)
         return policy[action] is True
     except Exception:
         return False
@@ -254,8 +254,10 @@ async def _restore_pair(
             "Permissions changed outside Dank Shield. Review manually before restoring."
         )
     reason = f"Dank Shield Connection Intelligence: restored by {actor.id}"
-    await _set_view(channel, role, original["role"], reason)
-    await _set_view(channel, guild.default_role, original["everyone"], reason)
+    if current_r != original["role"]:
+        await _set_view(channel, role, original["role"], reason)
+    if current_e != original["everyone"]:
+        await _set_view(channel, guild.default_role, original["everyone"], reason)
 
 
 async def remove_protection(guild: discord.Guild, actor: discord.Member, channel_id: str) -> None:
