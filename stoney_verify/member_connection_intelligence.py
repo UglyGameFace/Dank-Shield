@@ -192,7 +192,9 @@ async def verified_ban_connections(
     matched = []
     for uid in sorted(ids, key=int)[:5]:
         try:
-            ban = await guild.fetch_ban(type("UserRef", (), {"id": int(uid)})())
+            import discord
+
+            ban = await guild.fetch_ban(discord.Object(id=int(uid)))
         except Exception:
             # Includes NotFound, Forbidden, HTTP errors; no fabricated match.
             continue
