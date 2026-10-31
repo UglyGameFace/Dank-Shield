@@ -321,16 +321,21 @@ def test_welcome_and_exit_desktop_mobile_shared_navigation():
 def test_setup_and_trusted_advert_buttons_are_partitioned_not_deleted():
     from stoney_verify.commands_ext import public_setup_recommend as setup
     from stoney_verify.commands_ext import trusted_advert_ui as ads
+    from stoney_verify.setup_ui import public_setup_compact as compact
 
-    setup_actions = [name for actions in setup._ADVANCED_HUB_SECTIONS.values() for name in actions]
-    assert len(setup_actions) == len(set(setup_actions)) == 9
-    for section, names in setup._ADVANCED_HUB_SECTIONS.items():
-        panel = setup.AdvancedSettingsHubView(section=section)
-        assert _buttons(panel) == set(names) | {"Back to Manage Setup", "Setup Home", "Close"}
-        _assert_compact(panel)
-        embed = setup._advanced_hub_embed(section=section)
-        assert len(embed.fields) == 0
-        assert len(embed.description) < 260
+    # Production registers the canonical compact setup implementation. Do not
+    # assert against a legacy view that registration intentionally replaces.
+    assert setup.AdvancedSettingsHubView is compact.CompactManagerView
+    panel = setup.AdvancedSettingsHubView()
+    assert _buttons(panel) == {
+        "Change Plan", "Check Configuration", "Advanced", "Setup Home", "Close",
+    }
+    _assert_compact(panel)
+    assert sum(isinstance(item, compact.FeatureAreaSelect) for item in panel.children) == 1
+    picker = next(item for item in panel.children if isinstance(item, compact.FeatureAreaSelect))
+    assert {option.value for option in picker.options} == {
+        area[0] for area in compact.FEATURE_AREAS
+    }
 
     ad_actions = [name for actions in ads._TRUSTED_ADS_SECTIONS.values() for name in actions]
     assert len(set(ad_actions)) == len(ad_actions) == 10
@@ -413,25 +418,18 @@ def test_action_center_member_and_staff_actions_have_distinct_pages():
         assert len(embed.description) <= 250
 
 
-def test_advanced_settings_section_change_keeps_existing_setup_permission(monkeypatch):
-    from stoney_verify.commands_ext import public_setup_recommend as setup
+def test_compact_setup_section_picker_routes_without_changing_settings(monkeypatch):
+    from stoney_verify.setup_ui import public_setup_compact as compact
+
     calls = []
 
-    async def allow(_interaction):
-        return True
+    async def route(interaction, section):
+        calls.append((interaction, section))
 
-    async def edit(_interaction, *, embed, view):
-        calls.append((embed, view))
-
-    async def defer(_interaction):
-        calls.append("defer")
-
-    monkeypatch.setattr(setup.solid, "_require_setup_permission", allow)
-    monkeypatch.setattr(setup.solid, "_safe_defer_update", defer)
-    monkeypatch.setattr(setup.solid, "_edit_or_followup", edit)
-    response = SimpleNamespace(is_done=lambda: False)
-    picker = setup._AdvancedHubSectionSelect("foundation")
-    picker._values = ["appearance"]
-    asyncio.run(picker.callback(SimpleNamespace(response=response)))
-    assert calls[0] == "defer"
-    assert calls[1][1].section == "appearance"
+    monkeypatch.setattr(compact, "_route_area", route)
+    picker = compact.FeatureAreaSelect()
+    chosen = compact.FEATURE_AREAS[0][0]
+    picker._values = [chosen]
+    interaction = SimpleNamespace()
+    asyncio.run(picker.callback(interaction))
+    assert calls == [(interaction, chosen)]
