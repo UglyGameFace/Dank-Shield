@@ -15,13 +15,17 @@ def _workflow() -> str:
     return WORKFLOW.read_text(encoding="utf-8")
 
 
-def test_dst_aware_nightly_run_does_not_double_execute() -> None:
+def test_five_minute_schedule_is_serialized_and_not_nightly_gated() -> None:
     text = _workflow()
-    assert "cron: '0 7,8 * * *'" in text
-    assert "timeZone: 'America/New_York'" in text
-    assert "if (localHour !== '03')" in text
-    assert "return;" in text
+    assert "cron: '*/5 * * * *'" in text
+    assert "group: guarded-merged-branch-cleanup" in text
     assert "cancel-in-progress: false" in text
+    assert "if (localHour !== '03')" not in text
+    assert "timeZone: 'America/New_York'" not in text
+    # Scheduled runs may retire only narrowly opted-in, verified merged heads.
+    assert "const mode = isManual ? process.env.REQUESTED_MODE : 'delete';" in text
+    assert "const reviewed = mode === 'preview-reviewed-merged' || mode === 'delete-reviewed-merged';" in text
+    assert "if (!isManual || context.actor !== 'UglyGameFace')" in text
 
 
 def test_broad_retirement_is_manual_and_sha_leased() -> None:
