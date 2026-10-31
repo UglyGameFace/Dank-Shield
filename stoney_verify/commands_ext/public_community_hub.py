@@ -575,53 +575,36 @@ def build_session_embed(
     return embed
 
 
-def _hub_embed() -> discord.Embed:
-    embed = discord.Embed(
-        title="🎮 Community Hub",
-        description=(
-            "Find outside gaming groups and real Discord communities **right from Find Players**, "
-            "plus groups hosted here. Start a session, join events or set game notifications."
+def _hub_embed(*, section: str = "play") -> discord.Embed:
+    options = {
+        "play": (
+            "Play & Groups",
+            "Find players, start a session, or return to groups you've joined.",
+            "Quick Match is optional; it does not change your Open to Play preference.",
         ),
+        "explore": (
+            "Events & Discovery",
+            "Browse events and opt-in public groups, including supported outside sources.",
+            "External discovery never joins a group for you.",
+        ),
+        "community": (
+            "Preferences & Safety",
+            "Manage notifications, temporary availability, voice captions and match safety.",
+            "Voice captions require individual consent. Match Safety is private to its owner.",
+        ),
+        "staff": (
+            "Staff Tools",
+            "Open staff controls for Community Hub configuration and health.",
+            "Existing server permissions are enforced inside Staff Dashboard.",
+        ),
+    }
+    label, description, note = options.get(section, options["play"])
+    embed = discord.Embed(
+        title=f"🎮 Community Hub • {label}",
+        description=f"{description}\n\nChoose a tool below. **{note}**",
         color=discord.Color.blurple(),
     )
-    embed.add_field(
-        name="Find Players",
-        value="One search shows free outside gaming groups, opt-in Public Gaming Network servers "
-              "and groups hosted here. Outside discovery works without a paid token.",
-        inline=False,
-    )
-    embed.add_field(
-        name="Gaming sessions",
-        value=(
-            "Sessions support ready checks, waitlists, host handoff, pause/resume, temporary discussion/voice spaces, "
-            "clean ending, Play Again, restart recovery, and bounded cleanup."
-        ),
-        inline=False,
-    )
-    embed.add_field(
-        name="Open to Play & Match Safety",
-        value=(
-            "Open to Play is a short-lived opt-in availability status. Automatic Quick Match pairing is a separate "
-            "switch you control. Match Safety privately keeps chosen members out of automatic matches without changing server moderation."
-        ),
-        inline=False,
-    )
-    embed.add_field(
-        name="Live Captions",
-        value=(
-            "Optional per-speaker voice-to-text for Community Hub voice sessions. Each participant explicitly controls "
-            "their own isolated voice. If they enabled remembered auto-caption for this server, Dank Shield restores that consent automatically when they join an active captioned session."
-        ),
-        inline=False,
-    )
-    embed.add_field(
-        name="Privacy",
-        value=(
-            "Community Pulse uses aggregate activity. Dank Shield does not keep a long-term per-member presence or game-history dossier."
-        ),
-        inline=False,
-    )
-    embed.add_field(name="Control lifetime", value=private_menu_lifecycle_text(), inline=False)
+    embed.set_footer(text=private_menu_lifecycle_text())
     return embed
 
 
@@ -1345,7 +1328,58 @@ class MatchSafetyView(_OwnedView):
         await _close_private_panel(interaction)
 
 
+_COMMUNITY_HOME_SECTIONS = {
+    "play": ("Find Players", "Start Gaming Session", "My Groups", "Quick Match"),
+    "explore": (
+        "Community Pulse", "Events", "Partner Groups",
+        "Browse Public Servers", "More Gaming Sources",
+    ),
+    "community": ("Game Notifications", "Open to Play", "Live Captions", "Match Safety"),
+    "staff": ("Staff Dashboard",),
+}
+
+
+class CommunityHubSectionSelect(discord.ui.Select):
+    def __init__(self, owner_id: int, current: str) -> None:
+        self.owner_id = owner_id
+        super().__init__(
+            placeholder="Choose a Community Hub area",
+            options=[
+                discord.SelectOption(label=label, value=key, default=current == key)
+                for key, label in (
+                    ("play", "Play & Groups"),
+                    ("explore", "Events & Discovery"),
+                    ("community", "Preferences & Safety"),
+                    ("staff", "Staff Tools"),
+                )
+            ],
+            row=0, custom_id="dank:hub:home:section:v2",
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        if int(interaction.user.id) != self.owner_id:
+            return await _private(interaction, "Open your own Community Hub panel.")
+        await _defer_update(interaction)
+        await _edit_private_original(
+            interaction, content=None,
+            embed=_hub_embed(section=self.values[0]),
+            view=CommunityHubView(self.owner_id, section=self.values[0]),
+        )
+
+
 class CommunityHubView(_OwnedView):
+    def __init__(self, owner_id: int, *, section: str = "play") -> None:
+        super().__init__(owner_id)
+        self.section = section if section in _COMMUNITY_HOME_SECTIONS else "play"
+        existing = {str(getattr(item, "label", "")): item for item in self.children}
+        self.clear_items()
+        self.add_item(CommunityHubSectionSelect(self.owner_id, self.section))
+        names = (*_COMMUNITY_HOME_SECTIONS[self.section], "Back to Dank Home", "Close")
+        for index, label in enumerate(names):
+            item = existing[label]
+            item.row = 1 + index // 4
+            self.add_item(item)
+
     @discord.ui.button(label="Find Players", emoji="🔎", style=discord.ButtonStyle.primary, custom_id="dank:hub:find:v1", row=0)
     async def find_players(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
