@@ -148,62 +148,96 @@ def _font_label(cfg: Any) -> str:
     return getattr(style, "label", key.replace("_", " ").title())
 
 
+_JOIN_CARD_SECTIONS = {
+    "delivery": ("Use This Channel", "Enable / Disable", "Preview"),
+    "style": ("Theme", "Font", "Colors", "Shuffle", "Preview"),
+    "artwork": ("Uploads", "Preview"),
+}
+
+
 def _studio_embed(
-    guild: discord.Guild,
-    cfg: Any,
-    *,
-    preview_error: str = "",
+    guild: discord.Guild, cfg: Any, *,
+    preview_error: str = "", section: str = "delivery",
 ) -> discord.Embed:
-    theme_key = configured_theme_key(cfg)
-    theme = BUILTIN_THEMES.get(theme_key)
-    channel = _channel_for(guild, cfg)
+    section = section if section in _JOIN_CARD_SECTIONS else "delivery"
+    labels = {"delivery": "Delivery", "style": "Design", "artwork": "Artwork"}
     embed = discord.Embed(
-        title="🪄 Welcome Card Studio",
-        description=(
-            "This panel is the authoritative live join-card setup. Changes are "
-            "read fresh when a member joins; the retired legacy v3 card is never used."
-        ),
+        title=f"🪄 Join Card Studio • {labels[section]}",
+        description="Choose the part of the live join card you want to change. Preview before relying on it.",
         color=discord.Color.blurple(),
-        timestamp=discord.utils.utcnow(),
     )
-    embed.add_field(
-        name="Live status",
-        value=(
-            f"**Card:** {'Enabled' if welcome_cards_enabled(cfg) else 'Disabled'}\n"
-            f"**Channel:** {channel.mention if channel else 'Not configured'}"
-        ),
-        inline=True,
-    )
-    embed.add_field(
-        name="Current design",
-        value=(
-            f"**Theme:** {getattr(theme, 'label', theme_key)}\n"
-            f"**Font:** {_font_label(cfg)}\n"
-            f"**Colors:** {configured_color_mode(cfg).replace('_', ' ').title()}\n"
-            f"**Shuffle:** {configured_shuffle_mode(cfg).replace('_', ' ').title()}"
-        ),
-        inline=True,
-    )
-    embed.add_field(
-        name="What posts live",
-        value=(
-            "The image uses the selected theme, font, colors, background, shuffle, "
-            "and saved join text. Missing **Attach Files** uses one matching embed "
-            "fallback instead of an unrelated legacy card."
-        ),
-        inline=False,
-    )
-    if preview_error:
+    if section == "delivery":
+        channel = _channel_for(guild, cfg)
         embed.add_field(
-            name="⚠️ Preview needs repair",
+            name="Live join card",
             value=(
-                f"`{preview_error[:850]}`\nThe Studio is still usable. Change the "
-                "theme, font, or background, then preview again."
+                f"Status: **{'Enabled' if welcome_cards_enabled(cfg) else 'Disabled'}**\n"
+                f"Channel: {channel.mention if channel else 'Not configured'}"
             ),
             inline=False,
         )
-    embed.set_footer(text="Welcome Card Studio")
+    elif section == "style":
+        theme_key = configured_theme_key(cfg)
+        theme = BUILTIN_THEMES.get(theme_key)
+        embed.add_field(
+            name="Current style",
+            value=(
+                f"Theme: **{getattr(theme, 'label', theme_key)}** • "
+                f"Font: **{_font_label(cfg)}**\n"
+                f"Colors: **{configured_color_mode(cfg).replace('_', ' ').title()}** • "
+                f"Shuffle: **{configured_shuffle_mode(cfg).replace('_', ' ').title()}**"
+            ),
+            inline=False,
+        )
+    else:
+        embed.add_field(
+            name="Custom artwork",
+            value="Use Uploads for safe background and font attachments, then Preview. "
+                  "When Attach Files is unavailable, the live sender uses its matching embed fallback.",
+            inline=False,
+        )
+    if preview_error:
+        embed.add_field(
+            name="⚠️ Preview needs repair",
+            value=f"{preview_error[:700]}\nThe studio remains available; try a different style then preview again.",
+            inline=False,
+        )
+    embed.set_footer(text="Join Card Studio • Settings apply to live joins only")
     return embed
+
+
+class _JoinCardSectionSelect(discord.ui.Select):
+    def __init__(self, owner_id: int, section: str):
+        self.owner_id = int(owner_id)
+        super().__init__(
+            placeholder="Choose join-card settings",
+            options=[
+                discord.SelectOption(label=label, value=key, default=key == section)
+                for key, label in (
+                    ("delivery", "Delivery"),
+                    ("style", "Design"),
+                    ("artwork", "Artwork & Uploads"),
+                )
+            ],
+            custom_id="dank:welcome:join_studio:section:v2", row=0,
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        if int(interaction.user.id) != self.owner_id:
+            return await _private(interaction, content="Open your own Join Card Studio.")
+        if not await _require_setup_permission(interaction):
+            return
+        guild = interaction.guild
+        if guild is None:
+            return await _private(interaction, content="Use this inside a server.")
+        if not interaction.response.is_done():
+            await interaction.response.defer()
+        cfg = await get_guild_config(int(guild.id), refresh=True)
+        section = self.values[0]
+        await interaction.edit_original_response(
+            embed=_studio_embed(guild, cfg, section=section),
+            view=WelcomeCardStudioView(owner_id=self.owner_id, section=section),
+        )
 
 
 async def _save_live_welcome_card_channel(
@@ -269,10 +303,22 @@ class WelcomeCardChannelSelect(discord.ui.ChannelSelect):
 
 
 class WelcomeCardStudioView(discord.ui.View):
-    def __init__(self, *, owner_id: int) -> None:
+    def __init__(self, *, owner_id: int, section: str = "delivery") -> None:
         super().__init__(timeout=900)
         self.owner_id = int(owner_id)
-        self.add_item(WelcomeCardChannelSelect())
+        self.section = section if section in _JOIN_CARD_SECTIONS else "delivery"
+        original = {str(getattr(item, "label", "")): item for item in self.children}
+        self.clear_items()
+        self.add_item(_JoinCardSectionSelect(self.owner_id, self.section))
+        if self.section == "delivery":
+            picker = WelcomeCardChannelSelect()
+            picker.row = 1
+            self.add_item(picker)
+        names = (*_JOIN_CARD_SECTIONS[self.section], "Refresh", "Welcome & Join", "Close")
+        for index, name in enumerate(names):
+            item = original[name]
+            item.row = (2 if self.section == "delivery" else 1) + index // 4
+            self.add_item(item)
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if int(interaction.user.id) == self.owner_id:
