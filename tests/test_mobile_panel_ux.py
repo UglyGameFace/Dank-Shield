@@ -280,3 +280,94 @@ def test_roles_and_profiles_sections_preserve_permission_gated_controls():
     assert {item.value for item in member.children[0].options} == {"profile"}
     assert all(item.label not in {"Server Role Editor", "Create Role", "Role Health"}
                for item in member.children if getattr(item, "label", None))
+
+
+
+def _buttons(view):
+    import discord
+    return {item.label for item in view.children if isinstance(item, discord.ui.Button)}
+
+
+def _assert_compact(view, *, maximum=9):
+    assert len(view.children) <= maximum
+    assert max((item.row or 0) for item in view.children) < 5
+
+
+def test_welcome_and_exit_desktop_mobile_shared_navigation():
+    from stoney_verify import welcome_setup_ui as welcome
+    from stoney_verify import exit_card_studio_ui as exit_ui
+
+    welcome_actions = [name for group in welcome._WELCOME_SECTIONS.values() for name in group]
+    assert len(set(welcome_actions)) == 11
+    for section, names in welcome._WELCOME_SECTIONS.items():
+        panel = welcome.WelcomeSetupView(owner_id=10, config={}, section=section)
+        assert set(names) <= _buttons(panel)
+        assert {"Refresh", "Back to All Features", "Close"} <= _buttons(panel)
+        _assert_compact(panel)
+        assert sum(isinstance(item, welcome._WelcomeSectionSelect) for item in panel.children) == 1
+        assert sum(isinstance(item, welcome.WelcomeChannelSelect) for item in panel.children) == (1 if section == "static" else 0)
+    assert "Setup Home" in _buttons(welcome.WelcomeSetupView(owner_id=10, config={}, section="tools"))
+
+    exit_actions = {name for group in exit_ui._EXIT_SECTIONS.values() for name in group}
+    assert len(exit_actions) == 11
+    for section, names in exit_ui._EXIT_SECTIONS.items():
+        panel = exit_ui.ExitCardStudioView(owner_id=10, cfg={}, section=section)
+        assert set(names) | {"Refresh", "Welcome & Join", "Close"} == _buttons(panel)
+        _assert_compact(panel)
+        assert sum(isinstance(item, exit_ui._ExitSectionSelect) for item in panel.children) == 1
+        assert sum(isinstance(item, exit_ui.ExitCardChannelSelect) for item in panel.children) == (1 if section == "delivery" else 0)
+
+
+def test_setup_and_trusted_advert_buttons_are_partitioned_not_deleted():
+    from stoney_verify.commands_ext import public_setup_recommend as setup
+    from stoney_verify.commands_ext import trusted_advert_ui as ads
+
+    setup_actions = [name for actions in setup._ADVANCED_HUB_SECTIONS.values() for name in actions]
+    assert len(setup_actions) == len(set(setup_actions)) == 9
+    for section, names in setup._ADVANCED_HUB_SECTIONS.items():
+        panel = setup.AdvancedSettingsHubView(section=section)
+        assert _buttons(panel) == set(names) | {"Back to Manage Setup", "Setup Home", "Close"}
+        _assert_compact(panel)
+        embed = setup._advanced_hub_embed(section=section)
+        assert len(embed.fields) == 0
+        assert len(embed.description) < 260
+
+    ad_actions = [name for actions in ads._TRUSTED_ADS_SECTIONS.values() for name in actions]
+    assert len(set(ad_actions)) == len(ad_actions) == 10
+    guild = SimpleNamespace(get_channel=lambda _id: None, me=None, default_role=None)
+    for section, names in ads._TRUSTED_ADS_SECTIONS.items():
+        panel = ads.TrustedAdsView(10, guild, 123, rules=[], section=section)
+        assert _buttons(panel) == set(names) | {"Refresh", "Back to Invite Shield"}
+        _assert_compact(panel)
+        embed = ads._embed(guild, 123, [], section=section)
+        assert len(embed.fields) <= 3
+        assert len(embed.description) <= 270
+
+
+def test_trusted_ads_switching_sections_does_not_approve_or_delete(monkeypatch):
+    from stoney_verify.commands_ext import trusted_advert_ui as ads
+
+    events = []
+    async def show(_interaction, owner, **kwargs):
+        events.append((owner, kwargs))
+    monkeypatch.setattr(ads, "_staff", lambda *args: True)
+    monkeypatch.setattr(ads, "show_trusted_ads", show)
+    picker = ads._TrustedAdsSectionSelect(33, 456, "approval")
+    picker._values = ["retention"]
+    asyncio.run(picker.callback(SimpleNamespace(user=SimpleNamespace(id=33))))
+    assert events == [(33, {"channel_id": 456, "section": "retention"})]
+
+
+def test_universal_discord_panels_reuse_same_sections_on_desktop_and_mobile():
+    # Discord's message components are shared across clients. This asserts
+    # there is one authoritative layout, not separate device-specific menus.
+    from stoney_verify import welcome_setup_ui as welcome
+    from stoney_verify import exit_card_studio_ui as exit_ui
+    for section in welcome._WELCOME_SECTIONS:
+        first = welcome.WelcomeSetupView(owner_id=123, config={}, section=section)
+        second = welcome.WelcomeSetupView(owner_id=456, config={}, section=section)
+        assert _buttons(first) == _buttons(second)
+    for section in exit_ui._EXIT_SECTIONS:
+        first = exit_ui.ExitCardStudioView(owner_id=123, cfg={}, section=section)
+        second = exit_ui.ExitCardStudioView(owner_id=456, cfg={}, section=section)
+        assert _buttons(first) == _buttons(second)
