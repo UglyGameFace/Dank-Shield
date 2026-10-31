@@ -246,3 +246,26 @@ def test_ticket_section_navigation_does_not_execute_actions(monkeypatch):
     asyncio.run(select.callback(SimpleNamespace(user=SimpleNamespace(id=123))))
     assert isinstance(events[0]["view"], tickets.TicketOperationsView)
     assert events[0]["view"].section == "setup"
+
+
+def test_roles_and_profiles_sections_preserve_permission_gated_controls():
+    from stoney_verify.commands_ext import public_role_center as roles
+    groups = [name for values in roles._ROLES_PROFILES_SECTIONS.values() for name in values]
+    assert len(groups) == len(set(groups)) == 11
+    for section, names in roles._ROLES_PROFILES_SECTIONS.items():
+        view = roles.RolesProfilesView(
+            123, section=section, staff=True, role_manager=True, setup_manager=True,
+        )
+        actual = {
+            item.label for item in view.children
+            if isinstance(item, __import__("discord").ui.Button)
+        }
+        assert actual == set(names) | {"Dank Shield Home"}
+        assert len(view.children) <= 6
+        assert len(roles._center_embed(
+            section=section, staff=True, role_manager=True, setup_manager=True,
+        ).fields) == 0
+    member = roles.RolesProfilesView(
+        123, staff=False, role_manager=False, setup_manager=False, section="roles",
+    )
+    assert len(member.children) == 2  # selector + return home, never a privilege shortcut
