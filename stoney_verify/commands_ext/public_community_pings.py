@@ -902,7 +902,66 @@ class DeleteGroupConfirmView(_OwnedView):
         await _open_manager_message(interaction, owner_id=self.owner_id)
 
 
+_PINGS_MANAGER_SECTIONS = {
+    "options": ("Add Option", "Edit Option", "Member Preview"),
+    "groups": ("Add Group", "Edit Group", "Delete Group"),
+    "toke": (
+        "Toke Channel", "Toke Starter", "Toke Notify",
+        "Toke Settings", "Clear Toke Channel",
+    ),
+    "movie": ("Movie Night Notify",),
+}
+
+
+class CommunityPingsSectionSelect(discord.ui.Select):
+    def __init__(self, owner_id: int, current: str):
+        self.owner_id = int(owner_id)
+        super().__init__(
+            placeholder="Choose Community & Pings settings",
+            options=[
+                discord.SelectOption(label=label, value=key, default=current == key)
+                for key, label in (
+                    ("options", "Member Options"),
+                    ("groups", "Role Groups"),
+                    ("toke", "Toke Integration"),
+                    ("movie", "Movie Night"),
+                )
+            ],
+            row=0,
+            custom_id="dank:pings:manager:section:v2",
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        if not await _staff_authorized(interaction):
+            return
+        guild = interaction.guild
+        if guild is None:
+            return await _reply(interaction, "Use this inside a server.")
+        if not interaction.response.is_done():
+            await interaction.response.defer()
+        raw, model = await _load(guild)
+        await _replace(
+            interaction,
+            embed=_manager_embed(guild, raw, model),
+            view=CommunityPingsManagerView(self.owner_id, section=self.values[0]),
+        )
+
+
 class CommunityPingsManagerView(_OwnedView):
+    def __init__(self, owner_id: int, *, section: str = "options") -> None:
+        super().__init__(owner_id)
+        self.section = section if section in _PINGS_MANAGER_SECTIONS else "options"
+        existing = {str(getattr(item, "label", "")): item for item in self.children}
+        self.clear_items()
+        self.add_item(CommunityPingsSectionSelect(self.owner_id, self.section))
+        for index, label in enumerate(
+            (*_PINGS_MANAGER_SECTIONS[self.section], "Refresh", "Home", "Close")
+        ):
+            item = existing[label]
+            item.row = 1 + index // 4
+            self.add_item(item)
+
+
     async def _open_toke_capability_picker(
         self,
         interaction: discord.Interaction,
