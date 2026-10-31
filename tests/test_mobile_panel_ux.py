@@ -116,3 +116,104 @@ def test_no_laundry_list_on_reworked_core_screen_sources():
     # Direct callbacks still belong to the original source, with stable IDs.
     assert 'custom_id="dank_protection:antinuke_restore_member"' in protection_source
     assert 'custom_id="dank_protection:import_pack"' in protection_source
+
+
+def test_member_setup_every_admin_action_is_visible_in_exactly_one_section():
+    from stoney_verify.commands_ext import public_member_setup as setup
+    labels = [name for page in setup._MEMBER_SETUP_SECTIONS.values() for name in page]
+    assert len(labels) == len(set(labels)) == 15
+    for key, names in setup._MEMBER_SETUP_SECTIONS.items():
+        view = setup.MemberSetupAdminView(123, section=key)
+        buttons = [
+            item.label for item in view.children
+            if isinstance(item, __import__("discord").ui.Button)
+        ]
+        assert set(buttons) == set(names) | {"Refresh", "Close"}
+        assert len(view.children) <= 9
+        assert all((getattr(item, "row", 0) or 0) < 5 for item in view.children)
+    assert setup.MemberSetupAdminView(123).section == "roles"
+
+
+def test_community_hub_every_home_control_is_kept_in_one_section():
+    from stoney_verify.commands_ext import public_community_hub as hub
+    keys = [name for values in hub._COMMUNITY_HOME_SECTIONS.values() for name in values]
+    assert len(keys) == len(set(keys)) == 14
+    for section, names in hub._COMMUNITY_HOME_SECTIONS.items():
+        view = hub.CommunityHubView(123, section=section)
+        buttons = [
+            item.label for item in view.children
+            if isinstance(item, __import__("discord").ui.Button)
+        ]
+        assert set(buttons) == set(names) | {"Back to Dank Home", "Close"}
+        assert len(view.children) <= 9
+        embed = hub._hub_embed(section=section)
+        assert len(embed.fields) == 0
+        assert len(embed.description) < 380
+
+
+def test_community_hub_settings_are_short_and_complete():
+    from stoney_verify.commands_ext import public_community_hub as hub
+    labels = [name for page in hub._HUB_SETTINGS_GROUPS.values() for name in page]
+    assert len(labels) == len(set(labels)) == 15
+    fake_bot = SimpleNamespace(intents=SimpleNamespace(presences=False))
+    for section, names in hub._HUB_SETTINGS_GROUPS.items():
+        view = hub.HubSettingsView(123, {}, section=section)
+        buttons = [
+            item.label for item in view.children
+            if isinstance(item, __import__("discord").ui.Button)
+        ]
+        assert set(buttons) == set(names) | {"Staff Dashboard"}
+        assert len(view.children) <= 9
+        embed = hub._settings_embed({}, fake_bot, section=section)
+        assert len(embed.fields) <= 2
+        assert len(embed.description) < 220
+        assert all(len(field.value) <= 1024 for field in embed.fields)
+
+
+def test_community_pings_manager_keeps_every_control_without_wall_of_buttons():
+    from stoney_verify.commands_ext import public_community_pings as pings
+    labels = [name for page in pings._PINGS_MANAGER_SECTIONS.values() for name in page]
+    assert len(labels) == len(set(labels)) == 12
+    for section, names in pings._PINGS_MANAGER_SECTIONS.items():
+        view = pings.CommunityPingsManagerView(123, section=section)
+        buttons = [
+            item.label for item in view.children
+            if isinstance(item, __import__("discord").ui.Button)
+        ]
+        assert set(buttons) == set(names) | {"Refresh", "Home", "Close"}
+        assert len(view.children) <= 9
+        assert max((item.row or 0) for item in view.children) < 5
+
+
+def test_all_section_selectors_are_read_only_navigation(monkeypatch):
+    from stoney_verify.commands_ext import public_community_hub as hub
+    from stoney_verify.commands_ext import public_member_setup as setup
+
+    events = []
+
+    async def allowed(*_args, **_kwargs):
+        return True
+
+    async def pending(_interaction):
+        return None
+
+    async def load_setup(*_args, **_kwargs):
+        return {}
+
+    async def replace(_interaction, **kwargs):
+        events.append(kwargs["view"])
+
+    monkeypatch.setattr(setup, "_staff_authorized", allowed)
+    monkeypatch.setattr(setup, "_defer_panel_update", pending)
+    monkeypatch.setattr(setup, "load_guild_setup_state", load_setup)
+    monkeypatch.setattr(setup, "_admin_embed", lambda *_args: "summary")
+    monkeypatch.setattr(setup, "_replace", replace)
+    interaction = SimpleNamespace(
+        user=SimpleNamespace(id=123),
+        guild_id=77, guild=SimpleNamespace(id=77),
+    )
+    select = setup._MemberSetupSectionSelect("roles")
+    select._values = ["gate"]
+    asyncio.run(select.callback(interaction))
+    assert isinstance(events[-1], setup.MemberSetupAdminView)
+    assert events[-1].section == "gate"
