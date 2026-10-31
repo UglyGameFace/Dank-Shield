@@ -122,9 +122,21 @@ def test_ticket_staff_alerts_fit_mobile_discord_component_rows() -> None:
         item for item in setup.children
         if getattr(item, "label", None) == "Staff Alerts"
     )
-    assert history.row == 2
+    # The section picker owns row 0; the history UserSelect owns row 1.
+    # Queue buttons start on row 2, while setup buttons use rows 1-2.
+    assert history.row == 1
     assert alerts_button.row == 2
     assert "Staff Alerts" not in _labels(operations)
+    assert all(
+        item.row in (2, 3)
+        for item in operations.children
+        if isinstance(item, discord.ui.Button)
+    )
+    assert all(
+        item.row in (1, 2)
+        for item in setup.children
+        if isinstance(item, discord.ui.Button)
+    )
 
     settings = TicketNotificationSettingsView(1, [("support", "Support")])
     assert len(settings.children) == 9
