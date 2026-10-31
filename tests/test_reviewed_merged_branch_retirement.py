@@ -91,7 +91,8 @@ def test_opt_in_deletion_is_archived_and_high_branch_count_is_not_failure() -> N
     assert "archive.object.sha !== branch.commit.sha" in text
     assert "core.warning('Branch count is '" in text
     assert "core.setFailed('Branch count is '" not in text
-    assert "if (candidates.length > 20)" in text
+    assert ".slice(0, 20)" in text
+    assert "eligibleCandidates.length > candidates.length" in text
 
 
 def test_no_opt_in_delete_when_deployment_reference_is_unknown() -> None:
