@@ -13,7 +13,7 @@ def test_every_protection_action_remains_in_a_short_section():
     groups = protection._PROTECTION_SECTION_BUTTONS
     mapped = [item for actions in groups.values() for item in actions]
     assert len(mapped) == len(set(mapped))
-    assert len(mapped) == 20
+    assert len(mapped) == 19
     assert {key for key, _, _ in protection._PROTECTION_SECTIONS} == set(groups)
     for section, labels in groups.items():
         view = protection.ProtectionCenterView(author_id=123, cfg={}, spam={}, section=section)
