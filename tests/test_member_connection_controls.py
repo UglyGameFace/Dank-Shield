@@ -177,6 +177,10 @@ def test_other_role_explicit_allow_blocks_protection(monkeypatch):
     record = install_store(monkeypatch)
     guild, actor = install_discord(monkeypatch)
     other_role = FakeRole(321, guild)
+    other_role.permissions = SimpleNamespace(
+        administrator=False, manage_guild=False, manage_roles=False,
+        manage_messages=False, moderate_members=False, kick_members=False, ban_members=False,
+    )
     guild.channel.overwrites[other_role] = FakeOverwrite(True)
     with pytest.raises(controls.ConnectionControlError, match="Another role or member"):
         run(controls.protect_channel(guild, actor, guild.channel, guild.trusted))
@@ -264,3 +268,14 @@ def test_sensitive_alerts_refuse_untrusted_explicit_member_access(monkeypatch):
     assert run(controls.post_private_connection_alert(
         guild, SimpleNamespace(), event_key="connection:3"
     )) is False
+
+
+def test_existing_elevated_moderator_role_grant_is_preserved(monkeypatch):
+    install_store(monkeypatch)
+    guild, actor = install_discord(monkeypatch)
+    mod_role = FakeRole(321, guild)
+    guild.channel.overwrites[mod_role] = FakeOverwrite(True)
+    run(controls.protect_channel(guild, actor, guild.channel, guild.trusted))
+    assert guild.channel.overwrites_for(mod_role).view_channel is True
+    run(controls.remove_protection(guild, actor, "789"))
+    assert guild.channel.overwrites_for(mod_role).view_channel is True
