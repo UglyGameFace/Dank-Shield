@@ -136,8 +136,9 @@ def test_footer_copy_uses_user_guidance_instead_of_implementation_notes() -> Non
     assert "Advanced options, safety checks, video testing and cleanup remain available in Tools." in share
     # The current help page has a short, actionable footer rather than the
     # former repeated full-command directory.
-    assert "Private help • No command memorization needed" in help_surface
-    assert "Need something else? Change topic or use Find Feature" in help_surface
+    assert "Private help • Reading a guide never changes server settings" in help_surface
+    assert "Short overview here • Full steps under How to use" in help_surface
+    assert "Staff permissions required" in help_surface
     assert "Dank Shield ticket panel • choose a category" in ticket
     assert "Dank Shield ticket panel • choose a category" in refresh
     assert "Repair changes only the selected setup areas and preserves join/leave channel visibility." in repair
