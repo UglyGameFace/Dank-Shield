@@ -34,27 +34,39 @@ and business logic. Navigation must never become a second implementation of a fe
     owner supports that mode. Public/persistent panels keep their feature-owned private
     response behavior.
 
-## Help: mobile-first and registry-owned
+## Help: mobile-first, explanatory and registry-owned
 
-`/dank help` and the Home Help button open **one short private overview**:
-a topic selector, **Find Feature**, **Directory**, **Home**, and **Close**.
-Do not render a duplicate page of raw slash commands, dense inline command
-strings, or a hardcoded list of feature names on the overview.
+/dank help must actually **teach** people, not merely route to menus.
+The first ephemeral screen is intentionally short: choose a topic, **Find Help**,
+**Browse Guides**, Home or Close. The rest of the information is on demand.
 
-- Topics show at most three practical destinations with one plain sentence
-  each, drawn from the canonical `navigation_registry.FEATURES`.
-- Topic buttons call `_route_feature`, leaving permissions, state, settings,
-  and actions with existing feature owners. Member-facing tools stay available.
-- Find Feature and Directory remain the complete escape hatches; no feature is
-  removed or hidden by shortening Help.
-- Compatibility entry `public_command_hub.open_help_entry` delegates to
-  the same current help route, rather than maintaining obsolete /dank aliases.
-- Help views remain private, owner-locked, and bounded by the shared menu TTL.
-  A topic switch edits the same private message, rather than sending another.
-- Updating the public command contract is **not** necessary for help text
-  changes. Do not add new slash commands merely to make a help topic.
-- Reopen the help message after a deployment. Existing ephemeral messages
-  retain old content and controls until they expire.
+- **Topic guide**: shows three commonly needed features, explains their purpose
+  and first concrete step. Tapping **How to use [feature]** opens a detailed
+  guide rather than directly performing an action.
+- **Feature how-to**: 2-4 actionable steps, what to expect and, where needed,
+  a caveat. Only **Open Feature** enters the existing live control screen;
+  all feature permissions, previews, confirmation and persistence remain there.
+- **Find Help**: accepts ordinary questions and shows matching guide titles
+  using the canonical registry's search aliases. Single matches open a guide
+  directly. Multiple matches open a private result picker.
+- **Browse Guides**: choose any existing registry category and then a tool
+  within it. Every registered feature must have a guide, including less common
+  staff utilities. Discord selects are capped to their supported option counts.
+- **Guide source**: stoney_verify/help_guides.py owns concise usage copy
+  keyed by navigation_registry.FEATURES. Validation fails on a missing or
+  retired guide so features cannot quietly become undocumented. Feature names,
+  categories, manager-only flags and actual routes are not duplicated here.
+- **Compatibility entry**: public_command_hub.open_help_entry delegates
+  to the current help router, not a second slash-command index.
+- Help views are private, owner-locked, and use the shared menu TTL. Topic
+  and guide navigation edits the same private panel. A search modal may create
+  a new private result response because Discord modal submissions are separate
+  interactions.
+- The old feature navigation (/dank home, Find Feature and Directory)
+  remains available independently. These are **action navigation**, not a
+  substitute for help and instructions.
+- Do not add new slash commands merely to implement help. Reopen the help
+  message after deployment; old ephemeral messages do not update themselves.
 
 ## Home categories
 

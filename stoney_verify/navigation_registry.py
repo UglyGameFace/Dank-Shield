@@ -217,8 +217,8 @@ FEATURES: tuple[NavigationFeature, ...] = (
         "Members & Moderation",
         "👮",
         "safety",
-        "Moderate members, clean up messages, review activity, and use recovery tools.",
-        ("members", "moderation", "mod", "ban", "timeout", "cleanup", "purge", "member activity"),
+        "Moderate members, inspect ban-related connections and activity, and use recovery tools.",
+        ("members", "moderation", "mod", "ban", "timeout", "cleanup", "purge", "member activity", "member connections", "connection intelligence", "recent ban connections", "alt accounts", "ban evasion", "investigate banned user"),
         True,
     ),
     NavigationFeature(
@@ -438,8 +438,8 @@ FEATURES: tuple[NavigationFeature, ...] = (
         "Help",
         "❓",
         "utilities",
-        "Choose a help topic, search for a tool, or browse all available features.",
-        ("help", "commands", "where is", "how do i", "find feature", "help topics", "getting started", "where are settings", "help with reminders"),
+        "Read step-by-step how-to guides for every feature, search questions, or browse by topic.",
+        ("help", "commands", "where is", "how do i", "find feature", "how to use", "how to", "guide", "tutorial", "instructions", "find help", "browse guides", "help topics", "getting started", "where are settings", "help with reminders"),
     ),
 )
 

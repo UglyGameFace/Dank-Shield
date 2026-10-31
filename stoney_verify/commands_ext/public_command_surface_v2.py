@@ -26,6 +26,7 @@ from ..navigation_registry import (
     recent_features,
     search_features,
 )
+from ..help_guides import HELP_GUIDES
 from ..panel_lifecycle import PRIVATE_MENU_TTL_SECONDS
 from ..ui import DankChoice, DankPickerView
 from .public_setup_group import dank_group
@@ -163,15 +164,16 @@ def _help_topic(topic_key: str) -> tuple[str, str, str, tuple[str, ...]]:
 
 def _help_embed() -> discord.Embed:
     embed = discord.Embed(
-        title="❓ What do you need help with?",
+        title="❓ Learn Dank Shield",
         description=(
-            "Choose a topic below to see its useful tools.\n\n"
-            "Know what you need? Tap **Find Feature** and search in everyday words. "
-            "The **Directory** holds everything else."
+            "Pick a topic, then choose **How to use** for a feature.\n"
+            "Each guide explains what to do, what happens, and what to check.\n\n"
+            "**Find Help** searches for a task in your own words. "
+            "**Browse Guides** covers every tool, not just popular ones."
         ),
         color=discord.Color.blurple(),
     )
-    embed.set_footer(text="Private help • No command memorization needed")
+    embed.set_footer(text="Private help • Reading a guide never changes server settings")
     return embed
 
 
@@ -179,20 +181,131 @@ def _help_topic_embed(topic_key: str) -> discord.Embed:
     _, label, summary, feature_keys = _help_topic(topic_key)
     embed = discord.Embed(
         title=f"❓ {label}",
-        description=f"{summary}\n\nTap a tool below to open it.",
+        description=f"{summary}\n\nChoose a **How to use** button below to get the full instructions.",
         color=discord.Color.blurple(),
     )
     for key in feature_keys:
         feature = feature_by_key(key)
         if feature is None:
             raise RuntimeError(f"Help destination {key!r} has no canonical feature")
+        guide = HELP_GUIDES[key]
         embed.add_field(
             name=f"{feature.emoji} {feature.label}" + (" • Staff" if feature.manager_only else ""),
-            value=feature.description[:220],
+            value=f"{guide.purpose}\n**Start:** {guide.steps[0]}",
             inline=False,
         )
-    embed.set_footer(text="Need something else? Change topic or use Find Feature")
+    embed.set_footer(text="Short overview here • Full steps under How to use")
     return embed
+
+
+def _help_guide_embed(feature_key: str) -> discord.Embed:
+    feature = feature_by_key(feature_key)
+    if feature is None:
+        raise ValueError("Unknown help destination")
+    guide = HELP_GUIDES[feature_key]
+    lines = [guide.purpose, "", "**How to use**"]
+    lines.extend(f"**{i}.** {step}" for i, step in enumerate(guide.steps, 1))
+    lines.extend(("", "**What to expect**", guide.outcome))
+    if guide.caution:
+        lines.extend(("", "**Important**", guide.caution))
+    embed = discord.Embed(
+        title=f"{feature.emoji} How to use {feature.label}",
+        description="\n".join(lines),
+        color=discord.Color.blurple(),
+    )
+    embed.set_footer(
+        text="Staff permissions required" if feature.manager_only
+        else "Member-accessible feature • Server choices may vary"
+    )
+    return embed
+
+
+def _help_category_embed(category_key: str) -> discord.Embed:
+    category = category_by_key(category_key)
+    if category is None:
+        raise ValueError("Unknown help category")
+    features = features_for_category(category_key)
+    embed = discord.Embed(
+        title=f"📖 Guides: {category.label}",
+        description=(
+            f"{category.description}\n\n"
+            "Choose a feature below to read its steps. "
+            f"**{len(features)} guide(s)** in this section."
+        ),
+        color=discord.Color.blurple(),
+    )
+    embed.set_footer(text="Browse Guides includes every registered feature")
+    return embed
+
+
+def _help_search_embed(query: str, results: list[NavigationFeature]) -> discord.Embed:
+    embed = discord.Embed(
+        title="🔎 Help search",
+        description=(
+            (f"Found **{len(results)}** guide(s) for your question. "
+             "Choose one to learn how to use it.")
+            if results else
+            "No direct match. Try a feature or task word such as "
+            "**verification**, **ticket**, **invite**, or **video**. "
+            "You can also browse by section."
+        ),
+        color=discord.Color.blurple(),
+    )
+    embed.set_footer(text="Search results open instructions, not live actions")
+    return embed
+
+
+def _search_help_guides(query: str) -> list[NavigationFeature]:
+    # Questions often include filler that registry aliases do not contain.
+    # Trim conversational introductions but retain the actual feature words.
+    import re
+
+    cleaned = re.sub(
+        r"^(?:please\s+)?(?:how\s+(?:do|can|should)\s+i\s+|"
+        r"how\s+to\s+|i\s+(?:need|want)\s+to\s+|"
+        r"show\s+me\s+how\s+to\s+|help\s+me\s+(?:with|use)\s+)",
+        "",
+        str(query or "").strip().lower(),
+    )
+    cleaned = re.sub(r"^(?:use|set\s+up|configure|open|find|the)\s+", "", cleaned)
+    cleaned = re.sub(r"[?.!]+$", "", cleaned).strip()
+    matches = search_features(cleaned or query, limit=20)
+    if matches:
+        return matches
+
+    # A natural sentence may have filler words in the middle ("send a
+    # reminder now"). Remove those without discarding the useful task words.
+    stopwords = {"a", "an", "the", "my", "to", "for", "on", "in", "with",
+                 "please", "that", "i", "me", "do", "can", "how", "some"}
+    words = [word for word in re.findall(r"[a-z0-9]+", cleaned)
+             if word not in stopwords]
+    if not words:
+        return []
+
+    compact = " ".join(words)
+    matches = search_features(compact, limit=20)
+    if matches:
+        return matches
+
+    # Last resort: rank words against registered names/aliases, never against
+    # invented capabilities. Require every meaningful word to be represented.
+    def rank(feature: NavigationFeature) -> int:
+        sources = [
+            feature.label.lower(), feature.key.replace("_", " "),
+            *(alias.lower() for alias in feature.aliases),
+        ]
+        combined = " ".join(sources)
+        if not all(any(word in source for source in sources) for word in words):
+            return 0
+        return sum(4 if word in feature.label.lower() else 2 for word in words) + (
+            6 if compact in combined else 0
+        )
+
+    scored = [(rank(feature), index, feature)
+              for index, feature in enumerate(FEATURES)]
+    scored = [entry for entry in scored if entry[0] > 0]
+    scored.sort(key=lambda entry: (-entry[0], entry[1]))
+    return [feature for _score, _index, feature in scored[:15]]
 
 
 def _asset_embed() -> discord.Embed:
@@ -870,13 +983,9 @@ class FeatureSearchEmptyView(_OwnedView):
 class _HelpTopicSelect(discord.ui.Select):
     def __init__(self) -> None:
         super().__init__(
-            placeholder="What do you need help with?",
+            placeholder="Choose what you want to learn",
             options=[
-                discord.SelectOption(
-                    label=label,
-                    value=key,
-                    description=summary[:100],
-                )
+                discord.SelectOption(label=label, value=key, description=summary[:100])
                 for key, label, summary, _features in _HELP_TOPICS
             ],
             min_values=1,
@@ -894,19 +1003,60 @@ class _HelpTopicSelect(discord.ui.Select):
         )
 
 
-class _HelpFeatureButton(discord.ui.Button):
-    def __init__(self, feature: NavigationFeature) -> None:
+class _HelpGuideButton(discord.ui.Button):
+    def __init__(self, feature: NavigationFeature, topic_key: str) -> None:
         super().__init__(
-            label=feature.label[:80],
+            label=f"How to use {feature.label}"[:80],
             emoji=feature.emoji,
             style=discord.ButtonStyle.primary,
-            custom_id=f"dank:help:feature:{feature.key}:v2",
+            custom_id=f"dank:help:guide:{feature.key}:v3",
             row=1,
         )
         self.feature_key = feature.key
+        self.topic_key = topic_key
 
     async def callback(self, interaction: discord.Interaction) -> None:
+        await _show_help_guide(interaction, self.feature_key, topic_key=self.topic_key)
+
+
+class _HelpOpenFeatureButton(discord.ui.Button):
+    def __init__(self, feature_key: str) -> None:
+        super().__init__(
+            label="Open Feature",
+            emoji="▶️",
+            style=discord.ButtonStyle.primary,
+            custom_id=f"dank:help:open:{feature_key}:v3",
+            row=0,
+        )
+        self.feature_key = feature_key
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        # Authoritative feature owners still perform their own permission checks.
         await _route_feature(interaction, self.feature_key)
+
+
+class _HelpBackButton(discord.ui.Button):
+    def __init__(self, topic_key: str = "", category_key: str = "") -> None:
+        super().__init__(
+            label="Back to Guides",
+            emoji="⬅️",
+            style=discord.ButtonStyle.secondary,
+            custom_id="dank:help:back-guide:v3",
+            row=0,
+        )
+        self.topic_key = topic_key
+        self.category_key = category_key
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        if self.topic_key:
+            return await _replace_panel(
+                interaction,
+                embed=_help_topic_embed(self.topic_key),
+                view=HelpTopicView(int(interaction.user.id), self.topic_key),
+            )
+        if self.category_key:
+            return await _show_help_category(interaction, self.category_key)
+        await _show_help_home(interaction)
 
 
 class _HelpOverviewButton(discord.ui.Button):
@@ -920,19 +1070,144 @@ class _HelpOverviewButton(discord.ui.Button):
         )
 
     async def callback(self, interaction: discord.Interaction) -> None:
+        await _show_help_home(interaction)
+
+
+class _FindHelpButton(discord.ui.Button):
+    def __init__(self, *, row: int = 1) -> None:
+        super().__init__(
+            label="Find Help",
+            emoji="🔎",
+            style=discord.ButtonStyle.primary,
+            custom_id="dank:help:find:v3",
+            row=row,
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await interaction.response.send_modal(HelpSearchModal(int(interaction.user.id)))
+
+
+class _BrowseHelpButton(discord.ui.Button):
+    def __init__(self, *, row: int = 1) -> None:
+        super().__init__(
+            label="Browse Guides",
+            emoji="📖",
+            style=discord.ButtonStyle.secondary,
+            custom_id="dank:help:browse:v3",
+            row=row,
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await _show_help_category(interaction, CATEGORIES[0].key)
+
+
+class _HelpCategorySelect(discord.ui.Select):
+    def __init__(self) -> None:
+        super().__init__(
+            placeholder="Choose a section",
+            options=[
+                discord.SelectOption(
+                    label=cat.label[:100], value=cat.key, emoji=cat.emoji,
+                    description=cat.description[:100],
+                )
+                for cat in CATEGORIES
+            ],
+            min_values=1, max_values=1,
+            custom_id="dank:help:category:v3", row=0,
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await _show_help_category(interaction, self.values[0])
+
+
+class _HelpFeatureSelect(discord.ui.Select):
+    def __init__(self, category_key: str) -> None:
+        features = features_for_category(category_key)
+        if not features or len(features) > 25:
+            raise RuntimeError("Help category exceeds Discord select capacity")
+        self.category_key = category_key
+        super().__init__(
+            placeholder="Read how to use a feature",
+            options=[
+                discord.SelectOption(
+                    label=feature.label[:100], value=feature.key, emoji=feature.emoji,
+                    description=HELP_GUIDES[feature.key].purpose[:100],
+                )
+                for feature in features
+            ],
+            min_values=1, max_values=1,
+            custom_id="dank:help:feature-select:v3", row=1,
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await _show_help_guide(
+            interaction, self.values[0], category_key=self.category_key,
+        )
+
+
+class HelpSearchModal(discord.ui.Modal, title="Find a How-to Guide"):
+    query = discord.ui.TextInput(
+        label="What do you want to learn?",
+        placeholder="How do I set up verification reminders?",
+        required=True, min_length=2, max_length=100,
+    )
+
+    def __init__(self, owner_id: int) -> None:
+        super().__init__(timeout=300)
+        self.owner_id = owner_id
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        if int(interaction.user.id) != self.owner_id:
+            return await _private(interaction, "❌ Open your own Help to search.")
+        results = _search_help_guides(str(self.query.value))
+        if len(results) == 1:
+            return await _show_help_guide(interaction, results[0].key)
         await _replace_panel(
             interaction,
-            embed=_help_embed(),
-            view=CompactHelpView(int(interaction.user.id)),
+            embed=_help_search_embed(str(self.query.value), results),
+            view=HelpSearchResultsView(self.owner_id, results),
         )
+
+
+class _HelpSearchResultSelect(discord.ui.Select):
+    def __init__(self, matches: list[NavigationFeature]) -> None:
+        super().__init__(
+            placeholder="Select a how-to guide",
+            options=[
+                discord.SelectOption(
+                    label=feature.label[:100], value=feature.key,
+                    emoji=feature.emoji,
+                    description=HELP_GUIDES[feature.key].purpose[:100],
+                )
+                for feature in matches[:25]
+            ],
+            min_values=1, max_values=1,
+            custom_id="dank:help:search-results:v3",
+            row=0,
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await _show_help_guide(interaction, self.values[0])
+
+
+class HelpSearchResultsView(_OwnedView):
+    def __init__(self, owner_id: int, matches: list[NavigationFeature]) -> None:
+        super().__init__(owner_id)
+        if matches:
+            self.add_item(_HelpSearchResultSelect(matches))
+        self.add_item(_FindHelpButton(row=1))
+        self.add_item(_BrowseHelpButton(row=1))
+        self.add_item(_HelpOverviewButton())
+        self.add_item(_HomeButton(row=2))
+        self.add_item(_CloseNavigationButton(row=2))
 
 
 class CompactHelpView(_OwnedView):
     def __init__(self, owner_id: int) -> None:
         super().__init__(owner_id)
         self.add_item(_HelpTopicSelect())
-        self.add_item(_FindFeatureButton(row=1))
-        self.add_item(_AllFeaturesButton(row=1))
+        self.add_item(_FindHelpButton(row=1))
+        self.add_item(_BrowseHelpButton(row=1))
         self.add_item(_HomeButton(row=1))
         self.add_item(_CloseNavigationButton(row=1))
 
@@ -947,11 +1222,68 @@ class HelpTopicView(_OwnedView):
             feature = feature_by_key(key)
             if feature is None:
                 raise RuntimeError(f"Help destination {key!r} has no canonical feature")
-            self.add_item(_HelpFeatureButton(feature))
+            self.add_item(_HelpGuideButton(feature, topic_key))
+        self.add_item(_FindHelpButton(row=2))
+        self.add_item(_BrowseHelpButton(row=2))
         self.add_item(_HelpOverviewButton())
-        self.add_item(_FindFeatureButton(row=2))
         self.add_item(_HomeButton(row=2))
         self.add_item(_CloseNavigationButton(row=2))
+
+
+class HelpCategoryView(_OwnedView):
+    def __init__(self, owner_id: int, category_key: str) -> None:
+        super().__init__(owner_id)
+        self.add_item(_HelpCategorySelect())
+        self.add_item(_HelpFeatureSelect(category_key))
+        self.add_item(_FindHelpButton(row=2))
+        self.add_item(_HelpOverviewButton())
+        self.add_item(_HomeButton(row=2))
+        self.add_item(_CloseNavigationButton(row=2))
+
+
+class HelpGuideView(_OwnedView):
+    def __init__(
+        self, owner_id: int, feature_key: str, *,
+        topic_key: str = "", category_key: str = "",
+    ) -> None:
+        super().__init__(owner_id)
+        self.add_item(_HelpOpenFeatureButton(feature_key))
+        self.add_item(_HelpBackButton(topic_key, category_key))
+        self.add_item(_FindHelpButton(row=1))
+        self.add_item(_BrowseHelpButton(row=1))
+        self.add_item(_HelpOverviewButton())
+        self.add_item(_HomeButton(row=2))
+        self.add_item(_CloseNavigationButton(row=2))
+
+
+async def _show_help_home(interaction: discord.Interaction) -> None:
+    await _replace_panel(
+        interaction,
+        embed=_help_embed(),
+        view=CompactHelpView(int(interaction.user.id)),
+    )
+
+
+async def _show_help_category(interaction: discord.Interaction, category_key: str) -> None:
+    await _replace_panel(
+        interaction,
+        embed=_help_category_embed(category_key),
+        view=HelpCategoryView(int(interaction.user.id), category_key),
+    )
+
+
+async def _show_help_guide(
+    interaction: discord.Interaction, feature_key: str, *,
+    topic_key: str = "", category_key: str = "",
+) -> None:
+    await _replace_panel(
+        interaction,
+        embed=_help_guide_embed(feature_key),
+        view=HelpGuideView(
+            int(interaction.user.id), feature_key,
+            topic_key=topic_key, category_key=category_key,
+        ),
+    )
 
 
 class CardAssetView(_OwnedView):
