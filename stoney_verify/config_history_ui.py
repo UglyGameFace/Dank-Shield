@@ -510,10 +510,10 @@ def _confirmation_embed(
 
 
 class ConfigHistorySelect(discord.ui.Select):
-    def __init__(self, versions: list[dict[str, Any]]) -> None:
+    def __init__(self, versions: list[dict[str, Any]], page: int = 0) -> None:
         options = [
             option
-            for row in versions[:25]
+            for row in versions[page * 25:(page + 1) * 25]
             if (option := _version_option(row)) is not None
         ]
         super().__init__(
@@ -531,12 +531,37 @@ class ConfigHistorySelect(discord.ui.Select):
 
 
 class ConfigHistoryView(discord.ui.View):
-    def __init__(self, versions: list[dict[str, Any]], *, unavailable: bool = False) -> None:
+    def __init__(self, versions: list[dict[str, Any]], *, unavailable: bool = False, page: int = 0) -> None:
         super().__init__(timeout=900)
+        self.versions = versions
+        self.page = max(0, min(page, (len(versions) - 1) // 25))
         if versions:
-            self.add_item(ConfigHistorySelect(versions))
+            self.add_item(ConfigHistorySelect(versions, self.page))
+        self.previous_page.disabled = unavailable or self.page == 0
+        self.next_page.disabled = unavailable or (self.page + 1) * 25 >= len(versions)
         self.choose_backup.disabled = bool(unavailable)
         self.refresh.disabled = bool(unavailable)
+
+    async def _change_page(self, interaction: discord.Interaction, page: int) -> None:
+        if not await _require_setup_permission(interaction):
+            return
+        await _safe_defer_update(interaction)
+        page = max(0, min(page, (len(self.versions) - 1) // 25))
+        embed = _history_embed(interaction.guild, self.versions)
+        embed.add_field(
+            name="Version picker",
+            value=f"Page {page + 1} of {(len(self.versions) + 24) // 25} · {len(self.versions)} retained versions loaded.",
+            inline=False,
+        )
+        await _edit(interaction, embed=embed, view=ConfigHistoryView(self.versions, page=page))
+
+    @discord.ui.button(label="Previous Versions", style=discord.ButtonStyle.secondary, row=3)
+    async def previous_page(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await self._change_page(interaction, self.page - 1)
+
+    @discord.ui.button(label="Next Versions", style=discord.ButtonStyle.secondary, row=3)
+    async def next_page(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await self._change_page(interaction, self.page + 1)
 
     @discord.ui.button(
         label="Choose Backup Contents",
@@ -1106,7 +1131,7 @@ async def open_config_history(
         await _safe_defer_update(interaction)
 
     try:
-        versions = await list_config_versions(int(guild.id), limit=25)
+        versions = await list_config_versions(int(guild.id), limit=50)
         embed = _history_embed(guild, versions, saved_message=saved_message)
         view = ConfigHistoryView(versions)
     except Exception as exc:
