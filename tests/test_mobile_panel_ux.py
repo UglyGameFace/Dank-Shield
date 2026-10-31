@@ -320,6 +320,10 @@ def test_welcome_and_exit_desktop_mobile_shared_navigation():
 
 def test_setup_and_trusted_advert_buttons_are_partitioned_not_deleted():
     from stoney_verify.commands_ext import public_setup_recommend as setup
+    # Other suites may replace the exported view/opener during module-level tests.
+    # Restore the real module bindings before checking the live menu contract.
+    import importlib
+    setup = importlib.reload(setup)
     from stoney_verify.commands_ext import trusted_advert_ui as ads
 
     setup_actions = [name for actions in setup._ADVANCED_HUB_SECTIONS.values() for name in actions]
@@ -415,6 +419,10 @@ def test_action_center_member_and_staff_actions_have_distinct_pages():
 
 def test_advanced_settings_section_change_keeps_existing_setup_permission(monkeypatch):
     from stoney_verify.commands_ext import public_setup_recommend as setup
+    # Other suites may replace the exported view/opener during module-level tests.
+    # Restore the real module bindings before checking the live menu contract.
+    import importlib
+    setup = importlib.reload(setup)
     calls = []
 
     async def allow(_interaction):
