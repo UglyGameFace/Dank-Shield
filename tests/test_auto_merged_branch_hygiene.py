@@ -13,9 +13,14 @@ def test_auto_retirement_only_opt_in_namespaces() -> None:
     workflow = AUTO.read_text(encoding="utf-8")
     assert "migration\\/dankshield-" in workflow
     assert "work\\/dankshield-" in workflow
-    assert "'backup/'" not in workflow
-    assert "'feat/'" not in workflow
-    assert "'fix/'" not in workflow
+    # Broad feat/fix review is owner-dispatched only; scheduled cleanup still
+    # uses the two opt-in patterns and never auto-retires those namespaces.
+    assert "const eligible = [" in workflow
+    assert "const reviewed = mode === 'preview-reviewed-merged'" in workflow
+    assert "if (reviewed) {" in workflow
+    assert "context.actor !== 'UglyGameFace'" in workflow
+    assert "const prefixes = ['feat/', 'fix/'" in workflow
+    assert "'backup/'" in workflow
     assert "github.rest.pulls.list" in workflow
     assert "pr.merged_at" in workflow
     assert "pr.head?.sha !== branch.commit.sha" in workflow
