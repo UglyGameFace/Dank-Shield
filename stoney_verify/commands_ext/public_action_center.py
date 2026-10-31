@@ -19,62 +19,86 @@ async def _feedback(interaction: discord.Interaction, content: str) -> None:
         await interaction.response.send_message(**data)
 
 
-def _embed(snapshot: ActionSnapshot) -> discord.Embed:
+_ACTION_SECTIONS = {
+    "my": ("Find Verification", "Review Member Setup", "My Reminder Preferences"),
+    "staff": ("Verification Reminder Settings", "Member Setup Manager",
+              "Action Builder (Draft)", "Notification Systems"),
+}
+_ACTION_COMMON = ("Refresh", "Home", "Close")
+
+
+def _embed(snapshot: ActionSnapshot, *, section: str = "my") -> discord.Embed:
     count = len(snapshot.items)
-    if snapshot.unavailable_sources:
-        head = "⚠️ Some sources unavailable"
-        color = discord.Color.gold()
-    elif count:
-        head = f"📥 {count} item{'s' if count != 1 else ''} to review"
-        color = discord.Color.blurple()
-    else:
-        head = "✅ No outstanding items found"
-        color = discord.Color.green()
+    degraded = bool(snapshot.unavailable_sources)
     embed = discord.Embed(
-        title="📋 Action & Reminder Center",
+        title="📋 Action Center • " + ("Staff Tools" if section == "staff" else "My Actions"),
         description=(
-            f"**Home › Action & Reminder Center**\n{head}\n\n"
-            "A private, on-demand view of your server requirements. "
-            "The owning feature decides whether each requirement is complete."
+            f"**{'⚠️ Some sources unavailable' if degraded else f'{count} item(s) needing review' if count else '✅ No outstanding items found'}**\n"
+            "Open a specific action below. This private panel never sends reminders automatically."
         ),
-        color=color,
+        color=discord.Color.gold() if degraded else discord.Color.blurple() if count else discord.Color.green(),
     )
-    badges = {"required": "🔴 Required", "recommended": "🟡 Recommended",
-              "announcement": "🔵 Announcement"}
-    for item in snapshot.items:
+    if section == "staff":
         embed.add_field(
-            name=f"{badges[item.severity]} • {item.title}",
-            value=item.description,
-            inline=False,
-        )
-    if snapshot.unavailable_sources:
-        embed.add_field(
-            name="⏳ Not checked",
+            name="Delivery status",
             value=(
-                "Couldn't confirm: **" + ", ".join(snapshot.unavailable_sources)
-                + "**. Don't assume those requirements are finished. Try Refresh."
+                "Verification reminders: **"
+                + ("Enabled" if snapshot.verification_reminders_enabled else "Disabled or unavailable")
+                + "**\nChoose a staff tool below to configure its own settings."
             ),
             inline=False,
         )
-    embed.add_field(
-        name="📩 Reminder delivery",
-        value=(
-            "Existing Verification Reminders: **"
-            + ("enabled" if snapshot.verification_reminders_enabled else "not enabled or unavailable")
-            + "**. No additional messages are sent by this inbox. "
-            "Other action reminders are not yet scheduled."
-        ),
-        inline=False,
-    )
-    embed.set_footer(text="Private • Read-only overview • No auto-pings or permission changes")
+    else:
+        badges = {"required": "🔴", "recommended": "🟡", "announcement": "🔵"}
+        for item in snapshot.items[:3]:
+            embed.add_field(
+                name=f"{badges[item.severity]} {item.title}",
+                value=item.description,
+                inline=False,
+            )
+        if count > 3:
+            embed.add_field(name="Other items", value=f"{count - 3} more items require review.", inline=False)
+    if degraded:
+        embed.add_field(
+            name="⚠️ Not checked",
+            value=("Unavailable: " + ", ".join(snapshot.unavailable_sources))[:900]
+                  + ". Don't assume requirements are finished.",
+            inline=False,
+        )
+    embed.set_footer(text="Private • Source permissions checked by the owning feature")
     return embed
 
 
+class _ActionSectionSelect(discord.ui.Select):
+    def __init__(self, owner_id: int, guild_id: int, section: str) -> None:
+        self.owner_id = int(owner_id)
+        self.guild_id = int(guild_id)
+        super().__init__(
+            placeholder="Choose member or staff actions",
+            options=[
+                discord.SelectOption(label="My Actions", value="my", default=section == "my"),
+                discord.SelectOption(label="Staff Tools", value="staff", default=section == "staff"),
+            ],
+            row=0, custom_id="dank:actions:section:v2",
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        if (int(interaction.user.id) != self.owner_id
+                or int(interaction.guild_id or 0) != self.guild_id
+                or not scoped_interaction_is_staff(interaction)):
+            return await _feedback(interaction, "Open your own staff Action Center.")
+        await open_action_center(interaction, section=self.values[0])
+
+
 class ActionCenterView(discord.ui.View):
-    def __init__(self, owner_id: int, snapshot: ActionSnapshot, *, is_staff: bool) -> None:
+    def __init__(
+        self, owner_id: int, snapshot: ActionSnapshot, *,
+        is_staff: bool, section: str = "my",
+    ) -> None:
         super().__init__(timeout=PRIVATE_MENU_TTL_SECONDS)
         self.owner_id = int(owner_id)
         self.guild_id = snapshot.guild_id
+        self.section = section if section == "staff" and is_staff else "my"
         routes = {item.route for item in snapshot.items}
         if "verification" not in routes:
             self.remove_item(self.verify)
@@ -85,6 +109,16 @@ class ActionCenterView(discord.ui.View):
             self.remove_item(self.staff_setup)
             self.remove_item(self.staff_builder)
             self.remove_item(self.staff_notification_directory)
+        existing = {str(getattr(item, "label", "")): item for item in self.children}
+        self.clear_items()
+        if is_staff:
+            self.add_item(_ActionSectionSelect(self.owner_id, self.guild_id, self.section))
+        for index, name in enumerate((*_ACTION_SECTIONS[self.section], *_ACTION_COMMON)):
+            item = existing.get(name)
+            if item is None:
+                continue
+            item.row = (1 if is_staff else 0) + index // 4
+            self.add_item(item)
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if (
@@ -159,7 +193,7 @@ class ActionCenterView(discord.ui.View):
 
     @discord.ui.button(label="Refresh", emoji="🔄", style=discord.ButtonStyle.secondary, row=2)
     async def refresh(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        await open_action_center(interaction)
+        await open_action_center(interaction, section=self.section)
 
     @discord.ui.button(label="Home", emoji="🏠", style=discord.ButtonStyle.secondary, row=2)
     async def home(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -174,7 +208,7 @@ class ActionCenterView(discord.ui.View):
             await interaction.response.edit_message(content="Action Center closed.", embed=None, view=None)
 
 
-async def open_action_center(interaction: discord.Interaction) -> None:
+async def open_action_center(interaction: discord.Interaction, *, section: str = "my") -> None:
     member = interaction.user if isinstance(interaction.user, discord.Member) else None
     if interaction.guild is None or member is None:
         return await _feedback(interaction, "Action Center is available inside a server.")
@@ -187,9 +221,11 @@ async def open_action_center(interaction: discord.Interaction) -> None:
     snapshot = await load_member_actions(member)
     if snapshot.user_id != member.id or snapshot.guild_id != member.guild.id:
         return await _feedback(interaction, "Could not safely load your account's actions.")
+    is_staff = scoped_interaction_is_staff(interaction)
+    selected = section if section == "staff" and is_staff else "my"
     await interaction.edit_original_response(
         content=None,
-        embed=_embed(snapshot),
-        view=ActionCenterView(member.id, snapshot, is_staff=scoped_interaction_is_staff(interaction)),
+        embed=_embed(snapshot, section=selected),
+        view=ActionCenterView(member.id, snapshot, is_staff=is_staff, section=selected),
         allowed_mentions=discord.AllowedMentions.none(),
     )
