@@ -101,6 +101,14 @@ def record_network_event(
         raise ValueError("Provide a specific reason (at least eight characters)")
     if not str(event_key or "").isdigit():
         raise ValueError("Invalid incident submission identifier")
+    parent = None
+    if action != "incident":
+        try:
+            parent = str(uuid.UUID(str(parent_id)))
+        except Exception as exc:
+            raise ValueError("Choose an original incident to correct or withdraw") from exc
+    elif parent_id is not None:
+        raise ValueError("A new incident must not refer to an older report")
     consent = get_network_consent(guild_id)
     if not consent or str(consent.get("owner_id")) != owner:
         raise RuntimeError("Server owner must configure Safety Network first")
@@ -108,23 +116,16 @@ def record_network_event(
     if db is None:
         raise RuntimeError("Safety network database unavailable")
     if action != "incident":
-        try:
-            parent = str(uuid.UUID(str(parent_id)))
-        except Exception as exc:
-            raise ValueError("Choose an original incident to correct or withdraw") from exc
         roots = _rows(db.table(EVENT_TABLE).select("id,action")
                       .eq("id", parent).eq("reporting_guild_id", gid)
                       .eq("subject_user_id", subject).limit(1).execute())
         if not roots or roots[0].get("action") != "incident":
             raise PermissionError("Only this server's original report can be changed")
-    elif parent_id is not None:
-        raise ValueError("A new incident must not refer to an older report")
-
     payload = {
         "event_key": str(event_key), "reporting_guild_id": gid,
         "subject_user_id": subject, "author_id": owner,
         "action": action, "category": category, "reason": note,
-        "parent_event_id": str(parent_id) if parent_id else None,
+        "parent_event_id": parent,
         "evidence_level": "owner_attested",
     }
     result = _rows(db.table(EVENT_TABLE).insert(payload).execute())
