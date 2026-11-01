@@ -294,6 +294,7 @@ const held = new Set([
 ]);
 const names = [
   'feat/embed-studio-durable-draft-recovery-20261024',
+  'fix/ticket-panel-legacy-interaction-recovery-20260924',
   'recovery/cinema-pr436-known-good',
   'backup/rollback-recovery',
   'feat/discloud-recovery-20261024',
@@ -306,4 +307,4 @@ console.log(JSON.stringify(names.map(name => hasHeldHistoricalSegment(name, held
 """
     result = subprocess.run(["node", "-e", js], text=True, capture_output=True)
     assert result.returncode == 0, result.stderr
-    assert json.loads(result.stdout) == [False, True, True, True, True, True, True, False]
+    assert json.loads(result.stdout) == [False, False, True, True, True, True, True, True, False]
