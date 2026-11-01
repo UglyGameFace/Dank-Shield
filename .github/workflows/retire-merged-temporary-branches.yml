@@ -24,6 +24,9 @@ on:
       live_discloud_branch_ack:
         required: false
         type: string
+      batch_index:
+        required: false
+        type: string
   workflow_dispatch:
     inputs:
       mode:
@@ -36,6 +39,10 @@ on:
           - preview-reviewed-merged
           - delete-reviewed-merged
         default: preview
+      batch_index:
+        description: 'Stable zero-based opt-in batch index for owner preview/delete (default 0)'
+        type: string
+        required: false
       confirmation:
         description: 'Exact token from reviewed preview'
         type: string
@@ -71,6 +78,7 @@ jobs:
           MANUAL_DEPLOY_BRANCH: ${{ inputs.live_discloud_branch }}
           MANUAL_DEPLOY_ACK: ${{ inputs.live_discloud_branch_ack }}
           CLEANUP_CONFIRMATION: ${{ inputs.confirmation }}
+          CLEANUP_BATCH_INDEX: ${{ inputs.batch_index }}
         with:
           script: |
             const { owner, repo } = context.repo;
@@ -382,9 +390,49 @@ jobs:
             // the start cannot permanently starve later eligible branches.
             eligibleCandidates.sort((a, b) => a.name.localeCompare(b.name));
             const candidateBatchCount = Math.max(1, Math.ceil(eligibleCandidates.length / 20));
-            const candidateBatch = Math.floor(Date.now() / 300000) % candidateBatchCount;
+            // Owner previews must be reproducible across workflow runs.
+            // Scheduled runs still rotate to avoid starving later branches.
+            const requestedBatch = String(process.env.CLEANUP_BATCH_INDEX || '0');
+            if (isManual && !/^(0|[1-9][0-9]{0,3})$/.test(requestedBatch)) {
+              throw new Error('Manual batch_index must be an integer from 0 to 9999');
+            }
+            const candidateBatch = isManual ? Number(requestedBatch) :
+              Math.floor(Date.now() / 300000) % candidateBatchCount;
+            if (isManual && candidateBatch >= candidateBatchCount) {
+              throw new Error('Manual batch_index exceeds current candidate batches');
+            }
             const candidateStart = candidateBatch * 20;
             const candidates = eligibleCandidates.slice(candidateStart, candidateStart + 20);
+            // Owner-comment opt-in deletion uses the same immutable preview
+            // lease as reviewed historical deletion. Bind the exact candidate
+            // batch, main SHA and verified deployment ref to the token.
+            const optInPreviewMainSha = (await github.rest.repos.getBranch({
+              owner, repo, branch: 'main'
+            })).data.commit.sha;
+            const optInBatch = candidates.map(branch => ({
+              name: branch.name, sha: branch.commit.sha
+            }));
+            const optInFingerprint = require('crypto').createHash('sha256')
+              .update(JSON.stringify({
+                mainSha: optInPreviewMainSha, batchIndex: candidateBatch,
+                batch: optInBatch, effectiveDeployBranch
+              })).digest('hex').slice(0, 16).toUpperCase();
+            const optInToken = 'DELETE_OPT_IN_' + optInFingerprint;
+            if (isManual && mode === 'preview') {
+              core.info('Opt-in retirement preview: ' + JSON.stringify({
+                mainSha: optInPreviewMainSha, effectiveDeployBranch,
+                batchIndex: candidateBatch, batchCount: candidateBatchCount,
+                before: allBranches.length, batch: optInBatch
+              }));
+              core.info('Opt-in retirement confirmation token: ' + optInToken);
+            }
+            if (isManual && mode === 'delete' && !candidates.length) {
+              throw new Error('No opt-in branches in selected batch');
+            }
+            if (isManual && mode === 'delete' &&
+                process.env.CLEANUP_CONFIRMATION !== optInToken) {
+              throw new Error('Opt-in delete requires exact preview token bound to main and branch SHAs');
+            }
             if (eligibleCandidates.length > candidates.length) {
               core.warning('Opt-in backlog: ' + eligibleCandidates.length +
                 ' eligible; examining rotating batch of ' + candidates.length + ' this run');
@@ -429,6 +477,10 @@ jobs:
               const optInMainSha = (await github.rest.repos.getBranch({
                 owner, repo, branch: 'main'
               })).data.commit.sha;
+              if (isManual && optInMainSha !== optInPreviewMainSha) {
+                rows.push([name, 'held', 'Main changed since preview snapshot']);
+                continue;
+              }
               const integrated = (await github.rest.repos.compareCommits({
                 owner, repo, base: optInMainSha, head: branch.commit.sha
               })).data;
