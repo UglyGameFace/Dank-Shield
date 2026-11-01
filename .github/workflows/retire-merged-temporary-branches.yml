@@ -210,6 +210,20 @@ jobs:
                   a.sha === b.sha && a.mode === b.mode && a.type === b.type);
               });
             };
+            // Feature recovery/release behavior is not a recovery or release checkpoint.
+            // Continue holding recovery/*, backups, deployment, database and
+            // rollback refs. All candidates still need exact PR/main proof.
+            const hasHeldHistoricalSegment = (name, held) =>
+              name.split(/[\\/_-]+/).some(part => {
+                const segment = part.toLowerCase();
+                const feature = name.startsWith('feat/');
+                const fix = name.startsWith('fix/');
+                // Recovery and release describe product behavior in these
+                // namespaces, not a deployment/restore checkpoint.
+                const functional = (segment === 'recovery' && (feature || fix)) ||
+                  (segment === 'release' && feature);
+                return held.has(segment) && !functional;
+              });
             const reviewed = mode === 'preview-reviewed-merged' || mode === 'delete-reviewed-merged';
             if (reviewed) {
               if (!isManual || context.actor !== 'UglyGameFace') {
@@ -248,7 +262,7 @@ jobs:
                 prefixes.some(p => name.startsWith(p)) &&
                 !heldPrefixes.some(p => name.startsWith(p)) &&
                 !protectedHeads.has(name) &&
-                !name.split(/[\\/_-]+/).some(x => sensitive.has(x.toLowerCase()));
+                !hasHeldHistoricalSegment(name, sensitive);
               const cutoff = Date.now() - 48 * 60 * 60 * 1000;
               // Fetch the PR history once, not once per branch. With hundreds
               // of stale refs, per-ref pagination can exhaust the 12m job
@@ -588,8 +602,7 @@ jobs:
                   !protectedHeads.has(branch.name) &&
                   historicalPrefixes.some(prefix => branch.name.startsWith(prefix)) &&
                   !heldPrefixes.some(prefix => branch.name.startsWith(prefix)) &&
-                  !branch.name.split(/[\\/_-]+/).some(segment =>
-                    heldSegments.has(segment.toLowerCase()))
+                  !hasHeldHistoricalSegment(branch.name, heldSegments)
                 ).sort((a, b) => a.name.localeCompare(b.name));
                 const startMain = (await github.rest.repos.getBranch({
                   owner, repo, branch: 'main'

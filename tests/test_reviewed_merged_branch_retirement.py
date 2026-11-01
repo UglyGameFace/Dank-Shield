@@ -267,3 +267,47 @@ def test_squash_reconciliation_requires_complete_fork_delta_and_merge_tree_parit
         assert proof in text
     assert "reconciledSquash" not in text
     assert "tree_sha: mainSha" not in text
+
+
+def test_feature_recovery_names_are_not_mistaken_for_backup_refs() -> None:
+    """Run the actual workflow name classifier against feature and safety refs."""
+    import json
+    import shutil
+    import subprocess
+    import textwrap
+
+    text = _workflow()
+    assert "!hasHeldHistoricalSegment(name, sensitive)" in text
+    assert "!hasHeldHistoricalSegment(branch.name, heldSegments)" in text
+    if shutil.which("node") is None:
+        return
+    classifier = "const hasHeldHistoricalSegment = " + textwrap.dedent(
+        text.split("            const hasHeldHistoricalSegment = ", 1)[1]
+            .split("            const reviewed = ", 1)[0]
+    )
+    js = classifier + """
+const held = new Set([
+  'backup', 'restore', 'recovery', 'archive', 'release', 'deploy',
+  'deployment', 'discloud', 'staging', 'migration', 'supabase',
+  'database', 'postgres', 'production', 'rollback', 'revert',
+  'snapshot', 'stable', 'known', 'good'
+]);
+const names = [
+  'feat/embed-studio-durable-draft-recovery-20261024',
+  'fix/ticket-panel-legacy-interaction-recovery-20260924',
+  'recovery/cinema-pr436-known-good',
+  'backup/rollback-recovery',
+  'feat/discloud-recovery-20261024',
+  'feat/backup-recovery-20261024',
+  'fix/rollback-recovery-20261024',
+  'feat/action-center-release-lock-20261023',
+  'release/stable-20261023',
+  'fix/release-hotfix-20261023',
+  'feat/production-release-20261023',
+  'feat/embed-studio-recurring-campaigns-20261024'
+];
+console.log(JSON.stringify(names.map(name => hasHeldHistoricalSegment(name, held))));
+"""
+    result = subprocess.run(["node", "-e", js], text=True, capture_output=True)
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == [False, False, True, True, True, True, True, False, True, True, True, False]
