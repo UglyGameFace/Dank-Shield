@@ -10,7 +10,8 @@ ROOT = Path(__file__).resolve().parents[1]
 WORKFLOWS = ROOT / ".github" / "workflows"
 RETIRE = WORKFLOWS / "retire-merged-temporary-branches.yml"
 OLD_AUTO = WORKFLOWS / "auto-archive-merged-pr-branches.yml"
-REVIEWED = WORKFLOWS / "guarded-merged-branch-cleanup.yml"
+LEGACY_REVIEWED = WORKFLOWS / "guarded-merged-branch-cleanup.yml"
+LEGACY_FINAL_PAIR = WORKFLOWS / "guarded-final-two-branches.yml"
 
 
 def test_duplicate_post_merge_deletion_workflow_is_removed() -> None:
@@ -20,10 +21,10 @@ def test_duplicate_post_merge_deletion_workflow_is_removed() -> None:
     assert "cron: '*/5 * * * *'" in text
     assert "group: guarded-merged-branch-cleanup" in text
     assert "cancel-in-progress: false" in text
-    reviewed = REVIEWED.read_text(encoding="utf-8")
-    assert "  workflow_dispatch:" in reviewed
-    for trigger in ("\n  push:", "\n  schedule:"):
-        assert trigger not in reviewed
+    assert not LEGACY_REVIEWED.exists(), "Duplicate historical deletion workflow returned"
+    assert not LEGACY_FINAL_PAIR.exists(), "Duplicate final-pair deletion workflow returned"
+    assert "  workflow_call:" in text
+    assert "delete-reviewed-merged" in text
 
 
 def test_automatic_historical_retirement_fails_closed_without_deploy_ref() -> None:
