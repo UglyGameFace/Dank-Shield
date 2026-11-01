@@ -41,6 +41,28 @@ def test_broad_retirement_is_manual_and_sha_leased() -> None:
     assert "eligible.slice(0, 12)" in text
 
 
+
+def test_owner_preview_exposes_sha_bound_plan_in_actions_logs() -> None:
+    text = _workflow()
+    reviewed = text.split("if (reviewed) {", 1)[1].split("const allBranches =", 1)[0]
+    assert "if (!deleteReviewed) {" in reviewed
+    assert "core.info('Reviewed retirement preview: ' + JSON.stringify({" in reviewed
+    assert "mainSha, effectiveDeployBranch, eligible: eligible.length," in reviewed
+    assert "before: branches.length, batch" in reviewed
+    assert "core.info('Reviewed retirement confirmation token: ' + token);" in reviewed
+    assert reviewed.index("const token = 'DELETE_REVIEWED_'") < reviewed.index(
+        "core.info('Reviewed retirement confirmation token:"
+    )
+    assert reviewed.index(
+        "core.info('Reviewed retirement confirmation token:"
+    ) < reviewed.index(
+        "if (deleteReviewed && process.env.CLEANUP_CONFIRMATION !== token)"
+    )
+    assert "JSON.stringify({mainSha,batch,effectiveDeployBranch})" in reviewed
+    assert "const batch = eligible.slice(0, 12);" in reviewed
+
+
+
 def test_reviewed_merged_branch_requires_actual_integration() -> None:
     text = _workflow()
     for proof in (
