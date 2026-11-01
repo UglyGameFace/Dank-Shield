@@ -43,3 +43,33 @@ The October 30 worker fix targeted `stoney_verify/tasks_new/command_queue.py`, b
 The canonical worker now uses a five-second idle interval and a 30-second failure cooldown. Its fetch helper distinguishes an empty queue from a database error and propagates errors to the worker loop; a failed Supabase call no longer silently becomes a normal empty poll. Normal commands still drain after processing with the existing one-second pacing, and all database operations remain offloaded via `asyncio.to_thread`. Regression tests assert the actual startup owner and exercise idle/error paths. Do not remove the alternate tasks queue until all callers and the ticket claim guard have been reconciled.
 
 Release proof remains necessary: exact PR-head CI, exact-main CI, a separately approved hosted release, and comparable post-release request-rate, pickup-latency, and billed-egress checks. The source change alone cannot establish production savings.
+
+## November 1 read-only member-write schema reconciliation (pending release)
+
+The dedicated project `viamriafkbqhquvrsnua` is ACTIVE_HEALTHY. Its latest
+24-hour gateway window contained approximately 99,673 edge requests, including
+25,001 successful `bot_commands` GETs, 17,806 compact config RPC responses,
+and 510 HTTP 400 `guild_members` requests (242 POST upserts and 268 PATCH
+updates). These are API request counts, not billed egress or a confirmed
+Discloud deployment SHA. Do not interpret them as proof that the new worker
+interval has reached production.
+
+Read-only `information_schema.columns` confirms that all 10 optional
+`guild_members` voice-presence columns sent by the canonical full sync
+payload are absent from the dedicated database. Existing
+`_guild_members_upsert_safe_async` retries one missing optional field at a
+time and then falls back to a stripped payload, so schema-mismatch failures
+are a plausible contributor to the observed HTTP 400s; gateway logs do not
+include response bodies to establish that every 400 has this cause.
+
+The new sync fix learns supported optional columns from the already-performed
+full `guild_members.select('*')` read for an existing member, then removes
+unsupported optional fields **before** the write. Partial projections and
+empty reads cannot poison the support cache; a later full row containing
+newly added columns re-enables them. No additional query, schema migration,
+database rewrite, or destructive fallback is introduced. New accounts without a retained row cannot infer schema from a prior row. After a confirmed missing voice-column error, their writes now retry once with the entire optional voice group removed while preserving core fields and unrelated optional fields. Unrelated errors are not swallowed.
+
+Exact-head CI passed on `515c4db65d` (Dank Shield CI, Mobile Panel UX, Ticket Owner Emergency Override, Application Command Size Diagnostics). The documentation-only correction must pass its own new head checks before merge. Acceptance also requires exact-main CI after merge, separately
+approved Discloud deployment with off-host backup/rollback, and a comparable
+post-deployment 1-hour/24-hour HTTP 400 and billed-egress check. Do not claim
+live improvement before those measurements.
