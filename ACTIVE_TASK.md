@@ -1,3 +1,17 @@
+## CURRENT ORDERED DELIVERY: Dank Shield production completion (2026-10-31 / 2026-11-01 UTC)
+
+- **Owner direction:** Work through remaining Dank Shield gaps in priority order without breaking existing behavior. Do not interpret historical task-lock sections below as vetoing this newly authorized task. Inspect current GitHub/main/PR/CI and coordinate active work; never silently deploy or mutate production databases.
+- **Sequence:** (1) Connection Intelligence and evidence recovery, (2) remaining desktop/mobile menus, (3) Discloud exact-main release and guarded branch cutover, (4) database/egress/backup proof, (5) live feature acceptance, (6) runtime ownership/rate limits, (7) product backlog.
+- **Phase 1 merged:** PR #779 merged into main as 8fb0a881763e86729ec4d9a2149fa57b58af27f2 after four successful exact-head workflows. Improves evidence quality and partial-coverage labeling. Source-integrated, not deployment-proven.
+- **Phase 1 active:** Draft PR #780 retargeted from stacked #779 to main. Existing code verifies Discord ban status read-only, preserving unavailable vs not banned.
+- **Verified root:** The canonical join writer independently inserts guild members, join rows, and original member_joined events. Event metadata stores joined_at, inviter/vouch, entry truth quality and conflict; connection reader previously counted events by ID without using original relationships. Event actor_id might be an approver and does not prove an inviter relationship.
+- **Implemented in PR #780:** Read-only guild-scoped, capped original-join-event reconstruction for direct and reverse relationships; timestamp-consistency checks; fail-closed attribution confidence; no inferred identities or permissions changes; compact staff panel explaining missing join rows and recovered evidence. Added regression scenarios for missing join rows, reverse actor ambiguity, quality and misleading social-vs-identity classification.
+- **Validation gates:** Full exact-head CI, review/source compatibility, re-check merged current main, and verified after-release Supabase/Discloud/Android + desktop canary in a private guild. Do not equate source change or CI with live acceptance. No new table, migration, historical data write, auto-ban, or runtime deploy.
+- **Outstanding Phase 1:** Verify real dedicated Supabase event schema/perms and owner's known multi-account case (do not log IDs publicly); investigate durable failed-join-write reconciliation and new evidence ingestion; performance/release proof. Phases 2-7 are not started.
+- **Next:** Resolve any PR #780 CI failure on exact head and inspect code/secret diff, continue conservative writer-failure proof and integration, retain draft if unverified. Do not delete historic recovery refs.
+
+---
+
 ## CURRENT CONVERSATION: Custom trusted-advert cleanup hours (2026-10-29)
 
 - **Objective:** Accept owner-entered whole hours such as 25 for approved advertising bots, retaining the published 24-hour minimum and existing ten-minute buffer. No automated bumping or guarantee against provider penalties.
