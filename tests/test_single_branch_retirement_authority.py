@@ -27,6 +27,17 @@ def test_duplicate_post_merge_deletion_workflow_is_removed() -> None:
     assert "delete-reviewed-merged" in text
 
 
+
+def test_no_other_workflow_may_delete_git_refs() -> None:
+    deleting = [
+        path.name for path in WORKFLOWS.glob("*.yml")
+        if "github.rest.git.deleteRef" in path.read_text(encoding="utf-8")
+    ]
+    assert deleting == [RETIRE.name], (
+        "All Git ref deletion must stay in the canonical archive-first workflow"
+    )
+
+
 def test_automatic_historical_retirement_fails_closed_without_deploy_ref() -> None:
     text = RETIRE.read_text(encoding="utf-8")
     assert "deploymentBranchConfigured = Boolean(deployed.commit?.sha);" in text
