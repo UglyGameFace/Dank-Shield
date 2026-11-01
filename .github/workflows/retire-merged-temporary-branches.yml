@@ -24,6 +24,14 @@ on:
         description: 'Exact token from reviewed preview'
         type: string
         required: false
+      live_discloud_branch:
+        description: 'Owner-verified current Discloud-linked branch (optional manual override)'
+        type: string
+        required: false
+      live_discloud_branch_ack:
+        description: 'Type I_VERIFIED_LIVE_DISCLOUD_BRANCH for manual override'
+        type: string
+        required: false
 
 permissions:
   contents: write
@@ -44,6 +52,8 @@ jobs:
         env:
           REQUESTED_MODE: ${{ inputs.mode }}
           LINKED_PRODUCTION_BRANCH: ${{ vars.DANK_DISCLOUD_DEPLOY_BRANCH }}
+          MANUAL_DEPLOY_BRANCH: ${{ inputs.live_discloud_branch }}
+          MANUAL_DEPLOY_ACK: ${{ inputs.live_discloud_branch_ack }}
           CLEANUP_CONFIRMATION: ${{ inputs.confirmation }}
         with:
           script: |
@@ -65,28 +75,44 @@ jobs:
               /^migration\/dankshield-[a-z0-9-]+-20\d{6}$/
             ];
             const isEligible = name => eligible.some(pattern => pattern.test(name));
+            const configuredDeployBranch = String(process.env.LINKED_PRODUCTION_BRANCH || '').trim();
+            const isManual = context.eventName === 'workflow_dispatch';
+            const mode = isManual ? process.env.REQUESTED_MODE : 'delete';
+            // Owner can attest the actual Discloud-linked branch in a manual
+            // preview/delete pair without changing repository variables.
+            // Scheduled and push runs NEVER accept an input override.
+            const manualDeployBranch = isManual
+              ? String(process.env.MANUAL_DEPLOY_BRANCH || '').trim() : '';
+            if (manualDeployBranch) {
+              if (context.actor !== 'UglyGameFace' ||
+                  process.env.MANUAL_DEPLOY_ACK !== 'I_VERIFIED_LIVE_DISCLOUD_BRANCH') {
+                throw new Error('Manual deployment ref requires owner attestation');
+              }
+              if (configuredDeployBranch && configuredDeployBranch !== manualDeployBranch) {
+                throw new Error('Manual deployment ref disagrees with configured ref; resolve conflict first');
+              }
+            }
+            const effectiveDeployBranch = manualDeployBranch || configuredDeployBranch;
             const protectedHeads = new Set([
               'main',
               'aaa-cinema-pre-pregateway-bind',
               'backup/stoneyverify-stable-7fdc331-20261008',
-              String(process.env.LINKED_PRODUCTION_BRANCH || '').trim()
+              configuredDeployBranch,
+              effectiveDeployBranch
             ]);
-            // A nonempty variable is not proof that the branch exists. Fail
-            // closed if it is mistyped or was deleted since configuration.
-            const configuredDeployBranch = String(process.env.LINKED_PRODUCTION_BRANCH || '').trim();
+            // An owner-entered branch name is not sufficient by itself:
+            // verify that the ref still exists before permitting deletion.
             let deploymentBranchConfigured = false;
-            if (configuredDeployBranch) {
+            if (effectiveDeployBranch) {
               try {
                 const deployed = (await github.rest.repos.getBranch({
-                  owner, repo, branch: configuredDeployBranch
+                  owner, repo, branch: effectiveDeployBranch
                 })).data;
                 deploymentBranchConfigured = Boolean(deployed.commit?.sha);
               } catch (error) {
-                core.warning('Configured Discloud deployment branch cannot be resolved; historical deletion disabled');
+                core.warning('Discloud deployment branch cannot be resolved; deletion disabled');
               }
             }
-            const isManual = context.eventName === 'workflow_dispatch';
-            const mode = isManual ? process.env.REQUESTED_MODE : 'delete';
             if (!['preview', 'delete', 'preview-reviewed-merged', 'delete-reviewed-merged'].includes(mode)) {
               throw new Error('Unsupported branch hygiene mode');
             }
@@ -164,7 +190,7 @@ jobs:
               eligible.sort((a,b) => a.name.localeCompare(b.name));
               const batch = eligible.slice(0, 12);
               const fingerprint = require('crypto').createHash('sha256')
-                .update(JSON.stringify({mainSha,batch})).digest('hex')
+                .update(JSON.stringify({mainSha,batch,effectiveDeployBranch})).digest('hex')
                 .slice(0, 16).toUpperCase();
               const token = 'DELETE_REVIEWED_' + fingerprint;
               if (deleteReviewed && process.env.CLEANUP_CONFIRMATION !== token) {
