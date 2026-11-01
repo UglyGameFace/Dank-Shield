@@ -178,7 +178,7 @@ def test_live_reader_uses_only_tables_in_dedicated_supabase(monkeypatch) -> None
     report = _read_connection_report(int(TARGET), int(OTHER))
     assert report["coverage"] == "partial"
     assert report["matches"] == []
-    assert len(tables) == 10
+    assert len(tables) == 11
     assert "identity_proof_matches" not in tables
     assert report["history_gap"].startswith("No recorded relationship")
 
@@ -326,6 +326,11 @@ def test_original_join_event_requires_correct_type_and_timestamp() -> None:
     assert _recorded_join_event({**valid, "created_at": "2026-10-22T11:45:12+00:00"}) is None
     assert _recorded_join_event({**valid, "metadata": {"invited_by": OTHER}}) is None
     assert _recorded_join_event({**valid, "metadata": "not a JSON object"}) is None
+    missing_conflict = {**valid, "metadata": {
+        "joined_at": "2026-10-20T11:45:10+00:00",
+        "invited_by": OTHER, "entry_truth_quality": "confirmed",
+    }}
+    assert _recorded_join_event(missing_conflict)["entry_conflict"] is True
 
 
 def test_historical_events_preserve_quality_and_identity_boundaries() -> None:
@@ -360,6 +365,9 @@ def test_missing_join_rows_recover_recorded_forward_and_reverse_events(monkeypat
         _joined_event(member=OTHER, actor=TARGET, inviter=TARGET),
         _joined_event(member="303030303030303030", actor=TARGET,
                       inviter=OTHER),  # approval, NOT an invite by TARGET
+        # The actor is OTHER (the inviter), but TARGET is the voucher.
+        _joined_event(member="505050505050505050", actor=OTHER,
+                      inviter=OTHER, voucher=TARGET),
         _joined_event(member="404040404040404040", actor=OTHER,
                       inviter=OTHER, event_type="member_banned"),
     ]
@@ -386,7 +394,11 @@ def test_missing_join_rows_recover_recorded_forward_and_reverse_events(monkeypat
                 return SimpleNamespace(data=[])
             filtered = [
                 row for row in rows
-                if all(str(row.get(key)) == value for key, value in self.filters.items())
+                if all(
+                    (str((row.get("metadata") or {}).get(key.split("->>", 1)[1]))
+                     if key.startswith("metadata->>") else str(row.get(key))) == value
+                    for key, value in self.filters.items()
+                )
             ]
             return SimpleNamespace(data=filtered)
 
@@ -398,11 +410,11 @@ def test_missing_join_rows_recover_recorded_forward_and_reverse_events(monkeypat
     monkeypatch.setattr("stoney_verify.globals.get_supabase", lambda: DB())
     report = _read_connection_report(int(TARGET), int(TARGET))
     assert report["history_status"] == "events_only"
-    assert report["recovered_join_events"] == 2
+    assert report["recovered_join_events"] == 3
     assert report["history_events"] == 3
     assert report["coverage"] == "partial"  # History is still missing.
     assert report["history_gap"].startswith("No join-history row")
-    assert [item["user_id"] for item in report["matches"]] == [OTHER]
+    assert [item["user_id"] for item in report["matches"]] == [OTHER, "505050505050505050"]
     assert len(report["matches"][0]["evidence"]) == 2
 
 
