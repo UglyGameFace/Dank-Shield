@@ -1079,10 +1079,12 @@ class OwnerAffiliationModal(discord.ui.Modal, title="Owner Affiliate Review"):
         min_length=8, max_length=500, required=True,
     )
 
-    def __init__(self, target_id: int, mode: str) -> None:
+    def __init__(self, target_id: int, mode: str, *, other_id: int = 0) -> None:
         super().__init__()
         self.target_id = target_id
         self.mode = mode
+        if other_id > 0:
+            self.other_account.default = str(other_id)
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         if not _is_guild_owner_for_affiliations(interaction):
@@ -1141,8 +1143,72 @@ class OwnerAffiliationChoiceSelect(discord.ui.Select):
     async def callback(self, interaction: discord.Interaction) -> None:
         if not _is_guild_owner_for_affiliations(interaction):
             return await reply_ephemeral(interaction, "Only the server owner can review affiliates.")
+        mode = str(self.values[0])
+        embed = discord.Embed(
+            title="🔖 Choose the Associated Account",
+            description=(
+                f"Account: `{self.target_id}`\\n"
+                "Choose a current member from the Discord picker, or enter the ID "
+                "of an account that left or was banned. You'll then record your evidence."
+            ).replace("\\n", "\n"),
+            color=discord.Color.blurple(),
+        )
+        await _replace_panel(
+            interaction, embed=embed,
+            view=OwnerAffiliationTargetView(int(interaction.user.id), self.target_id, mode),
+        )
+
+
+class OwnerAffiliationUserSelect(discord.ui.UserSelect):
+    def __init__(self, target_id: int, mode: str) -> None:
+        self.target_id = target_id
+        self.mode = mode
+        super().__init__(
+            placeholder="Choose a current member",
+            min_values=1, max_values=1, row=0,
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        if not _is_guild_owner_for_affiliations(interaction):
+            return await reply_ephemeral(interaction, "Only the server owner can review affiliates.")
+        chosen = self.values[0]
+        if int(chosen.id) == self.target_id:
+            return await reply_ephemeral(interaction, "Choose a different account.")
         await interaction.response.send_modal(
-            OwnerAffiliationModal(self.target_id, str(self.values[0])),
+            OwnerAffiliationModal(self.target_id, self.mode, other_id=int(chosen.id)),
+        )
+
+
+class OwnerAffiliationTargetView(OwnedView):
+    def __init__(self, owner_id: int, target_id: int, mode: str) -> None:
+        super().__init__(owner_id)
+        self.target_id = target_id
+        self.mode = mode
+        self.add_item(OwnerAffiliationUserSelect(target_id, mode))
+
+    @discord.ui.button(label="Enter Account ID", emoji="🔢",
+                       style=discord.ButtonStyle.secondary, row=1)
+    async def by_id(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        if not _is_guild_owner_for_affiliations(interaction):
+            return await reply_ephemeral(interaction, "Only the server owner can review affiliates.")
+        await interaction.response.send_modal(
+            OwnerAffiliationModal(self.target_id, self.mode),
+        )
+
+    @discord.ui.button(label="Back to Relationship", emoji="↩️",
+                       style=discord.ButtonStyle.secondary, row=1)
+    async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        if not _is_guild_owner_for_affiliations(interaction):
+            return await reply_ephemeral(interaction, "Only the server owner can review affiliates.")
+        await _replace_panel(
+            interaction, embed=discord.Embed(
+                title="🔖 Review Known Affiliates",
+                description="Choose known, possible, or clear an earlier owner-reported association.",
+                color=discord.Color.blurple(),
+            ),
+            view=OwnerAffiliationChoiceView(self.owner_id, self.target_id),
         )
 
 
