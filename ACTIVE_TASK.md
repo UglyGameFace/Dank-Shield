@@ -1,3 +1,17 @@
+## LIVE INTEGRATION CHECKPOINT (2026-11-01 08:00 UTC)
+
+- **Canonical main:** `2ac0e846efe15ea27515161fd4dd00fc3adcce91`; exact-main push CI passed (run #41269102512). This is **not** proof of a Discloud deployment.
+- **Member sync:** PR #784 at `cd5f4610411d0fd24772d1ddc23342b490c867a7` passed all four exact-head workflows and was marked ready for review. Not merged, not deployed; dedicated Supabase `viamriafkbqhquvrsnua` remains intended primary. Preserve original IdleGrowOp source and isolated Discloud PostgreSQL candidate.
+- **Safety Network:** PR #783 remains draft; privacy, SQL and multi-guild acceptance gates are independent of #784.
+- **Connection intelligence:** PRs #779 and #780 are merged; production Discord acceptance remains unverified. Earlier 'active PR #780' instructions below are historical and no longer current.
+- **Branch cleanup:** 126 branches at run start; 127 after new PR #785 working branch. **Actual deleted: 0.** The scheduled workflow still has no configured `DANK_DISCLOUD_DEPLOY_BRANCH` and archives only. PR #785 proposes an owner-attested manual preview/delete alternative, preserving all SHA, PR, age, archive and branch-protection checks. No deletion or variable change occurred.
+- **Fresh ancestry sample:** 30 branch heads compared with current main: 28 have zero unique commits; `feat/embed-studio-recurring-campaigns-20261024` has one unique SQL migration and `fix/dankshield-automatic-integrated-branch-retirement-20261031` has seven unique commits. Preserve both until reconciliation; zero-ahead alone does not authorize deletion.
+- **Release gates:** No production deployment, credentials or irreversible database/host changes without explicit approval, exact-main CI, independent verified off-Discloud backup, canary and tested rollback. Preserve linked `aaa-cinema-pre-pregateway-bind` until independently superseded.
+
+The ordered delivery and older checkpoints below are retained as history; their earlier PR statuses must not override this current live checkpoint.
+
+---
+
 ## CURRENT ORDERED DELIVERY: Dank Shield production completion (2026-10-31 / 2026-11-01 UTC)
 
 - **Owner direction:** Work through remaining Dank Shield gaps in priority order without breaking existing behavior. Do not interpret historical task-lock sections below as vetoing this newly authorized task. Inspect current GitHub/main/PR/CI and coordinate active work; never silently deploy or mutate production databases.
