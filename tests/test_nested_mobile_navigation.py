@@ -23,7 +23,12 @@ def test_session_controls_are_reachable_without_dense_button_wall():
         section: SessionControlView(987654321, session_id="test-session", section=section)
         for section in _SESSION_CONTROL_SECTIONS
     }
-    expected = set().union(*_SESSION_CONTROL_SECTIONS.values())
+    expected = {
+        "Start", "Pause", "Resume", "Lock / Unlock", "Keep Open", "End Session",
+        "Transfer Host", "Choose Co-host", "Live Captions", "Call Game Crew",
+        "Share Outside Server", "Advertise Externally", "Remove External Ad",
+        "External Ad Status",
+    }
     visible = set()
 
     for section, view in screens.items():
@@ -35,32 +40,29 @@ def test_session_controls_are_reachable_without_dense_button_wall():
         assert len(labels & {"Session", "People", "Outside"}) == 2
         assert all(0 <= item.row <= 4 for item in _buttons(view))
         visible.update(labels)
-    assert expected <= visible
-    assert "End Session" in screens["session"].children[6].label or (
-        "End Session" in {item.label for item in _buttons(screens["session"])}
-    )
+    assert expected == (visible - {"Back to Group", "Session", "People", "Outside"})
 
 
 def test_community_option_editor_retains_each_action_with_small_sections():
-    all_actions = set().union(*_OPTION_EDITOR_SECTIONS.values())
+    all_actions = {
+        "Edit Details", "Enable / Disable", "Toggle Removable", "Delete",
+        "Prerequisite", "Clear Prerequisite", "Mutual Exclusion",
+        "Toke Starter", "Toke Notify", "Movie Night Notify",
+        "Move Up", "Move Down",
+    }
     visible = set()
     for section in _OPTION_EDITOR_SECTIONS:
         view = CommunityOptionEditorView(987654321, "fake-option", section=section)
         labels = {item.label for item in _buttons(view)}
         assert len(view.children) <= 9, section
         assert len(labels) == len(_buttons(view)), section
-        assert _OPTION_EDITOR_SECTIONS[section] == tuple(
-            label for label in _OPTION_EDITOR_SECTIONS[section]
-        )
         assert set(_OPTION_EDITOR_SECTIONS[section]) <= labels
         assert {"Back", "Close"} <= labels
         assert any(getattr(item, "custom_id", None) == "dank:pings:option:section:v1"
                    for item in view.children)
         assert all(0 <= item.row <= 4 for item in _buttons(view))
         visible.update(labels)
-    assert all_actions <= visible
-    assert {"Edit Details", "Prerequisite", "Toke Starter",
-            "Movie Night Notify", "Move Up", "Delete"} <= all_actions
+    assert all_actions == (visible - {"Back", "Close"})
 
 
 def test_unknown_nested_section_defaults_to_safe_overview():
