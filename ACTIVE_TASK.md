@@ -1,3 +1,13 @@
+## LIVE INTEGRATION CHECKPOINT (2026-11-01 09:20 UTC)
+
+- **Canonical main:** `1d24e0d8feb9b76247040c53c304b0ee8da99d3a` after merging PR #784. Its exact-main push CI is pending, so do not call it release-ready.
+- **Member sync integration:** PR #784 merged after all four exact-head workflows passed at `cd5f4610411d0fd24772d1ddc23342b490c867a7`. Source merged only; production Supabase write improvement, egress and Discloud deployment remain unverified. Dedicated Supabase `viamriafkbqhquvrsnua` stays primary; original IdleGrowOp rollback source and isolated Discloud PostgreSQL candidate remain untouched.
+- **Branch retirement:** 127 branches before and after this run, **zero deleted**. PR #785 now conservatively holds squash-diverged heads with any unique commits, even when their merged PR commit is on main. The live Discloud-linked branch is still not independently verified; manual attestation does not replace production evidence. No deletion workflow was dispatched or repo variable changed.
+- **PR coordination:** #785 is draft and under new exact-head CI; #783 remains independent draft. Do not merge #785 before latest CI and review. No production deployment, credential or database mutation.
+- **Next:** Confirm exact-main CI for #784, verify latest #785 CI, preserve unique branch heads, then use the existing guarded workflow only with verified deployment-ref evidence and authorized owner preview/delete.
+
+---
+
 ## LIVE INTEGRATION CHECKPOINT (2026-11-01 08:00 UTC)
 
 - **Canonical main:** `2ac0e846efe15ea27515161fd4dd00fc3adcce91`; exact-main push CI passed (run #41269102512). This is **not** proof of a Discloud deployment.
