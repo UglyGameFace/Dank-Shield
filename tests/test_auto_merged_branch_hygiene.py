@@ -107,3 +107,17 @@ def test_unverified_deployment_branch_allows_archival_but_never_deletion() -> No
     assert workflow.index("if (!canRetire) {", workflow.index("archive.object.sha !== sha")) < workflow.index(
         "await github.rest.git.deleteRef({owner, repo, ref: 'heads/' + name})"
     )
+
+
+def test_owner_opt_in_cleanup_is_preview_bound_and_rechecks_main() -> None:
+    workflow = AUTO.read_text(encoding="utf-8")
+    assert "const optInPreviewMainSha =" in workflow
+    assert "const optInBatch = candidates.map(branch =>" in workflow
+    assert "mainSha: optInPreviewMainSha, batch: optInBatch, effectiveDeployBranch" in workflow
+    assert "const optInToken = 'DELETE_OPT_IN_' + optInFingerprint;" in workflow
+    assert "Opt-in retirement confirmation token:" in workflow
+    assert "process.env.CLEANUP_CONFIRMATION !== optInToken" in workflow
+    assert "if (isManual && optInMainSha !== optInPreviewMainSha)" in workflow
+    assert workflow.index("process.env.CLEANUP_CONFIRMATION !== optInToken") < workflow.index(
+        "await github.rest.git.deleteRef({ owner, repo, ref: 'heads/' + name })"
+    )
