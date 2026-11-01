@@ -1031,12 +1031,135 @@ class ConnectionReportView(OwnedView):
         _ = button
         await self._navigate(interaction, self.page + 1)
 
+    @discord.ui.button(label="Record Affiliate", emoji="🔖", style=discord.ButtonStyle.secondary, row=2)
+    async def mark_affiliate(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        if not _is_guild_owner_for_affiliations(interaction):
+            return await reply_ephemeral(interaction, "Only this server's owner can record affiliate reviews.")
+        embed = discord.Embed(
+            title="🔖 Review Known Affiliates",
+            description=(
+                f"Selected account: `{self.target_id}`\\n"
+                "Choose a relationship, then supply another account ID and the evidence. "
+                "Former or banned accounts can be entered by ID. "
+                "Owner reports are separate from alternate identities, bans and automated restrictions."
+            ).replace("\\n", "\n"),
+            color=discord.Color.blurple(),
+        )
+        await _replace_panel(
+            interaction, embed=embed,
+            view=OwnerAffiliationChoiceView(self.owner_id, self.target_id),
+        )
+
     @discord.ui.button(label="Intelligence Menu", emoji="↩️", style=discord.ButtonStyle.secondary, row=2)
     async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         if not await require_review(interaction):
             return
         await _replace_panel(interaction, embed=_intelligence_embed(), view=IntelligenceMenuView(self.owner_id))
+
+
+def _is_guild_owner_for_affiliations(interaction: discord.Interaction) -> bool:
+    guild = interaction.guild
+    return bool(
+        guild is not None
+        and getattr(guild, "owner_id", None) is not None
+        and int(interaction.user.id) == int(guild.owner_id)
+    )
+
+
+class OwnerAffiliationModal(discord.ui.Modal, title="Owner Affiliate Review"):
+    other_account = discord.ui.TextInput(
+        label="Other Discord account ID", placeholder="Enter ID, including a banned account",
+        min_length=15, max_length=22, required=True,
+    )
+    reason = discord.ui.TextInput(
+        label="Evidence or reason", style=discord.TextStyle.paragraph,
+        placeholder="Explain what you know without assuming both accounts share an owner",
+        min_length=8, max_length=500, required=True,
+    )
+
+    def __init__(self, target_id: int, mode: str) -> None:
+        super().__init__()
+        self.target_id = target_id
+        self.mode = mode
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        if not _is_guild_owner_for_affiliations(interaction):
+            return await reply_ephemeral(interaction, "Only the server owner can save this review.")
+        raw_id = str(self.other_account.value or "").strip()
+        if not raw_id.isascii() or not raw_id.isdecimal() or not 15 <= len(raw_id) <= 22:
+            return await reply_ephemeral(interaction, "Enter the other account's Discord ID (15–22 digits).")
+        if int(raw_id) == self.target_id:
+            return await reply_ephemeral(interaction, "Choose a different account.")
+        from stoney_verify.member_connection_intelligence import save_owner_affiliation
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        try:
+            await asyncio.to_thread(
+                save_owner_affiliation,
+                guild_id=int(interaction.guild.id),
+                target_id=self.target_id,
+                other_id=int(raw_id),
+                actor_id=int(interaction.user.id),
+                mode=self.mode,
+                reason=str(self.reason.value or ""),
+            )
+        except Exception as exc:
+            return await reply_ephemeral(
+                interaction,
+                f"Could not store the association review ({type(exc).__name__}). No success is assumed.",
+            )
+        labels = {
+            "known": "Known Affiliate (owner-reported)",
+            "possible": "Possible Affiliate (unverified)",
+            "cleared": "Association Cleared (owner review)",
+        }
+        await reply_ephemeral(
+            interaction,
+            f"Saved {labels[self.mode]} for account `{raw_id}`. "
+            "Use Refresh Evidence to see the latest recorded review. "
+            "This does not change bans, verification, roles or automatic risk scoring.",
+        )
+
+
+class OwnerAffiliationChoiceSelect(discord.ui.Select):
+    def __init__(self, target_id: int) -> None:
+        self.target_id = target_id
+        super().__init__(
+            placeholder="Choose relationship review",
+            options=[
+                discord.SelectOption(label="Known Affiliate", value="known",
+                                     description="Owner-reported association, not an alt"),
+                discord.SelectOption(label="Possible Affiliate", value="possible",
+                                     description="Unverified relationship lead"),
+                discord.SelectOption(label="Clear Association", value="cleared",
+                                     description="Withdraw an earlier affiliate claim"),
+            ],
+            row=0,
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        if not _is_guild_owner_for_affiliations(interaction):
+            return await reply_ephemeral(interaction, "Only the server owner can review affiliates.")
+        await interaction.response.send_modal(
+            OwnerAffiliationModal(self.target_id, str(self.values[0])),
+        )
+
+
+class OwnerAffiliationChoiceView(OwnedView):
+    def __init__(self, owner_id: int, target_id: int) -> None:
+        super().__init__(owner_id)
+        self.target_id = target_id
+        self.add_item(OwnerAffiliationChoiceSelect(target_id))
+
+    @discord.ui.button(label="Back to Connections", emoji="↩️",
+                       style=discord.ButtonStyle.secondary, row=1)
+    async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        if not await require_review(interaction):
+            return
+        await interaction.response.defer(ephemeral=True)
+        await _show_connection_report(interaction, self.owner_id, self.target_id)
 
 
 class RecentBanConnectionSelect(discord.ui.Select):
