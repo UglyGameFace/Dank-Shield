@@ -3466,10 +3466,32 @@ async def _require_atlas_host(
     return allow_staff and _staff_authorized(interaction)
 
 
+_SESSION_CONTROL_SECTIONS = {
+    "session": {
+        "Start", "Pause", "Resume", "Lock / Unlock", "Keep Open", "End Session",
+    },
+    "people": {
+        "Transfer Host", "Choose Co-host", "Live Captions", "Call Game Crew",
+    },
+    "outside": {
+        "Share Outside Server", "Advertise Externally",
+        "Remove External Ad", "External Ad Status",
+    },
+}
+
+
 class SessionControlView(_OwnedView):
-    def __init__(self, owner_id: int, *, session_id: str) -> None:
+    def __init__(self, owner_id: int, *, session_id: str, section: str = "session") -> None:
         super().__init__(owner_id)
         self.session_id = session_id
+        self.section = section if section in _SESSION_CONTROL_SECTIONS else "session"
+        allowed = (_SESSION_CONTROL_SECTIONS[self.section] | {"Back to Group"})
+        for label, tab in (("Session", "session"), ("People", "people"), ("Outside", "outside")):
+            if tab != self.section:
+                allowed.add(label)
+        for item in tuple(self.children):
+            if getattr(item, "label", "") not in allowed:
+                self.remove_item(item)
 
     async def _transition(self, interaction: discord.Interaction, action: str, success: str) -> None:
         await _defer_update(interaction)
@@ -3794,6 +3816,42 @@ class SessionControlView(_OwnedView):
         session = await hub.get_session(self.session_id, guild_id=int(interaction.guild_id or 0))
         members = await hub.list_session_members(self.session_id)
         await _edit_private_original(interaction, content=None, embed=build_session_embed(session, members), view=SessionDetailView(self.owner_id, session_id=self.session_id, return_kind="mine"))
+
+
+    async def _switch_section(self, interaction: discord.Interaction, section: str) -> None:
+        await _defer_update(interaction)
+        try:
+            session = await hub.get_session(
+                self.session_id, guild_id=int(interaction.guild_id or 0),
+            )
+            members = await hub.list_session_members(self.session_id)
+        except hub.CommunityHubError as exc:
+            return await _followup(interaction, f"❌ {_error_text(exc)}")
+        await _edit_private_original(
+            interaction, content=None,
+            embed=build_session_embed(session, members),
+            view=SessionControlView(
+                self.owner_id, session_id=self.session_id, section=section,
+            ),
+        )
+
+    @discord.ui.button(label="Session", emoji="🎮", style=discord.ButtonStyle.secondary,
+                       custom_id="dank:hub:manage:tab:session:v1", row=4)
+    async def tab_session(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await self._switch_section(interaction, "session")
+
+    @discord.ui.button(label="People", emoji="👥", style=discord.ButtonStyle.secondary,
+                       custom_id="dank:hub:manage:tab:people:v1", row=4)
+    async def tab_people(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await self._switch_section(interaction, "people")
+
+    @discord.ui.button(label="Outside", emoji="🌍", style=discord.ButtonStyle.secondary,
+                       custom_id="dank:hub:manage:tab:outside:v1", row=4)
+    async def tab_outside(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await self._switch_section(interaction, "outside")
 
 
 class CommunitySessionPublicView(discord.ui.View):
