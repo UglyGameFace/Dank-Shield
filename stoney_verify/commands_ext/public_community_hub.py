@@ -3494,7 +3494,7 @@ class SessionControlSectionSelect(discord.ui.Select):
                     ("outside", "Outside Recruiting"),
                 )
             ],
-            row=3,
+            row=4,
             custom_id="dank:hub:manage:section:v1",
         )
 
