@@ -921,7 +921,8 @@ def _connection_embed(report: dict[str, Any]) -> discord.Embed:
     if not matches:
         embed.add_field(
             name="No verified relationship in available records",
-            value="No supported link was found in the records checked. This is not proof the accounts are unrelated.",
+            value=(str(report.get("history_gap") or
+                       "No supported link was found in the records checked. This is not proof the accounts are unrelated.")[:1024]),
             inline=False,
         )
     if report.get("truncated") or len(matches) > 8:

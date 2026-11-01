@@ -56,6 +56,42 @@ def test_conflicting_invite_not_upgraded_to_confirmed() -> None:
     assert report["total_matches"] == 0
 
 
+def test_reverse_inviter_link_does_not_invent_verified_relationship() -> None:
+    report = build_connection_report(
+        target_id=TARGET,
+        source={"target": [{
+            "user_id": TARGET,
+            "invited_by": OTHER,
+            "entry_truth_quality": "partial",
+            "entry_conflict": False,
+        }]},
+    )
+    assert report["total_matches"] == 1
+    assert report["matches"][0]["category"] == "unverified join relationship"
+    assert report["matches"][0]["evidence"][0]["kind"] == "weak"
+
+
+def test_reverse_inviter_link_can_be_confirmed_with_source_quality() -> None:
+    report = build_connection_report(
+        target_id=TARGET,
+        source={"join_target": [{
+            "user_id": TARGET,
+            "invited_by": OTHER,
+            "entry_truth_quality": "confirmed",
+            "entry_conflict": False,
+        }]},
+    )
+    assert report["matches"][0]["category"] == "documented server relationship"
+
+
+def test_query_limit_marks_coverage_partial() -> None:
+    rows = [{"user_id": str(303030303030303030 + i), "vouched_by": TARGET}
+            for i in range(40)]
+    report = build_connection_report(target_id=TARGET, source={"vouched": rows})
+    assert report["truncated"]
+    assert report["coverage"] == "partial"
+
+
 def test_reviewed_identity_is_different_from_social_evidence() -> None:
     report = build_connection_report(
         target_id=TARGET,
@@ -133,15 +169,16 @@ def test_live_reader_uses_only_tables_in_dedicated_supabase(monkeypatch) -> None
     class DB:
         def table(self, name):
             tables.append(name)
-            assert name in {"guild_members", "member_joins", "manual_alt_links"}
+            assert name in {"guild_members", "member_joins", "manual_alt_links", "member_events"}
             return Query()
 
     monkeypatch.setattr("stoney_verify.globals.get_supabase", lambda: DB())
     report = _read_connection_report(int(TARGET), int(OTHER))
-    assert report["coverage"] == "available"
+    assert report["coverage"] == "partial"
     assert report["matches"] == []
-    assert len(tables) == 8
+    assert len(tables) == 9
     assert "identity_proof_matches" not in tables
+    assert report["history_gap"].startswith("No relationship evidence")
 
 def test_unverified_invitations_and_weak_names_do_not_trigger_ban_assertions() -> None:
     class Guild:
