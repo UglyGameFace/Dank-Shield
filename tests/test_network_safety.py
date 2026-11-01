@@ -248,10 +248,12 @@ def test_private_review_pages_cover_every_returned_report():
     from stoney_verify.commands_ext.public_network_safety import NetworkReportPages
     reports = [row(str(i), A, created=f"2026-11-{(i % 20)+1:02d}T00:00:00+00:00")
                for i in range(9)]
-    shown = []
-    for page in range(3):
-        view = NetworkReportPages(SUBJECT, reports, page)
-        embed = view.embed()
-        shown.extend([field.value for field in embed.fields])
-        assert len(embed.fields) <= 4
-    assert len(shown) == 9
+    async def examine():
+        shown = []
+        for page in range(3):
+            view = NetworkReportPages(SUBJECT, reports, page)
+            embed = view.embed()
+            shown.extend([field.value for field in embed.fields])
+            assert len(embed.fields) <= 4
+        assert len(shown) == 9
+    asyncio.run(examine())
