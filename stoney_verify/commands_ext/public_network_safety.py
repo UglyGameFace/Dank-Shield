@@ -131,8 +131,27 @@ class NetworkPanel(discord.ui.View):
     async def account(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         if await _deny(interaction):
             return
+        await interaction.response.defer(ephemeral=True)
+        try:
+            current = await asyncio.to_thread(network.get_network_consent, interaction.guild.id)
+            if not current or str(current.get("owner_id")) != str(interaction.guild.owner_id):
+                # A neutral registration allows private owner reports without
+                # silently enabling cross-server receiving or publishing.
+                await asyncio.to_thread(
+                    network.set_network_consent,
+                    interaction.guild.id, interaction.guild.owner_id, interaction.guild.name,
+                    publish=False, receive=False,
+                )
+        except Exception:
+            await interaction.edit_original_response(
+                content="Safety Network database is unavailable; no sharing or report changed."
+            )
+            return
         await _edit(interaction, SubjectPickerView(), discord.Embed(
-            title="Review an account", description="Select a current member, or enter a departed/banned account ID.",
+            title="Review an account", description=(
+                "Select a current member, or enter a departed/banned account ID. "
+                "Your own incident notes stay private unless you explicitly enable Share incidents."
+            ),
             color=discord.Color.blurple(),
         ))
 
