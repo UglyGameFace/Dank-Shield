@@ -49,7 +49,7 @@ CREATE TABLE IF NOT EXISTS public.network_safety_alert_receipts (
 -- A new digest may alert only after a short cooldown; repeated joins are suppressed.
 CREATE OR REPLACE FUNCTION public.claim_network_safety_alert(
     p_guild text, p_user text, p_digest text, p_token uuid
-) RETURNS boolean LANGUAGE plpgsql SECURITY DEFINER
+) RETURNS boolean LANGUAGE plpgsql SECURITY INVOKER
 SET search_path = public, pg_temp AS $$
 DECLARE claimed boolean := false;
 BEGIN
