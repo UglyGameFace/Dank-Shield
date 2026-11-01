@@ -148,6 +148,9 @@ const branches = [
   {name:'feat/integrated',protected:false,commit:{sha:'oldsha'}},
   {name:'feat/unique',protected:false,commit:{sha:'uniquesha'}},
   {name:'feat/unique-bad',protected:false,commit:{sha:'badsha'}},
+  {name:'feat/mode-bad',protected:false,commit:{sha:'modesha'}},
+  {name:'feat/truncated',protected:false,commit:{sha:'truncatedsha'}},
+  {name:'feat/deleted',protected:false,commit:{sha:'deletedsha'}},
   {name:'feat/multi',protected:false,commit:{sha:'multisha'}},
   {name:'feat/open',protected:false,commit:{sha:'opensha'}},
   {name:'backup/retained',protected:false,commit:{sha:'backupsha'}}
@@ -162,6 +165,9 @@ const records = [
   mkpr('feat/integrated','oldsha',1),
   mkpr('feat/unique','uniquesha',2),
   mkpr('feat/unique-bad','badsha',8),
+  mkpr('feat/mode-bad','modesha',9),
+  mkpr('feat/truncated','truncatedsha',10),
+  mkpr('feat/deleted','deletedsha',11),
   mkpr('feat/multi','multisha',3),
   mkpr('feat/multi','multisha',4),
   mkpr('feat/open','opensha',5),
@@ -177,18 +183,23 @@ const github = {
     repos: {compareCommits: async ({base,head}) => {
       compared++;
       if (base === mainSha) return {data:{
-        ahead_by:['uniquesha','badsha'].includes(head) ? 1 : 0,
-        status:['uniquesha','badsha'].includes(head) ? 'diverged' : 'behind',
+        ahead_by:['uniquesha','badsha','modesha','truncatedsha','deletedsha'].includes(head) ? 1 : 0,
+        status:['uniquesha','badsha','modesha','truncatedsha','deletedsha'].includes(head) ? 'diverged' : 'behind',
         merge_base_commit:{sha:'forksha'}}};
       if (base === 'forksha') return {data:{
         status:'ahead',ahead_by:1,total_commits:1,
-        files:[{filename:'feature.py',status:'modified'}]}};
+        files:[{filename:head === 'deletedsha' ? 'old.py' : 'feature.py',
+          status:head === 'deletedsha' ? 'removed' : 'modified'}]}};
       return {data:{behind_by:0,status:'ahead'}};
     }},
     git: {getTree: async ({tree_sha}) => {
+      if (tree_sha === 'truncatedsha') return {data:{truncated:true,tree:[]}};
+      if (tree_sha === 'deletedsha' || tree_sha === 'mergedsha11')
+        return {data:{truncated:false,tree:[]}};
       const blob = tree_sha === 'badsha' ? 'badblob' : 'goodblob';
+      const mode = tree_sha === 'modesha' ? '100755' : '100644';
       return {data:{truncated:false,tree:[
-        {path:'feature.py',type:'blob',mode:'100644',sha:blob}
+        {path:'feature.py',type:'blob',mode,sha:blob}
       ]}};
     }}
   }
@@ -206,8 +217,9 @@ console.log(JSON.stringify({eligible,paginated,compared}));
     assert actual["eligible"] == [
         {"name": "feat/integrated", "sha": "oldsha", "pr": 1},
         {"name": "feat/unique", "sha": "uniquesha", "pr": 2},
+        {"name": "feat/deleted", "sha": "deletedsha", "pr": 11},
     ]
-    assert actual["compared"] >= 7
+    assert actual["compared"] >= 13
 
 
 def test_squash_reconciliation_requires_complete_fork_delta_and_merge_tree_parity() -> None:
