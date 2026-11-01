@@ -25,7 +25,7 @@ ALERT_TABLE = "network_safety_alert_receipts"
 CATEGORIES = ("harassment", "scam", "spam", "raid", "threats", "other")
 _SNOWFLAKE = re.compile(r"^[0-9]{15,22}$")
 _EVENT_LIMIT = 150
-_DISPLAY_LIMIT = 12
+_DISPLAY_LIMIT = 40
 
 
 def _id(value: Any) -> str:
@@ -249,7 +249,7 @@ def advisory_text(subject_id: int, reports: list[dict[str, Any]]) -> str:
     lines = [
         "🛡️ **Dank Shield Safety Network advisory**",
         f"A member just joined: Discord account `{subject_id}`.",
-        f"{len(reports)} active owner-attested report(s) from participating servers.",
+        f"Up to {len(reports)} active owner-attested report(s) from participating servers.",
         "**These are reports, not proven wrongdoing. Review before taking action.**",
     ]
     for row in reports[:4]:
