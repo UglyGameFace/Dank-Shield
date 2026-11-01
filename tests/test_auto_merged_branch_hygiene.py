@@ -67,8 +67,13 @@ def test_never_force_clean_unverified_or_prod_branches() -> None:
     assert "aaa-cinema-pre-pregateway-bind" in workflow
     assert "backup/stoneyverify-stable" in workflow
     assert "vars.DANK_DISCLOUD_DEPLOY_BRANCH" in workflow
-    assert "if (candidates.length > 20)" in workflow
+    assert "Math.ceil(eligibleCandidates.length / 20)" in workflow
+    assert "eligibleCandidates.slice(candidateStart, candidateStart + 20)" in workflow
+    assert "eligibleCandidates.length > candidates.length" in workflow
+    assert "throw new Error('More than 20 temporary branches" not in workflow
     assert "allBranches.length > 250" in workflow
+    assert "core.warning('Large repository: processing only a bounded opt-in batch')" in workflow
+    assert "throw new Error('Branch count too large" not in workflow
     assert "after.length >= 75" in workflow
     assert "github.rest.git.deleteRef" in workflow
     assert "github.event.pull_request" not in workflow
