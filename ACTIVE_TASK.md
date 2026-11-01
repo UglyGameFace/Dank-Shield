@@ -1,3 +1,13 @@
+## OWNER-COMMENT RETIREMENT INTEGRATION (2026-11-01 17:44 UTC)
+
+- **Observed main:** `181c05f494b134ab6c1f5bdddcb61b11fe17ff80` after merged #788; exact-main CI #41330456025 succeeded. Main is not proof of the live Discloud build.
+- **Branches:** 131 live refs (100 + 31), including the active #789 working branch; **actual branch deletions: 0**. No verified live Discloud-linked branch evidence is available, so destructive retirement remains blocked. The 75-ref warning is not the gate.
+- **Active PR #789:** Repaired the owner-comment relay to invoke the existing cleanup as a reusable workflow, rather than dispatching as a bot actor that fails the owner check. Kept one guarded deletion implementation and exact actor/comment/PR validation. JavaScript validation simulation passed valid preview/deletion delegation and rejected invalid requests. Exact-head CI must pass before merge.
+- **Preserve:** Unique/unmerged campaign migration branch, historical branch-retirement branch with unique commits, deployment/recovery/backup refs, dedicated Supabase primary, original IdleGrowOp rollback, and isolated Discloud PostgreSQL backup candidate.
+- **Next:** Finish exact-head CI and merge #789 if safe, verify exact-main CI, then require independent live Discloud ref evidence and owner-reviewed preview token before any branch deletion. No production, credential or database changes.
+
+---
+
 ## CURRENT BRANCH INTEGRATION / RETIREMENT (2026-11-01 16:55 UTC)
 
 - **Canonical main:** `eba1d2cbcf3a2369e5e2ab3dcab29ac2b7cebfde`, containing merged #787. Exact-main CI run #41327638726 passed. Main is **not** independently proven to be the live Discloud build.
