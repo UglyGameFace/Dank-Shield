@@ -62,16 +62,19 @@ jobs:
             if (Object.keys(input).some(key => !fields.has(key))) {
               throw new Error('Unexpected field in cleanup command');
             }
-            if (!['preview-reviewed-merged','delete-reviewed-merged']
+            if (!['preview','delete','preview-reviewed-merged','delete-reviewed-merged']
                   .includes(input.mode)) {
-              throw new Error('Only owner-reviewed historical cleanup is supported');
+              throw new Error('Only guarded opt-in or owner-reviewed cleanup is supported');
             }
             const branch = String(input.live_discloud_branch || '').trim();
             const ack = String(input.live_discloud_branch_ack || '');
             const confirmation = String(input.confirmation || '');
-            if (input.mode === 'delete-reviewed-merged') {
+            if (input.mode === 'delete-reviewed-merged' || input.mode === 'delete') {
+              const expectedToken = input.mode === 'delete'
+                ? /^DELETE_OPT_IN_[0-9A-F]{16}$/
+                : /^DELETE_REVIEWED_[0-9A-F]{16}$/;
               if (!branch || ack !== 'I_VERIFIED_LIVE_DISCLOUD_BRANCH' ||
-                  !/^DELETE_REVIEWED_[0-9A-F]{16}$/.test(confirmation)) {
+                  !expectedToken.test(confirmation)) {
                 throw new Error('Delete requires verified live branch, owner attestation, and exact preview token');
               }
             } else if (confirmation) {
