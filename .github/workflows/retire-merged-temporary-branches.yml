@@ -137,14 +137,16 @@ jobs:
             // The original branch SHA is archived before any deletion.
             const equivalentAtMerge = async (branch, pr, graph) => {
               const fork = graph.merge_base_commit?.sha;
-              if (!fork || graph.ahead_by < 1 || graph.ahead_by > 100) return false;
+              if (!fork || !Number.isInteger(graph.ahead_by) ||
+                  graph.ahead_by < 1 || graph.ahead_by > 100) return false;
               const delta = (await github.rest.repos.compareCommits({
                 owner, repo, base: fork, head: branch.commit.sha
               })).data;
               // GitHub's compare files cap is 300. Hold oversized/unknown
               // changes rather than accidentally comparing a partial list.
               if (delta.status !== 'ahead' || delta.ahead_by !== graph.ahead_by ||
-                  delta.total_commits > 100 || !Array.isArray(delta.files) ||
+                  !Number.isInteger(delta.total_commits) || delta.total_commits > 100 ||
+                  !Array.isArray(delta.files) ||
                   !delta.files.length || delta.files.length >= 300) return false;
               const paths = new Set();
               for (const file of delta.files) {
@@ -161,7 +163,9 @@ jobs:
                   owner, repo, tree_sha: branch.commit.sha, recursive: 'true'
                 }),
               ]);
-              if (merged.data.truncated || branchTree.data.truncated) return false;
+              if (merged.data.truncated || branchTree.data.truncated ||
+                  !Array.isArray(merged.data.tree) ||
+                  !Array.isArray(branchTree.data.tree)) return false;
               const entries = tree => new Map(tree.data.tree
                 .filter(x => x.type !== 'tree')
                 .map(x => [x.path, {sha:x.sha, mode:x.mode, type:x.type}]));
