@@ -140,3 +140,48 @@ def test_well_formed_delete_delegates_all_remaining_guards():
     # This is a relay-only test: the protected target workflow still validates
     # that the branch is truly the owner-verified live one, and that the SHA-
     # bound token matches the latest preview. No real GitHub refs are deleted.
+
+
+def test_owner_opt_in_preview_delegates_to_same_guarded_workflow():
+    out = _run({
+        "mode": "preview",
+        "live_discloud_branch": "main",
+        "live_discloud_branch_ack": "I_VERIFIED_LIVE_DISCLOUD_BRANCH",
+    })
+    assert out["success"]
+    assert out["outputs"] == {
+        "mode": "preview",
+        "confirmation": "",
+        "live_discloud_branch": "main",
+        "live_discloud_branch_ack": "I_VERIFIED_LIVE_DISCLOUD_BRANCH",
+    }
+
+
+def test_owner_opt_in_delete_requires_exact_token_and_verified_branch():
+    token = "DELETE_OPT_IN_" + "A" * 16
+    out = _run({
+        "mode": "delete",
+        "live_discloud_branch": "main",
+        "live_discloud_branch_ack": "I_VERIFIED_LIVE_DISCLOUD_BRANCH",
+        "confirmation": token,
+    })
+    assert out["success"]
+    assert out["outputs"]["mode"] == "delete"
+    assert out["outputs"]["confirmation"] == token
+
+
+@pytest.mark.parametrize("input_json", [
+    {"mode": "delete", "live_discloud_branch": "main",
+     "live_discloud_branch_ack": "I_VERIFIED_LIVE_DISCLOUD_BRANCH",
+     "confirmation": "DELETE_REVIEWED_" + "A" * 16},
+    {"mode": "delete", "live_discloud_branch": "main",
+     "live_discloud_branch_ack": "I_VERIFIED_LIVE_DISCLOUD_BRANCH",
+     "confirmation": "DELETE_OPT_IN_" + "A" * 15},
+    {"mode": "preview", "confirmation": "DELETE_OPT_IN_" + "A" * 16},
+    {"mode": "delete", "live_discloud_branch": "main",
+     "confirmation": "DELETE_OPT_IN_" + "A" * 16},
+])
+def test_opt_in_relay_rejects_missing_or_mismatched_proof(input_json):
+    out = _run(input_json)
+    assert not out["success"]
+    assert not out["outputs"]
