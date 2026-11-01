@@ -23,3 +23,17 @@ The existing target workflow checks the inherited owner comment, owner, actual b
 Never set DANK_DISCLOUD_DEPLOY_BRANCH to main just to bypass missing deployment evidence. A branch name is not independent proof of what Discloud runs.
 
 Run preview/delete in small batches. Zero active branches besides main is a longer-term target only after all unique changes are integrated or archived under durable non-branch refs. Neither this relay nor the cleanup workflow deploys code, mutates the database, or changes credentials.
+
+## Owner-only opt-in temporary branch retirement
+
+The same authenticated PR #788 comment relay also supports `work/dankshield-*-YYYYMMDD` and `migration/dankshield-*-YYYYMMDD` opt-in refs. These are **not** historical feat/fix refs. The canonical workflow still requires exactly one closed, merged PR with the exact current branch head, verified main ancestry, no active PR dependency, an existing owner-verified deployment branch, and an exact archive tag before deleting anything. Divergent or unmatched refs remain held.
+
+First comment after independently checking the actual live Discloud-linked GitHub branch:
+
+`DANK_SHIELD_CLEANUP_V1 {"mode":"preview","live_discloud_branch":"ACTUAL_VERIFIED_LIVE_BRANCH","live_discloud_branch_ack":"I_VERIFIED_LIVE_DISCLOUD_BRANCH"}`
+
+The workflow logs `Opt-in retirement preview` with exact branch SHAs and `Opt-in retirement confirmation token: DELETE_OPT_IN_...`. Review the plan. Then, only for an approved nonempty batch, comment:
+
+`DANK_SHIELD_CLEANUP_V1 {"mode":"delete","live_discloud_branch":"ACTUAL_VERIFIED_LIVE_BRANCH","live_discloud_branch_ack":"I_VERIFIED_LIVE_DISCLOUD_BRANCH","confirmation":"DELETE_OPT_IN_0123456789ABCDEF"}`
+
+Use the actual token, not the placeholder. The opt-in token is bound to the current main SHA, the entire rotating candidate batch (names and SHAs), and the live deployment branch. Moving refs or a different scan window invalidates the token; re-preview rather than retrying stale confirmation. The owner relay cannot delete directly, and the target rechecks PRs, ancestry, ref leases, and archive SHAs. Automatic scheduled cleanup remains archive-only without a configured verified deployment ref. These commands never deploy or modify databases.
