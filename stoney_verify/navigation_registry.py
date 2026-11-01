@@ -539,7 +539,7 @@ FEATURE_GROUPS: dict[str, str] = {
     "community_hub": "Events & meetups",
     "embed_studio": "Create messages",
     "server_design": "Server appearance",
-    "card_assets": "Server appearance",
+    "card_assets": "Welcome & Exit",
     "status": "Check bot health",
     "diagnostics": "Check bot health",
     "logs_activity": "Server logs & counters",
