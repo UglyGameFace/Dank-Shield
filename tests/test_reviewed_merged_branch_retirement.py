@@ -133,16 +133,24 @@ def test_reviewed_pr_inventory_executable_keeps_only_integrated_unique_head() ->
     segment = text.split("              const allPRs = await", 1)[1]
     segment = "const allPRs = await" + segment.split("              eligible.sort(", 1)[0]
     segment = textwrap.dedent(segment)
+    equivalent = text.split("            const equivalentAtMerge = ", 1)[1]
+    equivalent = "const equivalentAtMerge = " + equivalent.split(
+        "            const reviewed = ", 1
+    )[0]
+    equivalent = textwrap.dedent(equivalent)
     js = r"""
 const owner = 'UglyGameFace', repo = 'Dank-Shield';
 const fullName = owner + '/' + repo, mainSha = 'mainsha';
-const reconciledSquash = new Map();
 const inUse = new Set(['feat/open']);
 const safeName = name => name.startsWith('feat/');
 const cutoff = Date.now() - 48 * 60 * 60 * 1000;
 const branches = [
   {name:'feat/integrated',protected:false,commit:{sha:'oldsha'}},
   {name:'feat/unique',protected:false,commit:{sha:'uniquesha'}},
+  {name:'feat/unique-bad',protected:false,commit:{sha:'badsha'}},
+  {name:'feat/mode-bad',protected:false,commit:{sha:'modesha'}},
+  {name:'feat/truncated',protected:false,commit:{sha:'truncatedsha'}},
+  {name:'feat/deleted',protected:false,commit:{sha:'deletedsha'}},
   {name:'feat/multi',protected:false,commit:{sha:'multisha'}},
   {name:'feat/open',protected:false,commit:{sha:'opensha'}},
   {name:'backup/retained',protected:false,commit:{sha:'backupsha'}}
@@ -151,11 +159,15 @@ const mkpr = (ref, sha, n) => ({
   number:n, state:'closed', merged_at:'2026-10-01T00:00:00Z',
   head:{repo:{full_name:fullName},ref,sha},
   base:{repo:{full_name:fullName},ref:'main'},
-  merge_commit_sha:'mergedsha'
+  merge_commit_sha:'mergedsha' + n
 });
 const records = [
   mkpr('feat/integrated','oldsha',1),
   mkpr('feat/unique','uniquesha',2),
+  mkpr('feat/unique-bad','badsha',8),
+  mkpr('feat/mode-bad','modesha',9),
+  mkpr('feat/truncated','truncatedsha',10),
+  mkpr('feat/deleted','deletedsha',11),
   mkpr('feat/multi','multisha',3),
   mkpr('feat/multi','multisha',4),
   mkpr('feat/open','opensha',5),
@@ -171,12 +183,28 @@ const github = {
     repos: {compareCommits: async ({base,head}) => {
       compared++;
       if (base === mainSha) return {data:{
-        ahead_by:head === 'uniquesha' ? 1 : 0,
-        status:head === 'uniquesha' ? 'diverged' : 'behind'}};
+        ahead_by:['uniquesha','badsha','modesha','truncatedsha','deletedsha'].includes(head) ? 1 : 0,
+        status:['uniquesha','badsha','modesha','truncatedsha','deletedsha'].includes(head) ? 'diverged' : 'behind',
+        merge_base_commit:{sha:'forksha'}}};
+      if (base === 'forksha') return {data:{
+        status:'ahead',ahead_by:1,total_commits:1,
+        files:[{filename:head === 'deletedsha' ? 'old.py' : 'feature.py',
+          status:head === 'deletedsha' ? 'removed' : 'modified'}]}};
       return {data:{behind_by:0,status:'ahead'}};
+    }},
+    git: {getTree: async ({tree_sha}) => {
+      if (tree_sha === 'truncatedsha') return {data:{truncated:true,tree:[]}};
+      if (tree_sha === 'deletedsha' || tree_sha === 'mergedsha11')
+        return {data:{truncated:false,tree:[]}};
+      const blob = tree_sha === 'badsha' ? 'badblob' : 'goodblob';
+      const mode = tree_sha === 'modesha' ? '100755' : '100644';
+      return {data:{truncated:false,tree:[
+        {path:'feature.py',type:'blob',mode,sha:blob}
+      ]}};
     }}
   }
 };
+""" + equivalent + r"""
 (async () => {
 """ + segment + r"""
 console.log(JSON.stringify({eligible,paginated,compared}));
@@ -187,25 +215,33 @@ console.log(JSON.stringify({eligible,paginated,compared}));
     actual = json.loads(result.stdout)
     assert actual["paginated"] == 1
     assert actual["eligible"] == [
-        {"name": "feat/integrated", "sha": "oldsha", "pr": 1}
+        {"name": "feat/integrated", "sha": "oldsha", "pr": 1},
+        {"name": "feat/unique", "sha": "uniquesha", "pr": 2},
+        {"name": "feat/deleted", "sha": "deletedsha", "pr": 11},
     ]
-    assert actual["compared"] == 3
+    assert actual["compared"] >= 13
 
 
-def test_exact_squash_reconciliation_requires_byte_identical_pr_files() -> None:
+def test_squash_reconciliation_requires_complete_fork_delta_and_merge_tree_parity() -> None:
     text = _workflow()
-    assert "'fix/branch-retirement-bulk-pr-index-20261101'" in text
-    assert "sha: 'c502704497fe286e5a5f84df06bb8efd2059c41a'" in text
-    assert "merge: '1df01a3120e444a229d68255265026353bc849cb'" in text
-    assert "pr.number !== proof.pr" in text
-    assert "pr.head.sha !== proof.sha" in text
-    assert "github.paginate(github.rest.pulls.listFiles" in text
-    assert "github.rest.git.getTree" in text
-    assert "JSON.stringify(paths)" in text
-    assert "mainTree.data.truncated || branchTree.data.truncated" in text
-    assert "headBlobs.get(path) === mainBlobs.get(path)" in text
-    assert "if (!proof.files.every(path =>" in text
-    assert "reconciledSquash.get(branch.name)" in text
-    assert "branchGraph.ahead_by !== 0" in text
-    assert "archive.object.sha !== item.sha" in text
-    assert "current.commit.sha !== item.sha" in text
+    for proof in (
+        "const equivalentAtMerge = async (branch, pr, graph) =>",
+        "graph.merge_base_commit?.sha",
+        "graph.ahead_by > 100",
+        "Number.isInteger(graph.ahead_by)",
+        "Number.isInteger(delta.total_commits)",
+        "Array.isArray(merged.data.tree)",
+        "delta.total_commits > 100",
+        "delta.files.length >= 300",
+        "tree_sha: pr.merge_commit_sha",
+        "tree_sha: branch.commit.sha",
+        "merged.data.truncated || branchTree.data.truncated",
+        "file.previous_filename",
+        "a.sha === b.sha && a.mode === b.mode && a.type === b.type",
+        "await equivalentAtMerge(branch, pr, branchGraph)",
+        "archive.object.sha !== item.sha",
+        "current.commit.sha !== item.sha",
+    ):
+        assert proof in text
+    assert "reconciledSquash" not in text
+    assert "tree_sha: mainSha" not in text
