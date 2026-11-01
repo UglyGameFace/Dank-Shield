@@ -196,3 +196,62 @@ def test_migration_grants_only_backend_service_role_and_defaults_off():
     assert "ALTER TABLE public.network_safety_events ENABLE ROW LEVEL SECURITY" in sql
     assert "GRANT EXECUTE ON FUNCTION public.claim_network_safety_alert" in sql
     assert "TO service_role" in sql
+
+
+def test_neutral_consent_creation_does_not_publish_anything(monkeypatch):
+    class DB:
+        def __init__(self): self.saved = None
+        def table(self, name):
+            assert name == network.CONSENT_TABLE
+            return self
+        def select(self, *_): return self
+        def eq(self, *_): return self
+        def limit(self, *_): return self
+        def upsert(self, payload, on_conflict):
+            assert on_conflict == "guild_id"
+            self.saved = dict(payload)
+            return self
+        def execute(self):
+            return SimpleNamespace(data=[self.saved] if self.saved else [])
+
+    db = DB()
+    monkeypatch.setattr(network, "get_supabase", lambda: db)
+    result = network.set_network_consent(A, OWNER_A, "Test Guild",
+                                         publish=False, receive=False)
+    assert result["publish_enabled"] is False
+    assert result["receive_enabled"] is False
+    assert result["owner_id"] == str(OWNER_A)
+
+
+def test_other_preference_remains_enabled_on_explicit_toggle(monkeypatch):
+    class DB:
+        def __init__(self):
+            self.saved = {"guild_id": str(A), "owner_id": str(OWNER_A),
+                          "publish_enabled": True, "receive_enabled": False}
+        def table(self, *_): return self
+        def select(self, *_): return self
+        def eq(self, *_): return self
+        def limit(self, *_): return self
+        def upsert(self, payload, on_conflict):
+            self.saved = dict(payload)
+            return self
+        def execute(self): return SimpleNamespace(data=[self.saved])
+
+    db = DB()
+    monkeypatch.setattr(network, "get_supabase", lambda: db)
+    result = network.set_network_consent(A, OWNER_A, "Test Guild", receive=True)
+    assert result["publish_enabled"] is True
+    assert result["receive_enabled"] is True
+
+
+def test_private_review_pages_cover_every_returned_report():
+    from stoney_verify.commands_ext.public_network_safety import NetworkReportPages
+    reports = [row(str(i), A, created=f"2026-11-{(i % 20)+1:02d}T00:00:00+00:00")
+               for i in range(9)]
+    shown = []
+    for page in range(3):
+        view = NetworkReportPages(SUBJECT, reports, page)
+        embed = view.embed()
+        shown.extend([field.value for field in embed.fields])
+        assert len(embed.fields) <= 4
+    assert len(shown) == 9
