@@ -1,4 +1,4 @@
-## LIVE INTEGRATION CHECKPOINT (2026-11-01 09:20 UTC)
+## LIVE INTEGRATION CHECKPOINT (2026-11-01 UTC, after PR #784 merge)
 
 - **Canonical main:** `1d24e0d8feb9b76247040c53c304b0ee8da99d3a` after merging PR #784. Its exact-main push CI is pending, so do not call it release-ready.
 - **Member sync integration:** PR #784 merged after all four exact-head workflows passed at `cd5f4610411d0fd24772d1ddc23342b490c867a7`. Source merged only; production Supabase write improvement, egress and Discloud deployment remain unverified. Dedicated Supabase `viamriafkbqhquvrsnua` stays primary; original IdleGrowOp rollback source and isolated Discloud PostgreSQL candidate remain untouched.
