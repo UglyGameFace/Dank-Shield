@@ -8,6 +8,7 @@ proof of misconduct or an alternative account.
 """
 
 import asyncio
+from datetime import datetime, timezone
 from typing import Any
 
 
@@ -22,6 +23,42 @@ def _id(value: Any) -> str:
 
 def _text(value: Any, limit: int = 90) -> str:
     return str(value or "").strip()[:limit]
+
+
+def _recorded_join_event(row: dict[str, Any]) -> dict[str, Any] | None:
+    """Accept only original, timestamp-consistent guild-scoped join events.
+
+    A retained event proves that an attribution was recorded at that join,
+    never that users are friends, alternate identities or current members.
+    """
+    metadata = row.get("metadata")
+    if row.get("event_type") != "member_joined" or not isinstance(metadata, dict):
+        return None
+    joined_at = metadata.get("joined_at")
+    created_at = row.get("created_at")
+    if not joined_at or not created_at:
+        return None
+    try:
+        joined = datetime.fromisoformat(str(joined_at).replace("Z", "+00:00"))
+        created = datetime.fromisoformat(str(created_at).replace("Z", "+00:00"))
+        if joined.tzinfo is None:
+            joined = joined.replace(tzinfo=timezone.utc)
+        if created.tzinfo is None:
+            created = created.replace(tzinfo=timezone.utc)
+        if abs((created - joined).total_seconds()) > 60:
+            return None
+    except (TypeError, ValueError, OverflowError):
+        return None
+    user_id = _id(row.get("user_id"))
+    if not user_id:
+        return None
+    return {
+        "user_id": user_id,
+        "invited_by": _id(metadata.get("invited_by")),
+        "vouched_by": _id(metadata.get("vouched_by")),
+        "entry_truth_quality": _text(metadata.get("entry_truth_quality")),
+        "entry_conflict": metadata.get("entry_conflict") is True,
+    }
 
 
 def build_connection_report(
@@ -67,6 +104,41 @@ def build_connection_report(
             else:
                 record(inviter, "This user's join was attributed to that inviter", "social", "member join history")
         record(row.get("vouched_by"), "That user vouched for this user's entry", "social", "member join history")
+
+    # Recover recorded historical relationships when member_joins insertion
+    # failed. These are historical join events, not present-tense claims.
+    for row in source.get("event_target", []) + source.get("event_related", []):
+        member_id = _id(row.get("user_id"))
+        if not member_id:
+            continue
+        quality = _text(row.get("entry_truth_quality")).lower()
+        confirmed = (not row.get("entry_conflict") and quality in {
+            "confirmed", "verified", "high", "high_confidence", "exact", "trusted"
+        })
+        inviter = _id(row.get("invited_by"))
+        voucher = _id(row.get("vouched_by"))
+        if member_id == uid:
+            if inviter:
+                record(
+                    inviter,
+                    "Historical join event: recorded inviter" if confirmed else
+                    "Historical join event: possible inviter (unconfirmed)",
+                    "social" if confirmed else "weak", "original member_joined event",
+                )
+            if voucher:
+                record(voucher, "Historical join event: recorded vouch", "social",
+                       "original member_joined event")
+        else:
+            if inviter == uid:
+                record(
+                    member_id,
+                    "Historical join event: this user was recorded as inviter" if confirmed else
+                    "Historical join event: possible inviter (unconfirmed)",
+                    "social" if confirmed else "weak", "original member_joined event",
+                )
+            if voucher == uid:
+                record(member_id, "Historical join event: this user vouched for entry",
+                       "social", "original member_joined event")
 
     for row in source.get("manual_a", []) + source.get("manual_b", []):
         a, b = _id(row.get("user_a_id")), _id(row.get("user_b_id"))
@@ -162,34 +234,67 @@ def _read_connection_report(guild_id: int, user_id: int) -> dict[str, Any]:
             source[key] = []
             # No silent success on schema/permission/egress failure.
             errors.append(f"{key} could not be read ({type(exc).__name__}).")
+    # Query original join evidence only when a moderator requests a report.
+    # actor_id is not by itself an inviter: staff approval also uses actor_id,
+    # so reverse candidates are accepted only when metadata explicitly names
+    # this member as inviter or voucher.
+    event_count = 0
+    recovered_count = 0
+    event_truncated = False
+    for key, field in (("event_target", "user_id"), ("event_related", "actor_id")):
+        source[key] = []
+        try:
+            response = (
+                db.table("member_events")
+                .select("user_id,actor_id,event_type,metadata,created_at")
+                .eq("guild_id", gid)
+                .eq("event_type", "member_joined")
+                .eq(field, uid)
+                .limit(_QUERY_LIMIT)
+                .execute()
+            )
+            rows = getattr(response, "data", None) or []
+            event_count += len(rows)
+            event_truncated |= len(rows) >= _QUERY_LIMIT
+            for raw in rows:
+                if not isinstance(raw, dict):
+                    continue
+                event = _recorded_join_event(raw)
+                if not event:
+                    continue
+                if key == "event_target":
+                    if event["user_id"] != uid:
+                        continue
+                elif _id(raw.get("actor_id")) != uid or not (
+                    event["invited_by"] == uid or event["vouched_by"] == uid
+                ):
+                    continue
+                source[key].append(event)
+                if event["invited_by"] or event["vouched_by"]:
+                    recovered_count += 1
+        except Exception as exc:
+            errors.append(f"{key} join-event evidence unavailable ({type(exc).__name__}).")
+
     report = build_connection_report(target_id=uid, source=source, errors=errors)
-    # An empty graph is not an exhaustive investigation. Member events can
-    # establish that an account was observed even when join-history ingestion
-    # failed; they do not establish identity or social relationships.
-    report["history_status"] = "unknown"
-    report["history_events"] = 0
-    if source.get("target") or source.get("join_target"):
-        report["history_status"] = "member_record_found"
-    try:
-        result = (db.table("member_events").select("id")
-                  .eq("guild_id", gid).eq("user_id", uid)
-                  .limit(_QUERY_LIMIT).execute())
-        events = getattr(result, "data", None) or []
-        report["history_events"] = len(events)
-        if events and report["history_status"] == "unknown":
-            report["history_status"] = "events_only"
-        if len(events) >= _QUERY_LIMIT:
-            report["coverage"] = "partial"
-            report["truncated"] = True
-    except Exception:
-        report["errors"].append("Member event history could not be read.")
+    report["history_events"] = event_count
+    report["recovered_join_events"] = recovered_count
+    report["history_status"] = (
+        "member_record_found" if source.get("target") or source.get("join_target")
+        else "events_only" if source.get("event_target") else "unknown"
+    )
+    if event_truncated:
+        report["truncated"] = True
         report["coverage"] = "partial"
     if not source.get("join_target") and report["history_status"] != "unknown":
-        report["history_gap"] = "No join-history row for this recorded account; event history cannot reconstruct invite or identity links."
+        report["history_gap"] = (
+            "No join-history row for this account; only individually recorded "
+            "historical join events can support recovered relationships."
+        )
         report["coverage"] = "partial"
     if not report["matches"]:
         report["history_gap"] = report.get("history_gap") or (
-            "No relationship evidence was recorded. Unrecorded friendships and alternate accounts cannot be inferred."
+            "No recorded relationship evidence was recovered. Unrecorded "
+            "friendships and alternate accounts cannot be inferred."
         )
         report["coverage"] = "partial"
     return report
