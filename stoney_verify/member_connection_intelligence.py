@@ -62,6 +62,103 @@ def _recorded_join_event(row: dict[str, Any]) -> dict[str, Any] | None:
     }
 
 
+_OWNER_AFFILIATION_EVENT = "owner_affiliation_review"
+_OWNER_AFFILIATION_MODES = {
+    "known": "Owner reports a known association (not identity proof)",
+    "possible": "Owner reports a possible association (unverified)",
+    "cleared": "Owner withdrew or ruled out the association claim",
+}
+
+
+def save_owner_affiliation(
+    *, guild_id: int, target_id: int, other_id: int, actor_id: int,
+    mode: str, reason: str,
+) -> None:
+    """Append a guild-owner relationship review to the existing event ledger.
+
+    This deliberately avoids manual_alt_links and the ban/risk engine.
+    The Discord controller MUST verify guild owner identity before calling.
+    """
+    from .globals import get_supabase
+
+    gid, a, b, actor = (_id(value) for value in (
+        guild_id, target_id, other_id, actor_id,
+    ))
+    if not all((gid, a, b, actor)) or a == b:
+        raise ValueError("Choose two distinct valid account IDs.")
+    if any(not 15 <= len(value) <= 22 for value in (a, b)):
+        raise ValueError("Account IDs must contain 15 to 22 digits.")
+    if mode not in _OWNER_AFFILIATION_MODES:
+        raise ValueError("Unknown relationship review choice.")
+    note = str(reason or "").strip()
+    if not 8 <= len(note) <= 500:
+        raise ValueError("Provide an explanation between 8 and 500 characters.")
+    first, second = sorted((a, b), key=int)
+    db = get_supabase()
+    if db is None:
+        raise RuntimeError("Relationship storage is unavailable.")
+    db.table("member_events").insert({
+        "guild_id": gid,
+        "user_id": first,
+        "actor_id": actor,
+        "event_type": _OWNER_AFFILIATION_EVENT,
+        "title": "Owner-reviewed account association",
+        "reason": note,
+        "source": "connection_intelligence_owner_review",
+        "metadata": {
+            "other_user_id": second,
+            "relation": mode,
+            "origin": "owner_report",
+            "does_not_prove_identity": True,
+        },
+    }).execute()
+
+
+def _read_owner_affiliations(db: Any, gid: str, uid: str) -> tuple[list[dict[str, Any]], list[str], bool]:
+    """Latest owner decision for each pair; never overwrite original events."""
+    results: dict[str, dict[str, Any]] = {}
+    errors: list[str] = []
+    partial = False
+    for field in ("user_id", "metadata->>other_user_id"):
+        try:
+            response = (
+                db.table("member_events")
+                .select("id,user_id,event_type,metadata,created_at")
+                .eq("guild_id", gid)
+                .eq("event_type", _OWNER_AFFILIATION_EVENT)
+                .eq(field, uid).limit(_QUERY_LIMIT).execute()
+            )
+            rows = getattr(response, "data", None) or []
+            partial |= len(rows) >= _QUERY_LIMIT
+            for row in rows:
+                if not isinstance(row, dict) or row.get("event_type") != _OWNER_AFFILIATION_EVENT:
+                    continue
+                meta = row.get("metadata")
+                if not isinstance(meta, dict) or meta.get("origin") != "owner_report":
+                    continue
+                a, b = _id(row.get("user_id")), _id(meta.get("other_user_id"))
+                if not a or not b or a == b or uid not in (a, b):
+                    continue
+                mode = str(meta.get("relation") or "")
+                if mode not in _OWNER_AFFILIATION_MODES:
+                    continue
+                other = b if a == uid else a
+                # Append-only ledger: newest record supersedes earlier
+                # decisions for this same pair. No historical deletion.
+                version = (str(row.get("created_at") or ""), str(row.get("id") or ""))
+                if other not in results or version > results[other]["_version"]:
+                    results[other] = {
+                        "user_id": other, "mode": mode, "_version": version,
+                    }
+        except Exception as exc:
+            partial = True
+            errors.append(f"Owner association reviews unavailable ({type(exc).__name__}).")
+    return [
+        {"user_id": value["user_id"], "mode": value["mode"]}
+        for value in results.values()
+    ], errors, partial
+
+
 def build_connection_report(
     *, target_id: str, source: dict[str, list[dict[str, Any]]],
     errors: list[str] | None = None,
@@ -146,6 +243,18 @@ def build_connection_report(
                 record(member_id, "Historical join event: this user vouched for entry",
                        "social", "original member_joined event")
 
+    # Owner-recorded affiliation is an allegation/context, NOT proof that
+    # accounts share an identity, and must never feed automated punishment.
+    for row in source.get("owner_affiliations", []):
+        other = row.get("user_id")
+        mode = row.get("mode")
+        if mode == "known":
+            record(other, _OWNER_AFFILIATION_MODES[mode], "owner_affiliate", "owner review ledger")
+        elif mode == "possible":
+            record(other, _OWNER_AFFILIATION_MODES[mode], "possible_affiliate", "owner review ledger")
+        elif mode == "cleared":
+            record(other, _OWNER_AFFILIATION_MODES[mode], "owner_cleared", "owner review ledger")
+
     for row in source.get("manual_a", []) + source.get("manual_b", []):
         a, b = _id(row.get("user_a_id")), _id(row.get("user_b_id"))
         other = b if a == uid else a if b == uid else ""
@@ -160,7 +269,9 @@ def build_connection_report(
             record(other, "Staff marked possible duplicate account", "possible_identity", "manual_alt_links")
 
     ordered = []
-    priority = {"reviewed_identity": 0, "possible_identity": 1, "social": 2, "weak": 3}
+    priority = {"reviewed_identity": 0, "possible_identity": 1,
+                "social": 2, "owner_affiliate": 3, "possible_affiliate": 4,
+                "weak": 5, "owner_cleared": 6}
     for other, item in found.items():
         if other in suppressed:
             item["evidence"] = [e for e in item["evidence"] if e["kind"] not in
@@ -173,7 +284,10 @@ def build_connection_report(
             "reviewed identity record" if "reviewed_identity" in kinds else
             "possible identity link" if "possible_identity" in kinds else
             "documented server relationship" if "social" in kinds else
-            "unverified join relationship"
+            "owner-reported known affiliate" if "owner_affiliate" in kinds else
+            "owner-reported possible affiliate" if "possible_affiliate" in kinds else
+            "unverified join relationship" if "weak" in kinds else
+            "owner-cleared association"
         )
         item["priority"] = min(priority[k] for k in kinds)
         ordered.append(item)
@@ -303,7 +417,12 @@ def _read_connection_report(guild_id: int, user_id: int) -> dict[str, Any]:
         except Exception as exc:
             errors.append(f"{key} join-event evidence unavailable ({type(exc).__name__}).")
 
+    reviews, review_errors, review_partial = _read_owner_affiliations(db, gid, uid)
+    source["owner_affiliations"] = reviews
+    errors.extend(review_errors)
     report = build_connection_report(target_id=uid, source=source, errors=errors)
+    if review_partial:
+        report["coverage"] = "partial"
     report["history_events"] = event_count
     report["recovered_join_events"] = recovered_count
     report["history_status"] = (
