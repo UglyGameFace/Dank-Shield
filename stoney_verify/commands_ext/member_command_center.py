@@ -918,6 +918,18 @@ def _connection_embed(report: dict[str, Any]) -> discord.Embed:
             value=summary[:1024] or "Recorded relationship",
             inline=False,
         )
+    if report.get("history_gap"):
+        embed.add_field(
+            name="Missing evidence",
+            value=str(report["history_gap"])[:1024],
+            inline=False,
+        )
+    if report.get("history_status") and report["history_status"] != "unknown":
+        embed.add_field(
+            name="Retained history",
+            value=f"Account record: {report['history_status']} • Member events checked: {report.get('history_events', 0)}",
+            inline=False,
+        )
     if not matches:
         embed.add_field(
             name="No verified relationship in available records",
