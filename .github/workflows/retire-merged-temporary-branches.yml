@@ -210,15 +210,19 @@ jobs:
                   a.sha === b.sha && a.mode === b.mode && a.type === b.type);
               });
             };
-            // A feature/fix that implements recovery is not a recovery checkpoint.
+            // Feature recovery/release behavior is not a recovery or release checkpoint.
             // Continue holding recovery/*, backups, deployment, database and
             // rollback refs. All candidates still need exact PR/main proof.
             const hasHeldHistoricalSegment = (name, held) =>
               name.split(/[\\/_-]+/).some(part => {
                 const segment = part.toLowerCase();
-                return held.has(segment) &&
-                  !(segment === 'recovery' &&
-                    (name.startsWith('feat/') || name.startsWith('fix/')));
+                const feature = name.startsWith('feat/');
+                const fix = name.startsWith('fix/');
+                // Recovery and release describe product behavior in these
+                // namespaces, not a deployment/restore checkpoint.
+                const functional = (segment === 'recovery' && (feature || fix)) ||
+                  (segment === 'release' && feature);
+                return held.has(segment) && !functional;
               });
             const reviewed = mode === 'preview-reviewed-merged' || mode === 'delete-reviewed-merged';
             if (reviewed) {
