@@ -109,13 +109,13 @@ names.
 | Key | Category | Purpose |
 | --- | --- | --- |
 | `setup` | ⚙️ Setup & Server Settings | Initial setup, mappings, permissions, configuration |
-| `access` | 🚪 Onboarding & Access | Verification reminders, agreements, Member Setup, welcome |
+| `access` | 🚪 Onboarding & Access | Verification reminders, agreements, Member Setup, welcome and card assets |
 | `actions` | 📋 Actions & Notifications | Action Inbox, reminder timing, member choice and notification settings |
 | `safety` | 🛡️ Safety & Moderation | Protection, AI Voice Safety, moderation, spam/invite safety |
 | `people` | 👥 Members, Roles & Profiles | Server roles and staff profile configuration |
 | `community` | 🌿 Community & Engagement | Toke Settings, Share Router Downloads, roles, pings, Hub |
 | `tickets` | 🎫 Tickets & Support | Ticket queues, routing, categories, forms, panels |
-| `design` | 🎨 Design & Branding | Server design, naming, cards, artwork, fonts |
+| `design` | 🎨 Design & Branding | Server appearance and Post Builder; welcome-card assets stay under Onboarding & Access |
 | `voice` | 🔊 Voice & Accessibility | AI Voice Safety, Live Captions, voice accessibility |
 | `ops` | 📊 Logs, Stats & Diagnostics | Logs, counters, status, diagnostics |
 | `my` | 👤 My Dank Shield | Member-owned profile/setup/community choices |
