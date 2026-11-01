@@ -189,3 +189,22 @@ console.log(JSON.stringify({eligible,paginated,compared}));
         {"name": "feat/integrated", "sha": "oldsha", "pr": 1}
     ]
     assert actual["compared"] == 3
+
+
+def test_exact_squash_reconciliation_requires_byte_identical_pr_files() -> None:
+    text = _workflow()
+    assert "'fix/branch-retirement-bulk-pr-index-20261101'" in text
+    assert "sha: 'c502704497fe286e5a5f84df06bb8efd2059c41a'" in text
+    assert "merge: '1df01a3120e444a229d68255265026353bc849cb'" in text
+    assert "pr.number !== proof.pr" in text
+    assert "pr.head.sha !== proof.sha" in text
+    assert "github.paginate(github.rest.pulls.listFiles" in text
+    assert "github.rest.git.getTree" in text
+    assert "JSON.stringify(paths)" in text
+    assert "mainTree.data.truncated || branchTree.data.truncated" in text
+    assert "headBlobs.get(path) === mainBlobs.get(path)" in text
+    assert "if (!proof.files.every(path =>" in text
+    assert "reconciledSquash.get(branch.name)" in text
+    assert "branchGraph.ahead_by !== 0" in text
+    assert "archive.object.sha !== item.sha" in text
+    assert "current.commit.sha !== item.sha" in text
