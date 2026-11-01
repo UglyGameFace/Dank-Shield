@@ -3480,18 +3480,41 @@ _SESSION_CONTROL_SECTIONS = {
 }
 
 
+class SessionControlSectionSelect(discord.ui.Select):
+    def __init__(self, owner_id: int, session_id: str, section: str) -> None:
+        self.owner_id = int(owner_id)
+        self.session_id = session_id
+        super().__init__(
+            placeholder="Choose session controls",
+            options=[
+                discord.SelectOption(label=label, value=key, default=section == key)
+                for key, label in (
+                    ("session", "Session Controls"),
+                    ("people", "People & Captions"),
+                    ("outside", "Outside Recruiting"),
+                )
+            ],
+            row=3,
+            custom_id="dank:hub:manage:section:v1",
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        view = SessionControlView(
+            self.owner_id, session_id=self.session_id, section=self.values[0],
+        )
+        await view._switch_section(interaction, self.values[0])
+
+
 class SessionControlView(_OwnedView):
     def __init__(self, owner_id: int, *, session_id: str, section: str = "session") -> None:
         super().__init__(owner_id)
         self.session_id = session_id
         self.section = section if section in _SESSION_CONTROL_SECTIONS else "session"
-        allowed = (_SESSION_CONTROL_SECTIONS[self.section] | {"Back to Group"})
-        for label, tab in (("Session", "session"), ("People", "people"), ("Outside", "outside")):
-            if tab != self.section:
-                allowed.add(label)
+        allowed = _SESSION_CONTROL_SECTIONS[self.section] | {"Back to Group"}
         for item in tuple(self.children):
             if getattr(item, "label", "") not in allowed:
                 self.remove_item(item)
+        self.add_item(SessionControlSectionSelect(self.owner_id, self.session_id, self.section))
 
     async def _transition(self, interaction: discord.Interaction, action: str, success: str) -> None:
         await _defer_update(interaction)
@@ -3834,25 +3857,6 @@ class SessionControlView(_OwnedView):
                 self.owner_id, session_id=self.session_id, section=section,
             ),
         )
-
-    @discord.ui.button(label="Session", emoji="🎮", style=discord.ButtonStyle.secondary,
-                       custom_id="dank:hub:manage:tab:session:v1", row=4)
-    async def tab_session(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        _ = button
-        await self._switch_section(interaction, "session")
-
-    @discord.ui.button(label="People", emoji="👥", style=discord.ButtonStyle.secondary,
-                       custom_id="dank:hub:manage:tab:people:v1", row=4)
-    async def tab_people(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        _ = button
-        await self._switch_section(interaction, "people")
-
-    @discord.ui.button(label="Outside", emoji="🌍", style=discord.ButtonStyle.secondary,
-                       custom_id="dank:hub:manage:tab:outside:v1", row=4)
-    async def tab_outside(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        _ = button
-        await self._switch_section(interaction, "outside")
-
 
 class CommunitySessionPublicView(discord.ui.View):
     def __init__(self, *, ended: bool = False) -> None:
