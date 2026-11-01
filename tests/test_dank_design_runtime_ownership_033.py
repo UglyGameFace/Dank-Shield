@@ -119,7 +119,7 @@ def test_server_font_picker_is_native_and_theme_reset_is_predictable() -> None:
 
 
 def test_clean_redesign_is_native_confirmed_and_protection_preserving() -> None:
-    history = V2[V2.index("class DesignHistoryView"):V2.index("class DesignAdvancedView")]
+    history = V2[V2.index("class DesignHistoryView"):V2.index("class DesignHomeView")]
     server = V2[V2.index("class DesignServerView"):V2.index("def _edit_one_embed")]
 
     assert 'label="Clean Redesign"' in history
