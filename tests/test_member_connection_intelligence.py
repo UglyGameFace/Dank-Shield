@@ -25,7 +25,7 @@ def test_confirmed_invite_is_a_social_link_not_a_leak_or_alt() -> None:
             "entry_conflict": False,
         }]},
     )
-    assert report["coverage"] == "available"
+    assert report["coverage"] == "partial"
     assert report["total_matches"] == 1
     assert report["matches"][0]["category"] == "documented server relationship"
     assert report["finding"] == "relationships_only_not_leak_proof"
