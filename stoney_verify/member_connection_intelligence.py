@@ -231,3 +231,27 @@ async def verified_ban_connections(
         if getattr(ban, "user", None) is not None:
             matched.append({"user_id": uid, "basis": "confirmed Discord ban plus existing link evidence"})
     return matched
+
+async def enrich_connection_ban_status(guild: Any, report: dict[str, Any]) -> dict[str, Any]:
+    """Independently verify each recorded related account's guild ban.
+
+    A ban is a status, never evidence that two accounts share an owner.
+    Errors remain unknown rather than becoming false negatives.
+    """
+    import discord
+
+    for row in report.get("matches", []):
+        row["ban_status"] = "unknown"
+        uid = _id(row.get("user_id"))
+        if not uid:
+            continue
+        try:
+            await guild.fetch_ban(discord.Object(id=int(uid)))
+        except discord.NotFound:
+            row["ban_status"] = "not_banned"
+        except (discord.Forbidden, discord.HTTPException):
+            row["ban_status"] = "unavailable"
+            report["coverage"] = "partial"
+        else:
+            row["ban_status"] = "banned"
+    return report
