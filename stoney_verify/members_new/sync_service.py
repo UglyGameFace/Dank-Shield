@@ -1201,7 +1201,7 @@ async def _guild_members_upsert_safe_async(
         if not removed:
             raise
 
-    retry_payload = _strip_optional_columns(current, removed)
+    retry_payload = (_strip_voice_fields(current) if any(\n        column in {"in_voice", "voice_channel_id", "voice_channel_name",\n                   "voice_muted", "voice_deafened", "voice_self_muted",\n                   "voice_self_deafened", "voice_streaming", "voice_video",\n                   "voice_suppressed"} for column in removed\n    ) else _strip_optional_columns(current, removed))
     try:
         try:
             await _guild_members_upsert_async(sb, retry_payload, on_conflict=True)
@@ -1229,7 +1229,7 @@ async def _guild_members_update_safe_async(
         if not removed:
             raise
 
-    retry_payload = _strip_optional_columns(current, removed)
+    retry_payload = (_strip_voice_fields(current) if any(\n        column in {"in_voice", "voice_channel_id", "voice_channel_name",\n                   "voice_muted", "voice_deafened", "voice_self_muted",\n                   "voice_self_deafened", "voice_streaming", "voice_video",\n                   "voice_suppressed"} for column in removed\n    ) else _strip_optional_columns(current, removed))
     await _guild_members_update_member_async(sb, guild_id, user_id, retry_payload)
 
 
