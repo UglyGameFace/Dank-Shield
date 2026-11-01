@@ -67,10 +67,9 @@ full `guild_members.select('*')` read for an existing member, then removes
 unsupported optional fields **before** the write. Partial projections and
 empty reads cannot poison the support cache; a later full row containing
 newly added columns re-enables them. No additional query, schema migration,
-database rewrite, or destructive fallback is introduced. New accounts
-without a retained row still use the existing error fallback.
+database rewrite, or destructive fallback is introduced. New accounts without a retained row cannot infer schema from a prior row. After a confirmed missing voice-column error, their writes now retry once with the entire optional voice group removed while preserving core fields and unrelated optional fields. Unrelated errors are not swallowed.
 
-Acceptance requires exact-head/full CI, exact-main CI after merge, separately
+Exact-head CI passed on `515c4db65d` (Dank Shield CI, Mobile Panel UX, Ticket Owner Emergency Override, Application Command Size Diagnostics). The documentation-only correction must pass its own new head checks before merge. Acceptance also requires exact-main CI after merge, separately
 approved Discloud deployment with off-host backup/rollback, and a comparable
 post-deployment 1-hour/24-hour HTTP 400 and billed-egress check. Do not claim
 live improvement before those measurements.
