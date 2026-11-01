@@ -126,6 +126,21 @@ jobs:
             }
             const deleting = mode === 'delete' && deploymentBranchConfigured;
 
+            // An explicitly reviewed squash-merged branch may be content-equivalent
+            // to main despite retaining unique commit IDs. Never infer that
+            // equivalence from its PR status alone: freeze exact head, merge,
+            // paths and main tree blobs before allowing the reviewed path.
+            const reconciledSquash = new Map([
+              ['fix/branch-retirement-bulk-pr-index-20261101', {
+                sha: 'c502704497fe286e5a5f84df06bb8efd2059c41a',
+                pr: 786,
+                merge: '1df01a3120e444a229d68255265026353bc849cb',
+                files: [
+                  '.github/workflows/retire-merged-temporary-branches.yml',
+                  'tests/test_reviewed_merged_branch_retirement.py',
+                ],
+              }],
+            ]);
             const reviewed = mode === 'preview-reviewed-merged' || mode === 'delete-reviewed-merged';
             if (reviewed) {
               if (!isManual || context.actor !== 'UglyGameFace') {
@@ -198,7 +213,36 @@ jobs:
                   owner, repo, base: mainSha, head: branch.commit.sha
                 })).data;
                 if (branchGraph.ahead_by !== 0 ||
-                    !['behind', 'identical'].includes(branchGraph.status)) continue;
+                    !['behind', 'identical'].includes(branchGraph.status)) {
+                  const proof = reconciledSquash.get(branch.name);
+                  if (!proof || branch.commit.sha !== proof.sha ||
+                      pr.number !== proof.pr || pr.merge_commit_sha !== proof.merge ||
+                      pr.head.sha !== proof.sha) continue;
+                  // Require exact changed paths, as well as byte-identical
+                  // repository blobs on both tips. Any future branch edits
+                  // invalidate the frozen head lease.
+                  const [changed, mainTree, branchTree] = await Promise.all([
+                    github.paginate(github.rest.pulls.listFiles, {
+                      owner, repo, pull_number: proof.pr, per_page: 100
+                    }),
+                    github.rest.git.getTree({
+                      owner, repo, tree_sha: mainSha, recursive: 'true'
+                    }),
+                    github.rest.git.getTree({
+                      owner, repo, tree_sha: proof.sha, recursive: 'true'
+                    }),
+                  ]);
+                  const paths = changed.map(x => x.filename).sort();
+                  if (JSON.stringify(paths) !==
+                      JSON.stringify([...proof.files].sort()) ||
+                      mainTree.data.truncated || branchTree.data.truncated) continue;
+                  const headBlobs = new Map(branchTree.data.tree
+                    .filter(x => x.type === 'blob').map(x => [x.path, x.sha]));
+                  const mainBlobs = new Map(mainTree.data.tree
+                    .filter(x => x.type === 'blob').map(x => [x.path, x.sha]));
+                  if (!proof.files.every(path =>
+                    headBlobs.has(path) && headBlobs.get(path) === mainBlobs.get(path))) continue;
+                }
                 const graph = (await github.rest.repos.compareCommits({
                   owner, repo, base: pr.merge_commit_sha, head: mainSha
                 })).data;
