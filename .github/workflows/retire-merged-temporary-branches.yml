@@ -290,6 +290,18 @@ jobs:
                 .update(JSON.stringify({mainSha,batch,effectiveDeployBranch})).digest('hex')
                 .slice(0, 16).toUpperCase();
               const token = 'DELETE_REVIEWED_' + fingerprint;
+              // The action run summary is not accessible to all authorized
+              // GitHub connectors. Log the exact owner-only preview plan and
+              // SHA-bound confirmation so a verified owner can execute it.
+              // The token is not a credential: the target still verifies the
+              // authenticated actor, live ref, current main and branch leases.
+              if (!deleteReviewed) {
+                core.info('Reviewed retirement preview: ' + JSON.stringify({
+                  mainSha, effectiveDeployBranch, eligible: eligible.length,
+                  before: branches.length, batch
+                }));
+                core.info('Reviewed retirement confirmation token: ' + token);
+              }
               if (deleteReviewed && process.env.CLEANUP_CONFIRMATION !== token) {
                 throw new Error('Delete requires exact preview token bound to main and branch SHAs');
               }
