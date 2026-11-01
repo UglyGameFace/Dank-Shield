@@ -117,3 +117,59 @@ def test_empty_existing_row_does_not_guess_schema():
 
     assert sync._guild_members_select_existing_sync(DB(), "1", "2") is None
     assert all(v is None for v in sync._OPTIONAL_GUILD_MEMBER_COLUMN_SUPPORT.values())
+
+
+def test_new_member_missing_voice_schema_retries_once_without_voice_group(monkeypatch):
+    """An absent existing row must not lose the entire member write."""
+    attempts = []
+
+    async def fake_upsert(_sb, payload, on_conflict=True):
+        attempts.append(dict(payload))
+        if len(attempts) == 1:
+            raise RuntimeError("PGRST204: column 'voice_channel_id' missing from schema cache")
+
+    monkeypatch.setattr(sync, "_guild_members_upsert_async", fake_upsert)
+    payload = dict(REQUIRED, in_voice=True, voice_channel_id="42",
+                   voice_self_muted=False, nickname="Preserved")
+    asyncio.run(sync._guild_members_upsert_safe_async(object(), payload))
+
+    assert len(attempts) == 2
+    assert "voice_channel_id" in attempts[0]
+    assert not (VOICE & attempts[1].keys())
+    assert attempts[1]["nickname"] == "Preserved"
+    assert attempts[1]["user_id"] == "2"
+    assert sync._OPTIONAL_GUILD_MEMBER_COLUMN_SUPPORT["voice_channel_id"] is False
+    assert sync._OPTIONAL_GUILD_MEMBER_COLUMN_SUPPORT["voice_self_muted"] is None
+
+
+def test_member_update_missing_voice_schema_preserves_core_update(monkeypatch):
+    attempts = []
+
+    async def fake_update(_sb, guild_id, user_id, payload):
+        assert (guild_id, user_id) == ("1", "2")
+        attempts.append(dict(payload))
+        if len(attempts) == 1:
+            raise RuntimeError("PGRST204: column 'in_voice' missing from schema cache")
+
+    monkeypatch.setattr(sync, "_guild_members_update_member_async", fake_update)
+    asyncio.run(sync._guild_members_update_safe_async(
+        object(), "1", "2",
+        {"display_name": "Updated", "in_voice": True, "voice_streaming": True}
+    ))
+    assert len(attempts) == 2
+    assert attempts[1] == {"display_name": "Updated"}
+
+
+def test_unrelated_write_failure_is_not_hidden_by_voice_fallback(monkeypatch):
+    attempts = []
+
+    async def fake_upsert(_sb, payload, on_conflict=True):
+        attempts.append(dict(payload))
+        raise RuntimeError("Permission denied")
+
+    monkeypatch.setattr(sync, "_guild_members_upsert_async", fake_upsert)
+    with pytest.raises(RuntimeError, match="Permission denied"):
+        asyncio.run(sync._guild_members_upsert_safe_async(
+            object(), dict(REQUIRED, in_voice=True)
+        ))
+    assert len(attempts) == 1
