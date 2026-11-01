@@ -119,3 +119,73 @@ def test_reviewed_inventory_uses_one_paged_pr_index_without_loosening_guards() -
     assert "graph.behind_by !== 0" in reviewed
     assert "Date.parse(pr.merged_at) > cutoff" in reviewed
     assert "deleteReviewed && process.env.CLEANUP_CONFIRMATION !== token" in reviewed
+
+
+def test_reviewed_pr_inventory_executable_keeps_only_integrated_unique_head() -> None:
+    import json
+    import shutil
+    import subprocess
+    import textwrap
+
+    if shutil.which("node") is None:
+        return  # Node is also exercised in dedicated CI workflow tests.
+    text = _workflow()
+    segment = text.split("              const allPRs = await", 1)[1]
+    segment = "const allPRs = await" + segment.split("              eligible.sort(", 1)[0]
+    segment = textwrap.dedent(segment)
+    js = r"""
+const owner = 'UglyGameFace', repo = 'Dank-Shield';
+const fullName = owner + '/' + repo, mainSha = 'mainsha';
+const inUse = new Set(['feat/open']);
+const safeName = name => name.startsWith('feat/');
+const cutoff = Date.now() - 48 * 60 * 60 * 1000;
+const branches = [
+  {name:'feat/integrated',protected:false,commit:{sha:'oldsha'}},
+  {name:'feat/unique',protected:false,commit:{sha:'uniquesha'}},
+  {name:'feat/multi',protected:false,commit:{sha:'multisha'}},
+  {name:'feat/open',protected:false,commit:{sha:'opensha'}},
+  {name:'backup/retained',protected:false,commit:{sha:'backupsha'}}
+];
+const mkpr = (ref, sha, n) => ({
+  number:n, state:'closed', merged_at:'2026-10-01T00:00:00Z',
+  head:{repo:{full_name:fullName},ref,sha},
+  base:{repo:{full_name:fullName},ref:'main'},
+  merge_commit_sha:'mergedsha'
+});
+const records = [
+  mkpr('feat/integrated','oldsha',1),
+  mkpr('feat/unique','uniquesha',2),
+  mkpr('feat/multi','multisha',3),
+  mkpr('feat/multi','multisha',4),
+  mkpr('feat/open','opensha',5),
+  mkpr('backup/retained','backupsha',6),
+  { ...mkpr('feat/integrated','oldsha',7),
+    head:{repo:{full_name:'other/repo'},ref:'feat/integrated',sha:'oldsha'}}
+];
+let paginated = 0, compared = 0;
+const github = {
+  paginate: async () => { paginated++; return records; },
+  rest: {
+    pulls: {list: () => {}},
+    repos: {compareCommits: async ({base,head}) => {
+      compared++;
+      if (base === mainSha) return {data:{
+        ahead_by:head === 'uniquesha' ? 1 : 0,
+        status:head === 'uniquesha' ? 'diverged' : 'behind'}};
+      return {data:{behind_by:0,status:'ahead'}};
+    }}
+  }
+};
+(async () => {
+""" + segment + r"""
+console.log(JSON.stringify({eligible,paginated,compared}));
+})().catch(error => {console.error(error.stack);process.exitCode=1});
+"""
+    result = subprocess.run(["node", "-e", js], text=True, capture_output=True)
+    assert result.returncode == 0, result.stderr
+    actual = json.loads(result.stdout)
+    assert actual["paginated"] == 1
+    assert actual["eligible"] == [
+        {"name": "feat/integrated", "sha": "oldsha", "pr": 1}
+    ]
+    assert actual["compared"] == 3
