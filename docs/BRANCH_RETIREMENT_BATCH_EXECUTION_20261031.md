@@ -20,3 +20,35 @@ This change retains the same eligibility, open-PR, commit-ancestry, archive-tag,
 Before reporting any actual deletions, inspect a successful scheduled run summary for exact before/after counts and deleted branch names, and re-list GitHub branches. The linked Discloud deployment ref has **not** been independently established in this run. If the repository variable is unset or invalid, the workflow remains archive-only; do not bypass this gate. Preserve backup, archive, recovery, production, database, protected, and active-PR refs. No Discloud deployment, credentials change, database migration, or production host-file edit is part of this PR.
 
 Validation: targeted static workflow tests were updated; full GitHub CI and any deletion run must be verified separately. Exact-main CI, independent off-Discloud backup, approved deployment risk, canary and rollback are still required before a production release.
+
+## November 1: owner-attested manual cleanup when repository variable is unset
+
+At the start of this change, GitHub had **126** branches and main was
+`2ac0e846efe15ea27515161fd4dd00fc3adcce91`. The new working branch
+temporarily increases that count to 127; **no branches have been deleted**.
+
+The scheduled/push cleanup is unchanged: it remains archive-only unless
+`DANK_DISCLOUD_DEPLOY_BRANCH` resolves to a GitHub branch. To avoid forcing
+the owner to change repository variables for a one-time retirement, the same
+workflow now accepts an optional **owner-attested manual** live branch:
+
+1. Independently inspect the existing Discloud application's currently linked
+   GitHub branch. Do not infer it from main, a PR, or an old issue.
+2. Dispatch **Retire merged temporary branches** with mode
+   `preview-reviewed-merged`, `live_discloud_branch` set to that exact
+   linked branch, and `live_discloud_branch_ack` set to
+   `I_VERIFIED_LIVE_DISCLOUD_BRANCH`. Review the branch/SHA list and copy
+   the exact `DELETE_REVIEWED_...` token from the run summary.
+3. Dispatch mode `delete-reviewed-merged` with the **same** attested branch,
+   acknowledgement, and preview token. If main, candidate SHAs, or the
+   attested branch changes, the token or leases fail closed. Repeat bounded
+   batches only after reviewing each preview.
+4. Re-list branches and verify archive tags and exact deletions from the
+   successful run. Keep every unique/unmerged, active PR, deployment, backup,
+   recovery, database, and protected ref.
+
+A manual branch input is an **owner attestation**, not independent proof of
+the Discloud host's actual runtime SHA. If the configured repository variable
+disagrees with the manual input, the workflow refuses to proceed. The
+automatic path ignores manual inputs entirely. This change does not run a
+deletion, change production configuration, or approve a Discloud release.
