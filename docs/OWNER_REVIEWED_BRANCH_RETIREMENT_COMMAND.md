@@ -1,6 +1,6 @@
 # Owner-reviewed branch retirement from GitHub comments
 
-The existing `.github/workflows/retire-merged-temporary-branches.yml` remains the sole automated deletion authority. The new comment relay only dispatches it.
+The existing `.github/workflows/retire-merged-temporary-branches.yml` remains the sole automated deletion authority. The owner-comment relay invokes it as a reusable workflow with the authenticated owner comment context. This avoids a bot-owned workflow dispatch failing the existing owner-actor checks.
 
 ## Owner preview
 
@@ -18,7 +18,7 @@ Independently check the ACTUAL live Discloud app GitHub linked branch. Do not in
 
 The branch and token in that sample are placeholders, not verified values. A valid token is bound to exact main, candidate branch names and SHA hashes, and the deployment ref. Moving main or candidate refs invalidates the token.
 
-The existing target workflow checks owner, actual branch-ref existence, configured-ref agreement, PR merge and exact head, 48-hour cooldown, squash/rebase file equivalence, open-PR dependencies, SHA leases and archive tags before deletion. Unintegrated work, current deployment, backups and rollback refs must remain preserved.
+The existing target workflow checks the inherited owner comment, owner, actual branch-ref existence, configured-ref agreement, PR merge and exact head, 48-hour cooldown, squash/rebase file equivalence, open-PR dependencies, SHA leases and archive tags before deletion. Unintegrated work, current deployment, backups and rollback refs must remain preserved.
 
 Never set DANK_DISCLOUD_DEPLOY_BRANCH to main just to bypass missing deployment evidence. A branch name is not independent proof of what Discloud runs.
 
