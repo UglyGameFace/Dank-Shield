@@ -57,7 +57,8 @@ def _recorded_join_event(row: dict[str, Any]) -> dict[str, Any] | None:
         "invited_by": _id(metadata.get("invited_by")),
         "vouched_by": _id(metadata.get("vouched_by")),
         "entry_truth_quality": _text(metadata.get("entry_truth_quality")),
-        "entry_conflict": metadata.get("entry_conflict") is True,
+        # Missing/conflicting truth cannot be promoted into confirmed evidence.
+        "entry_conflict": metadata.get("entry_conflict") is not False,
     }
 
 
@@ -107,7 +108,12 @@ def build_connection_report(
 
     # Recover recorded historical relationships when member_joins insertion
     # failed. These are historical join events, not present-tense claims.
-    for row in source.get("event_target", []) + source.get("event_related", []):
+    for row in (
+        source.get("event_target", [])
+        + source.get("event_invited", [])
+        + source.get("event_vouched", [])
+        + source.get("event_related", [])  # preserve the initial report-builder contract
+    ):
         member_id = _id(row.get("user_id"))
         if not member_id:
             continue
@@ -234,19 +240,24 @@ def _read_connection_report(guild_id: int, user_id: int) -> dict[str, Any]:
             source[key] = []
             # No silent success on schema/permission/egress failure.
             errors.append(f"{key} could not be read ({type(exc).__name__}).")
-    # Query original join evidence only when a moderator requests a report.
-    # actor_id is not by itself an inviter: staff approval also uses actor_id,
-    # so reverse candidates are accepted only when metadata explicitly names
-    # this member as inviter or voucher.
+    # Read original join relationships only on a staff request. actor_id
+    # cannot be trusted as an inviter/voucher: it can also be an approver.
+    # Query the exact retained JSON metadata for both directions instead.
     event_count = 0
     recovered_count = 0
     event_truncated = False
-    for key, field in (("event_target", "user_id"), ("event_related", "actor_id")):
+    observed: set[tuple[str, ...]] = set()
+    event_requests = (
+        ("event_target", "user_id"),
+        ("event_invited", "metadata->>invited_by"),
+        ("event_vouched", "metadata->>vouched_by"),
+    )
+    for key, field in event_requests:
         source[key] = []
         try:
             response = (
                 db.table("member_events")
-                .select("user_id,actor_id,event_type,metadata,created_at")
+                .select("id,user_id,event_type,metadata,created_at")
                 .eq("guild_id", gid)
                 .eq("event_type", "member_joined")
                 .eq(field, uid)
@@ -254,7 +265,6 @@ def _read_connection_report(guild_id: int, user_id: int) -> dict[str, Any]:
                 .execute()
             )
             rows = getattr(response, "data", None) or []
-            event_count += len(rows)
             event_truncated |= len(rows) >= _QUERY_LIMIT
             for raw in rows:
                 if not isinstance(raw, dict):
@@ -265,11 +275,29 @@ def _read_connection_report(guild_id: int, user_id: int) -> dict[str, Any]:
                 if key == "event_target":
                     if event["user_id"] != uid:
                         continue
-                elif _id(raw.get("actor_id")) != uid or not (
-                    event["invited_by"] == uid or event["vouched_by"] == uid
-                ):
+                elif key == "event_invited":
+                    if event["invited_by"] != uid:
+                        continue
+                elif event["vouched_by"] != uid:
                     continue
+                # One event may be in several lookup results. Count and
+                # label its evidence only once without needing a new table.
+                metadata = raw["metadata"]
+                token = (
+                    str(raw.get("id") or ""),
+                    event["user_id"],
+                    str(raw.get("created_at") or ""),
+                    str(metadata.get("joined_at") or ""),
+                    event["invited_by"],
+                    event["vouched_by"],
+                    event["entry_truth_quality"],
+                    str(event["entry_conflict"]),
+                )
+                if token in observed:
+                    continue
+                observed.add(token)
                 source[key].append(event)
+                event_count += 1
                 if event["invited_by"] or event["vouched_by"]:
                     recovered_count += 1
         except Exception as exc:
