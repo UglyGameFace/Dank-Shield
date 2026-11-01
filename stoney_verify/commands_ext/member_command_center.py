@@ -947,7 +947,8 @@ async def _show_connection_report(
     if not await require_review(interaction):
         return
     try:
-        report = await analyze_member_connections(interaction.guild.id, target_id)\n        report = await enrich_connection_ban_status(interaction.guild, report)
+        report = await analyze_member_connections(interaction.guild.id, target_id)
+        report = await enrich_connection_ban_status(interaction.guild, report)
     except Exception as exc:
         await reply_ephemeral(interaction, f"⚠️ Connection investigation unavailable ({type(exc).__name__}).")
         return
