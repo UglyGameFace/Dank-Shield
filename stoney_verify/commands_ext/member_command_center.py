@@ -890,7 +890,10 @@ async def _show_stored_member_history(
 
 
 
-def _connection_embed(report: dict[str, Any]) -> discord.Embed:
+_CONNECTION_PAGE_SIZE = 6
+
+
+def _connection_embed(report: dict[str, Any], *, page: int = 0) -> discord.Embed:
     target = report["target_user_id"]
     embed = discord.Embed(
         title="🔗 Member Connection Intelligence",
@@ -902,12 +905,17 @@ def _connection_embed(report: dict[str, Any]) -> discord.Embed:
         color=discord.Color.blurple(),
     )
     matches = report.get("matches") or []
+    page_count = max(1, (len(matches) + _CONNECTION_PAGE_SIZE - 1) // _CONNECTION_PAGE_SIZE)
+    page = max(0, min(page, page_count - 1))
+    visible = matches[page * _CONNECTION_PAGE_SIZE:(page + 1) * _CONNECTION_PAGE_SIZE]
     coverage_note = (
         f"{report.get('total_matches', len(matches))} recorded account(s) • "
         f"Evidence: {report.get('coverage', 'unknown')}"
     )
+    if page_count > 1:
+        coverage_note += f" • Page {page + 1}/{page_count}"
     if report.get("recovered_join_events"):
-        coverage_note += f" • Join events recovered: {report['recovered_join_events']}"
+        coverage_note += f" • Original join events with links: {report['recovered_join_events']}"
     if report.get("history_gap"):
         coverage_note += "\n" + str(report["history_gap"])[:680]
     embed.add_field(
@@ -915,10 +923,16 @@ def _connection_embed(report: dict[str, Any]) -> discord.Embed:
         value=coverage_note[:1024],
         inline=False,
     )
-    for row in matches[:8]:
+    for row in visible:
         evidence = row.get("evidence") or []
         summary = "\n".join(f"• {item['label']}" for item in evidence[:2])
-        summary += f"\n• Discord ban: {row.get('ban_status', 'not checked')}"
+        ban_status = {
+            "banned": "Banned",
+            "not_banned": "Not banned",
+            "unavailable": "Could not verify",
+            "unknown": "Not checked",
+        }.get(row.get("ban_status"), "Not checked")
+        summary += f"\n• Discord ban: {ban_status}"
         if row.get("identity_review") == "staff_marked_not_same_person":
             summary += "\n• Staff previously ruled out a same-person claim"
         embed.add_field(
@@ -933,8 +947,12 @@ def _connection_embed(report: dict[str, Any]) -> discord.Embed:
                        "No supported link was found in the records checked. This is not proof the accounts are unrelated.")[:1024]),
             inline=False,
         )
-    if report.get("truncated") or len(matches) > 8:
-        embed.add_field(name="Coverage limit", value="Only the first matching records are displayed; this is not an exhaustive investigation.", inline=False)
+    if report.get("truncated") or report.get("total_matches", len(matches)) > len(matches):
+        embed.add_field(
+            name="Coverage limit",
+            value="All loaded matches can be paged, but some database results hit a search cap. This is not an exhaustive investigation.",
+            inline=False,
+        )
     if report.get("errors"):
         embed.add_field(
             name="Incomplete evidence",
@@ -962,14 +980,23 @@ async def _show_connection_report(
     await _replace_panel(
         interaction,
         embed=_connection_embed(report),
-        view=ConnectionReportView(owner_id, target_id),
+        view=ConnectionReportView(owner_id, target_id, report),
     )
 
 
 class ConnectionReportView(OwnedView):
-    def __init__(self, owner_id: int, target_id: int) -> None:
+    def __init__(
+        self, owner_id: int, target_id: int, report: dict[str, Any],
+        page: int = 0,
+    ) -> None:
         self.target_id = target_id
+        self.report = report
+        self.page_count = max(1, (len(report.get("matches") or []) + _CONNECTION_PAGE_SIZE - 1)
+                              // _CONNECTION_PAGE_SIZE)
+        self.page = max(0, min(page, self.page_count - 1))
         super().__init__(owner_id)
+        self.previous.disabled = self.page == 0
+        self.next_page.disabled = self.page + 1 >= self.page_count
 
     @discord.ui.button(label="Refresh Evidence", emoji="🔄", style=discord.ButtonStyle.primary, row=0)
     async def refresh(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -984,9 +1011,31 @@ class ConnectionReportView(OwnedView):
             return
         await _show_stored_member_history(interaction, self.target_id)
 
-    @discord.ui.button(label="Intelligence Menu", emoji="◀️", style=discord.ButtonStyle.secondary, row=1)
+    async def _navigate(self, interaction: discord.Interaction, page: int) -> None:
+        if not await require_review(interaction):
+            return
+        await interaction.response.defer(ephemeral=True)
+        await _replace_panel(
+            interaction,
+            embed=_connection_embed(self.report, page=page),
+            view=ConnectionReportView(self.owner_id, self.target_id, self.report, page),
+        )
+
+    @discord.ui.button(label="Previous", emoji="◀️", style=discord.ButtonStyle.secondary, row=1)
+    async def previous(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await self._navigate(interaction, self.page - 1)
+
+    @discord.ui.button(label="Next", emoji="▶️", style=discord.ButtonStyle.secondary, row=1)
+    async def next_page(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await self._navigate(interaction, self.page + 1)
+
+    @discord.ui.button(label="Intelligence Menu", emoji="↩️", style=discord.ButtonStyle.secondary, row=2)
     async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
+        if not await require_review(interaction):
+            return
         await _replace_panel(interaction, embed=_intelligence_embed(), view=IntelligenceMenuView(self.owner_id))
 
 
