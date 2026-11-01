@@ -10,23 +10,19 @@ SURFACE = (ROOT / "stoney_verify/commands_ext/public_command_surface_v2.py").rea
 SAFE_TEST = (ROOT / "tools/test_dank_design_safe_repair_cleanup_static.py").read_text(encoding="utf-8")
 
 
-def test_home_uses_five_plain_language_jobs() -> None:
-    for label in (
-        "Design Entire Server",
-        "Edit One Category / Channel",
-        "Fix Inconsistent Names",
-        "Saved Rules & Protection",
-        "Undo Last Apply",
-    ):
+def test_home_has_four_plain_language_jobs() -> None:
+    for label in ("Style All Names", "Edit One Item", "Check & Fix", "Advanced"):
         assert f'label="{label}"' in V2
-    assert "**Choose a design task below.**" in V2
-    assert "Renaming one selected item applies immediately" in V2
-    assert "Change One Style" not in V2
-    assert "Fix Mismatched Names" not in V2
+    assert "Choose what to do." in V2
+    assert "An individual Rename action takes effect immediately." in V2
+    assert 'label="Preview Separator Only"' in V2
+    assert 'label="Saved Style Exceptions"' in V2
+    assert 'label="Searchable Names"' in V2
+    assert 'label="History & Reset"' in V2
 
 
 def test_rules_and_protection_copy_explains_non_rename_behavior() -> None:
-    assert "Saved Rules & Protection" in V2
+    assert "Saved Style Exceptions" in V2
     assert "does **not** rename a Discord item by itself" in V2
     assert "Layout Rules" in V2
     assert "Remove One Rule" in V2
@@ -86,7 +82,7 @@ def test_safe_repair_audit_tracks_current_authority_contract() -> None:
 
 if __name__ == "__main__":
     for test in (
-        test_home_uses_five_plain_language_jobs,
+        test_home_has_four_plain_language_jobs,
         test_rules_and_protection_copy_explains_non_rename_behavior,
         test_exact_item_editor_makes_immediate_rename_exception_explicit,
         test_repair_flow_is_scan_then_preview_then_apply,
