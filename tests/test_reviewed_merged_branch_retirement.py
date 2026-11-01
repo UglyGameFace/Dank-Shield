@@ -36,7 +36,7 @@ def test_broad_retirement_is_manual_and_sha_leased() -> None:
     assert "DANK_DISCLOUD_DEPLOY_BRANCH" in text
     assert "CLEANUP_CONFIRMATION" in text
     assert "createHash('sha256')" in text
-    assert "JSON.stringify({mainSha,batch})" in text
+    assert "JSON.stringify({mainSha,batch,effectiveDeployBranch})" in text
     assert "DELETE_REVIEWED_" in text
     assert "eligible.slice(0, 12)" in text
 
