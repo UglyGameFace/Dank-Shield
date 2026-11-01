@@ -45,4 +45,3 @@ def test_design_studio_home_is_four_owner_tasks_not_a_feature_directory():
     advanced = STUDIO[STUDIO.index("class DesignAdvancedView"):STUDIO.index("class DesignHomeView")]
     for label in ("Saved Style Exceptions", "Searchable Names", "History & Reset"):
         assert f'label="{label}"' in advanced
-
