@@ -7,7 +7,6 @@ on:
     types: [created]
 
 permissions:
-  actions: write
   contents: read
 
 concurrency:
@@ -15,7 +14,14 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  dispatch-existing-guarded-retirement:
+  validate-owner-command:
+    permissions:
+      contents: read
+    outputs:
+      mode: ${{ steps.validate.outputs.mode }}
+      confirmation: ${{ steps.validate.outputs.confirmation }}
+      live_discloud_branch: ${{ steps.validate.outputs.live_discloud_branch }}
+      live_discloud_branch_ack: ${{ steps.validate.outputs.live_discloud_branch_ack }}
     if: >-
       github.repository == 'UglyGameFace/Dank-Shield' &&
       github.actor == 'UglyGameFace' &&
@@ -25,7 +31,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 3
     steps:
-      - name: Validate exact owner command and dispatch existing guarded workflow
+      - name: Validate exact owner command for guarded reusable workflow
+        id: validate
         uses: actions/github-script@v7
         with:
           script: |
@@ -77,19 +84,23 @@ jobs:
               branch.includes('@{') || branch.endsWith('.lock'))) {
               throw new Error('Invalid branch ref syntax');
             }
-            // The target workflow separately checks the actual ref exists,
-            // the owner attestation, exact-main and candidate leases, PRs,
-            // 48h cooldown, archival tag, SHA-bound preview token and size caps.
-            await github.rest.actions.createWorkflowDispatch({
-              owner: 'UglyGameFace',
-              repo: 'Dank-Shield',
-              workflow_id: 'retire-merged-temporary-branches.yml',
-              ref: 'main',
-              inputs: {
-                mode: input.mode,
-                confirmation,
-                live_discloud_branch: branch,
-                live_discloud_branch_ack: ack,
-              },
-            });
-            core.info('Dispatched existing guarded cleanup: ' + input.mode);
+            // The reusable workflow inherits this authenticated owner comment.
+            // It separately enforces SHA leases, merge/PR gates, archival tags,
+            // production-ref existence and the exact preview confirmation.
+            core.setOutput('mode', input.mode);
+            core.setOutput('confirmation', confirmation);
+            core.setOutput('live_discloud_branch', branch);
+            core.setOutput('live_discloud_branch_ack', ack);
+            core.info('Validated owner command: ' + input.mode);
+
+  run-existing-guarded-retirement:
+    needs: validate-owner-command
+    permissions:
+      contents: write
+      pull-requests: read
+    uses: ./.github/workflows/retire-merged-temporary-branches.yml
+    with:
+      mode: ${{ needs.validate-owner-command.outputs.mode }}
+      confirmation: ${{ needs.validate-owner-command.outputs.confirmation }}
+      live_discloud_branch: ${{ needs.validate-owner-command.outputs.live_discloud_branch }}
+      live_discloud_branch_ack: ${{ needs.validate-owner-command.outputs.live_discloud_branch_ack }}
