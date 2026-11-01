@@ -180,6 +180,14 @@ jobs:
                     pr.base?.ref !== 'main' || pr.base?.repo?.full_name !== fullName ||
                     pr.head?.repo?.full_name !== fullName ||
                     pr.head.sha !== branch.commit.sha || !pr.merge_commit_sha) continue;
+                // A merged PR does not prove its branch tip is in main:
+                // squash/rebase histories can retain unique commits. Hold
+                // those refs for explicit content reconciliation instead.
+                const branchGraph = (await github.rest.repos.compareCommits({
+                  owner, repo, base: mainSha, head: branch.commit.sha
+                })).data;
+                if (branchGraph.ahead_by !== 0 ||
+                    !['behind', 'identical'].includes(branchGraph.status)) continue;
                 const graph = (await github.rest.repos.compareCommits({
                   owner, repo, base: pr.merge_commit_sha, head: mainSha
                 })).data;
