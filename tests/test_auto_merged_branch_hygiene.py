@@ -113,7 +113,10 @@ def test_owner_opt_in_cleanup_is_preview_bound_and_rechecks_main() -> None:
     workflow = AUTO.read_text(encoding="utf-8")
     assert "const optInPreviewMainSha =" in workflow
     assert "const optInBatch = candidates.map(branch =>" in workflow
-    assert "mainSha: optInPreviewMainSha, batch: optInBatch, effectiveDeployBranch" in workflow
+    assert "mainSha: optInPreviewMainSha, batchIndex: candidateBatch," in workflow
+    assert "batch: optInBatch, effectiveDeployBranch" in workflow
+    assert "const candidateBatch = isManual ? Number(requestedBatch) :" in workflow
+    assert "candidateBatch >= candidateBatchCount" in workflow
     assert "const optInToken = 'DELETE_OPT_IN_' + optInFingerprint;" in workflow
     assert "Opt-in retirement confirmation token:" in workflow
     assert "process.env.CLEANUP_CONFIRMATION !== optInToken" in workflow

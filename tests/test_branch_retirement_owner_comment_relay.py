@@ -94,6 +94,7 @@ def test_owner_preview_passes_validated_inputs_to_reusable_workflow():
         "confirmation": "",
         "live_discloud_branch": "",
         "live_discloud_branch_ack": "",
+        "batch_index": "0",
     }
 
 
@@ -136,6 +137,7 @@ def test_well_formed_delete_delegates_all_remaining_guards():
         "confirmation": "DELETE_REVIEWED_" + "A" * 16,
         "live_discloud_branch": "verified-production-ref",
         "live_discloud_branch_ack": "I_VERIFIED_LIVE_DISCLOUD_BRANCH",
+        "batch_index": "0",
     }
     # This is a relay-only test: the protected target workflow still validates
     # that the branch is truly the owner-verified live one, and that the SHA-
@@ -154,6 +156,7 @@ def test_owner_opt_in_preview_delegates_to_same_guarded_workflow():
         "confirmation": "",
         "live_discloud_branch": "main",
         "live_discloud_branch_ack": "I_VERIFIED_LIVE_DISCLOUD_BRANCH",
+        "batch_index": "0",
     }
 
 
@@ -164,10 +167,12 @@ def test_owner_opt_in_delete_requires_exact_token_and_verified_branch():
         "live_discloud_branch": "main",
         "live_discloud_branch_ack": "I_VERIFIED_LIVE_DISCLOUD_BRANCH",
         "confirmation": token,
+        "batch_index": 2,
     })
     assert out["success"]
     assert out["outputs"]["mode"] == "delete"
     assert out["outputs"]["confirmation"] == token
+    assert out["outputs"]["batch_index"] == "2"
 
 
 @pytest.mark.parametrize("input_json", [
@@ -180,6 +185,11 @@ def test_owner_opt_in_delete_requires_exact_token_and_verified_branch():
     {"mode": "preview", "confirmation": "DELETE_OPT_IN_" + "A" * 16},
     {"mode": "delete", "live_discloud_branch": "main",
      "confirmation": "DELETE_OPT_IN_" + "A" * 16},
+    {"mode": "preview", "batch_index": -1},
+    {"mode": "preview", "batch_index": "01"},
+    {"mode": "preview", "batch_index": "10000"},
+    {"mode": "preview", "batch_index": 2.5},
+    {"mode": "preview-reviewed-merged", "batch_index": 1},
 ])
 def test_opt_in_relay_rejects_missing_or_mismatched_proof(input_json):
     out = _run(input_json)

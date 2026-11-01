@@ -22,6 +22,7 @@ jobs:
       confirmation: ${{ steps.validate.outputs.confirmation }}
       live_discloud_branch: ${{ steps.validate.outputs.live_discloud_branch }}
       live_discloud_branch_ack: ${{ steps.validate.outputs.live_discloud_branch_ack }}
+      batch_index: ${{ steps.validate.outputs.batch_index }}
     if: >-
       github.repository == 'UglyGameFace/Dank-Shield' &&
       github.actor == 'UglyGameFace' &&
@@ -58,7 +59,7 @@ jobs:
               throw new Error('Command must contain a JSON object');
             }
             const fields = new Set(['mode','live_discloud_branch',
-              'live_discloud_branch_ack','confirmation']);
+              'live_discloud_branch_ack','confirmation','batch_index']);
             if (Object.keys(input).some(key => !fields.has(key))) {
               throw new Error('Unexpected field in cleanup command');
             }
@@ -69,6 +70,14 @@ jobs:
             const branch = String(input.live_discloud_branch || '').trim();
             const ack = String(input.live_discloud_branch_ack || '');
             const confirmation = String(input.confirmation || '');
+            const batchIndex = input.batch_index === undefined
+              ? '0' : String(input.batch_index);
+            if (!/^(0|[1-9][0-9]{0,3})$/.test(batchIndex)) {
+              throw new Error('batch_index must be an integer from 0 to 9999');
+            }
+            if (input.mode.endsWith('reviewed-merged') && batchIndex !== '0') {
+              throw new Error('batch_index is only for opt-in temporary branches');
+            }
             if (input.mode === 'delete-reviewed-merged' || input.mode === 'delete') {
               const expectedToken = input.mode === 'delete'
                 ? /^DELETE_OPT_IN_[0-9A-F]{16}$/
@@ -94,6 +103,7 @@ jobs:
             core.setOutput('confirmation', confirmation);
             core.setOutput('live_discloud_branch', branch);
             core.setOutput('live_discloud_branch_ack', ack);
+            core.setOutput('batch_index', batchIndex);
             core.info('Validated owner command: ' + input.mode);
 
   run-existing-guarded-retirement:
@@ -107,3 +117,4 @@ jobs:
       confirmation: ${{ needs.validate-owner-command.outputs.confirmation }}
       live_discloud_branch: ${{ needs.validate-owner-command.outputs.live_discloud_branch }}
       live_discloud_branch_ack: ${{ needs.validate-owner-command.outputs.live_discloud_branch_ack }}
+      batch_index: ${{ needs.validate-owner-command.outputs.batch_index }}

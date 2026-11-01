@@ -30,10 +30,10 @@ The same authenticated PR #788 comment relay also supports `work/dankshield-*-YY
 
 First comment after independently checking the actual live Discloud-linked GitHub branch:
 
-`DANK_SHIELD_CLEANUP_V1 {"mode":"preview","live_discloud_branch":"ACTUAL_VERIFIED_LIVE_BRANCH","live_discloud_branch_ack":"I_VERIFIED_LIVE_DISCLOUD_BRANCH"}`
+`DANK_SHIELD_CLEANUP_V1 {"mode":"preview","batch_index":0,"live_discloud_branch":"ACTUAL_VERIFIED_LIVE_BRANCH","live_discloud_branch_ack":"I_VERIFIED_LIVE_DISCLOUD_BRANCH"}`
 
 The workflow logs `Opt-in retirement preview` with exact branch SHAs and `Opt-in retirement confirmation token: DELETE_OPT_IN_...`. Review the plan. Then, only for an approved nonempty batch, comment:
 
-`DANK_SHIELD_CLEANUP_V1 {"mode":"delete","live_discloud_branch":"ACTUAL_VERIFIED_LIVE_BRANCH","live_discloud_branch_ack":"I_VERIFIED_LIVE_DISCLOUD_BRANCH","confirmation":"DELETE_OPT_IN_0123456789ABCDEF"}`
+`DANK_SHIELD_CLEANUP_V1 {"mode":"delete","batch_index":0,"live_discloud_branch":"ACTUAL_VERIFIED_LIVE_BRANCH","live_discloud_branch_ack":"I_VERIFIED_LIVE_DISCLOUD_BRANCH","confirmation":"DELETE_OPT_IN_0123456789ABCDEF"}`
 
-Use the actual token, not the placeholder. The opt-in token is bound to the current main SHA, the entire rotating candidate batch (names and SHAs), and the live deployment branch. Moving refs or a different scan window invalidates the token; re-preview rather than retrying stale confirmation. The owner relay cannot delete directly, and the target rechecks PRs, ancestry, ref leases, and archive SHAs. Automatic scheduled cleanup remains archive-only without a configured verified deployment ref. These commands never deploy or modify databases.
+Use the actual token, not the placeholder. The opt-in token is bound to the current main SHA, the explicitly selected zero-based `batch_index`, that batch's branch names and SHAs, and the live deployment branch. Manual previews do **not** rotate every five minutes: use the same index for preview and deletion. For more than 20 candidates, select `batch_index`: 0, 1, 2, etc. The preview logs show `batchCount`; an out-of-range index fails closed. Scheduled runs still rotate independently. Moving main or candidate refs invalidates the token; re-preview rather than retrying stale confirmation. The owner relay cannot delete directly, and the target rechecks PRs, ancestry, ref leases, and archive SHAs. Automatic scheduled cleanup remains archive-only without a configured verified deployment ref. These commands never deploy or modify databases.

@@ -114,3 +114,12 @@ def test_opt_in_checks_ancestry_and_both_pr_directions():
     assert "latestMain !== optInMainSha" in segment
     assert workflow.index("Unique commits require reconciliation") < workflow.index(
         "await github.rest.git.deleteRef({ owner, repo, ref: 'heads/' + name })")
+
+
+def test_manual_batch_selection_is_stable_not_clock_bound() -> None:
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    assert "const requestedBatch = String(process.env.CLEANUP_BATCH_INDEX || '0');" in workflow
+    assert "const candidateBatch = isManual ? Number(requestedBatch) :" in workflow
+    assert "Math.floor(Date.now() / 300000) % candidateBatchCount" in workflow
+    assert "batchIndex: candidateBatch" in workflow
+    assert "candidateBatch >= candidateBatchCount" in workflow
