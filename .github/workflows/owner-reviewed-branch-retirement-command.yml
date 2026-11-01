@@ -1,0 +1,95 @@
+name: Owner-reviewed branch retirement command
+
+# Relay only: actual retirement continues to use the existing SHA-checked,
+# archive-first, deployment-ref-gated cleanup workflow. No direct delete here.
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  actions: write
+  contents: read
+
+concurrency:
+  group: dankshield-owner-cleanup-command
+  cancel-in-progress: false
+
+jobs:
+  dispatch-existing-guarded-retirement:
+    if: >-
+      github.repository == 'UglyGameFace/Dank-Shield' &&
+      github.actor == 'UglyGameFace' &&
+      github.event.issue.number == 788 &&
+      github.event.issue.pull_request != null &&
+      startsWith(github.event.comment.body, 'DANK_SHIELD_CLEANUP_V1 ')
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Validate exact owner command and dispatch existing guarded workflow
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const marker = 'DANK_SHIELD_CLEANUP_V1 ';
+            const body = String(context.payload.comment?.body || '');
+            const commentAuthor = context.payload.comment?.user?.login;
+            if (context.repo.owner !== 'UglyGameFace' ||
+                context.repo.repo !== 'Dank-Shield' ||
+                context.actor !== 'UglyGameFace' ||
+                commentAuthor !== 'UglyGameFace' ||
+                context.payload.issue?.number !== 788 ||
+                !context.payload.issue?.pull_request ||
+                !body.startsWith(marker)) {
+              throw new Error('Not an authorized owner cleanup command');
+            }
+            let input;
+            try {
+              input = JSON.parse(body.slice(marker.length).trim());
+            } catch {
+              throw new Error('Command must contain a JSON object');
+            }
+            if (!input || typeof input !== 'object' || Array.isArray(input)) {
+              throw new Error('Command must contain a JSON object');
+            }
+            const fields = new Set(['mode','live_discloud_branch',
+              'live_discloud_branch_ack','confirmation']);
+            if (Object.keys(input).some(key => !fields.has(key))) {
+              throw new Error('Unexpected field in cleanup command');
+            }
+            if (!['preview-reviewed-merged','delete-reviewed-merged']
+                  .includes(input.mode)) {
+              throw new Error('Only owner-reviewed historical cleanup is supported');
+            }
+            const branch = String(input.live_discloud_branch || '').trim();
+            const ack = String(input.live_discloud_branch_ack || '');
+            const confirmation = String(input.confirmation || '');
+            if (input.mode === 'delete-reviewed-merged') {
+              if (!branch || ack !== 'I_VERIFIED_LIVE_DISCLOUD_BRANCH' ||
+                  !/^DELETE_REVIEWED_[0-9A-F]{16}$/.test(confirmation)) {
+                throw new Error('Delete requires verified live branch, owner attestation, and exact preview token');
+              }
+            } else if (confirmation) {
+              throw new Error('Preview must not supply a deletion confirmation');
+            }
+            if (branch && (
+              branch.length > 200 || !/^[A-Za-z0-9_./-]+$/.test(branch) ||
+              branch.startsWith('/') || branch.endsWith('/') ||
+              branch.includes('//') || branch.includes('..') ||
+              branch.includes('@{') || branch.endsWith('.lock'))) {
+              throw new Error('Invalid branch ref syntax');
+            }
+            // The target workflow separately checks the actual ref exists,
+            // the owner attestation, exact-main and candidate leases, PRs,
+            // 48h cooldown, archival tag, SHA-bound preview token and size caps.
+            await github.rest.actions.createWorkflowDispatch({
+              owner: 'UglyGameFace',
+              repo: 'Dank-Shield',
+              workflow_id: 'retire-merged-temporary-branches.yml',
+              ref: 'main',
+              inputs: {
+                mode: input.mode,
+                confirmation,
+                live_discloud_branch: branch,
+                live_discloud_branch_ack: ack,
+              },
+            });
+            core.info('Dispatched existing guarded cleanup: ' + input.mode);
