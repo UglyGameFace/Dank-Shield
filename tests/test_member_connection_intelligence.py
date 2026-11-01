@@ -169,15 +169,15 @@ def test_live_reader_uses_only_tables_in_dedicated_supabase(monkeypatch) -> None
     class DB:
         def table(self, name):
             tables.append(name)
-            assert name in {"guild_members", "member_joins", "manual_alt_links"}
+            assert name in {"guild_members", "member_joins", "manual_alt_links", "member_events"}
             return Query()
 
     monkeypatch.setattr("stoney_verify.globals.get_supabase", lambda: DB())
     report = _read_connection_report(int(TARGET), int(OTHER))
     assert report["coverage"] == "available"
     assert report["matches"] == []
-    assert len(tables) == 8
-    assert "identity_proof_matches" not in tables
+    assert len(tables) == 9
+    assert "identity_proof_matches" not in tables\n    assert report["history_gap"].startswith("No relationship evidence")
 
 def test_unverified_invitations_and_weak_names_do_not_trigger_ban_assertions() -> None:
     class Guild:
