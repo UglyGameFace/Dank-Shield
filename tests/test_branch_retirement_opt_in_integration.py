@@ -32,6 +32,7 @@ const repo = 'Dank-Shield', defaultBranch = 'main';
 const name = 'work/dankshield-branch-cleanup-20261101';
 const branch = {name, commit: {sha: 'branchsha'}, protected: false};
 const candidates = [branch], protectedHeads = new Set(), deleting = true;
+const isManual = false, optInPreviewMainSha = 'mainsha';
 const calls = [];
 let mainReads = 0;
 const mergedPR = {
