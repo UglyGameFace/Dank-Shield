@@ -7,7 +7,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 AUTO = ROOT / ".github/workflows/retire-merged-temporary-branches.yml"
-GUARDED = ROOT / ".github/workflows/guarded-merged-branch-cleanup.yml"
+LEGACY = ROOT / ".github/workflows/guarded-merged-branch-cleanup.yml"
 
 
 def test_auto_retirement_only_opt_in_namespaces() -> None:
@@ -86,11 +86,13 @@ def test_never_force_clean_unverified_or_prod_branches() -> None:
     assert "cancel-in-progress: false" in workflow
 
 
-def test_historical_owner_review_workflow_is_unchanged() -> None:
-    workflow = GUARDED.read_text(encoding="utf-8")
-    assert "DELETE_VERIFIED_NEXT_BATCH" in workflow
-    assert "DELETE_REVIEWED_HISTORICAL_BRANCHES" in workflow
+def test_historical_owner_review_uses_single_sha_bound_authority() -> None:
+    assert not LEGACY.exists()
+    workflow = AUTO.read_text(encoding="utf-8")
+    assert "preview-reviewed-merged" in workflow
+    assert "delete-reviewed-merged" in workflow
     assert "CLEANUP_CONFIRMATION" in workflow
+    assert "branch-retirement-reviewed-20261031/" in workflow
 
 def test_unverified_deployment_branch_allows_archival_but_never_deletion() -> None:
     workflow = AUTO.read_text(encoding="utf-8")
