@@ -123,7 +123,7 @@ def _read_owner_affiliations(db: Any, gid: str, uid: str) -> tuple[list[dict[str
         try:
             response = (
                 db.table("member_events")
-                .select("id,user_id,event_type,metadata,created_at")
+                .select("id,user_id,actor_id,event_type,metadata,reason,created_at")
                 .eq("guild_id", gid)
                 .eq("event_type", _OWNER_AFFILIATION_EVENT)
                 .eq(field, uid).limit(_QUERY_LIMIT).execute()
@@ -149,12 +149,15 @@ def _read_owner_affiliations(db: Any, gid: str, uid: str) -> tuple[list[dict[str
                 if other not in results or version > results[other]["_version"]:
                     results[other] = {
                         "user_id": other, "mode": mode, "_version": version,
+                        "reason": " ".join(str(row.get("reason") or "").split())[:150],
+                        "reviewed_by": _id(row.get("actor_id")),
                     }
         except Exception as exc:
             partial = True
             errors.append(f"Owner association reviews unavailable ({type(exc).__name__}).")
     return [
-        {"user_id": value["user_id"], "mode": value["mode"]}
+        {"user_id": value["user_id"], "mode": value["mode"],
+         "reason": value["reason"], "reviewed_by": value["reviewed_by"]}
         for value in results.values()
     ], errors, partial
 
@@ -248,12 +251,15 @@ def build_connection_report(
     for row in source.get("owner_affiliations", []):
         other = row.get("user_id")
         mode = row.get("mode")
+        # Display a concise audit reason, not unverifiable friendship claims.
+        reason = " ".join(str(row.get("reason") or "").split())[:120].replace("@", "@\u200b")
+        note = f"; owner note: {reason}" if reason else ""
         if mode == "known":
-            record(other, _OWNER_AFFILIATION_MODES[mode], "owner_affiliate", "owner review ledger")
+            record(other, _OWNER_AFFILIATION_MODES[mode] + note, "owner_affiliate", "owner review ledger")
         elif mode == "possible":
-            record(other, _OWNER_AFFILIATION_MODES[mode], "possible_affiliate", "owner review ledger")
+            record(other, _OWNER_AFFILIATION_MODES[mode] + note, "possible_affiliate", "owner review ledger")
         elif mode == "cleared":
-            record(other, _OWNER_AFFILIATION_MODES[mode], "owner_cleared", "owner review ledger")
+            record(other, _OWNER_AFFILIATION_MODES[mode] + note, "owner_cleared", "owner review ledger")
 
     for row in source.get("manual_a", []) + source.get("manual_b", []):
         a, b = _id(row.get("user_a_id")), _id(row.get("user_b_id"))
