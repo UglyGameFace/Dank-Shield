@@ -607,38 +607,35 @@ def _design_server_embed(guild: discord.Guild, options: Mapping[str, Any]) -> di
     frame_source = "custom override" if _category_frame_override_active(options) else "theme default"
 
     embed = discord.Embed(
-        title="🌐 Design Entire Server",
+        title="🌐 Style All Names",
         description=(
-            "Build the server-wide look in one screen. **Nothing is renamed while you choose options.** "
-            "The examples update with your saved draft; Preview shows the exact live-server changes before Apply."
+            "Pick a theme and adjust it below. These selections save your design "
+            "preferences, but **nothing is renamed** until Preview and Apply."
         ),
         color=discord.Color.blurple(),
     )
-    embed.add_field(name="Theme", value=f"**{getattr(theme, 'label', 'Gothic Clean')}**", inline=True)
+    embed.add_field(
+        name="Current look",
+        value=(
+            f"**{getattr(theme, 'label', 'Gothic Clean')}** · Strength **{strength}/5**\\n"
+            f"Separator: **{legacy._separator_choice_label(separator_id)}** · "
+            f"Icons: **{icon_mode_label}**"
+        ),
+        inline=False,
+    )
     embed.add_field(
         name="Font",
-        value=f"**{studio.font_label(font)}** · {font_source}\n`{studio.font_preview(font)}`",
-        inline=True,
-    )
-    embed.add_field(name="Strength", value=f"**{strength}/5**", inline=True)
-    embed.add_field(
-        name="Separator",
-        value=f"**{legacy._separator_choice_label(separator_id)}** · {separator_source}",  # type: ignore[attr-defined]
+        value=f"**{studio.font_label(font)}** · {font_source}\\n`{studio.font_preview(font)}`",
         inline=True,
     )
     embed.add_field(
         name="Category frame",
-        value=f"**{legacy._category_frame_choice_label(frame)}** · {frame_source}",  # type: ignore[attr-defined]
-        inline=True,
-    )
-    embed.add_field(
-        name="Icon behavior",
-        value=f"**{icon_mode_label}**",
+        value=f"**{legacy._category_frame_choice_label(frame)}** · {frame_source}",
         inline=True,
     )
     embed.add_field(
         name="Style example",
-        value=f"Category: `{category_example}`\nChannel: `{channel_example}`",
+        value=f"Category: `{category_example}`\\nChannel: `{channel_example}`",
         inline=False,
     )
     if strength < 3 and font != "normal":
@@ -662,7 +659,7 @@ def _design_server_embed(guild: discord.Guild, options: Mapping[str, Any]) -> di
             ),
             inline=False,
         )
-    embed.set_footer(text="Choose → Preview → Apply • Theme Default keeps Font, Separator, and Category Frame tied to the selected theme")
+    embed.set_footer(text="Choose → Preview → Apply · Frame / Icons contains additional visual choices")
     return legacy._clean_design_embed(embed)  # type: ignore[attr-defined]
 
 
@@ -1192,7 +1189,7 @@ def _saved_rules_embed(guild: discord.Guild, options: Mapping[str, Any]) -> disc
     counts = _rule_counts(options)
     embed = discord.Embed(
         title="🔐 Saved Style Exceptions",
-        description="These settings control what **future previews** enforce. Saving, removing, or changing a rule here does **not** rename a Discord item by itself.",
+        description="Customize or exclude specific items from appearance changes. Saving a rule here does **not** rename a Discord item by itself. This does not change server safety permissions.",
         color=discord.Color.blurple(),
     )
     embed.add_field(
@@ -1212,7 +1209,7 @@ def _saved_rules_embed(guild: discord.Guild, options: Mapping[str, Any]) -> disc
         value=(
             "**Layout Rules** = inspect or add global/category/channel visual rules.\n"
             "**Remove One Rule** = remove exactly one listed saved rule or clean deleted-item rows.\n"
-            "**Protection** = manage exact-item and normalized-name protection.\n"
+            "**Style Exclusions** = manage exact-item and normalized-name styling exclusions.\n"
             "For a clean server-wide redesign, use **Design Entire Server → Clean Redesign**; it clears old layout/name exceptions but keeps protection."
         ),
         inline=False,
@@ -1255,9 +1252,9 @@ class SavedRulesView(DesignView):
         options = await _load_design_options(int(guild.id))
         await interaction.edit_original_response(embed=legacy._protection_manager_embed(guild, options), view=legacy.ProtectionManagerView())  # type: ignore[attr-defined]
 
-    @discord.ui.button(label="Back", emoji="⬅️", style=discord.ButtonStyle.secondary, custom_id="dank_design_v2:rules_back", row=4)
+    @discord.ui.button(label="Back to Advanced", emoji="⬅️", style=discord.ButtonStyle.secondary, custom_id="dank_design_v2:rules_back", row=4)
     async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        await _go_home(interaction)
+        await _open_advanced(interaction)
 
 
 def _advanced_embed() -> discord.Embed:
