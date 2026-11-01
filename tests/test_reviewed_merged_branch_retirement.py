@@ -133,6 +133,11 @@ def test_reviewed_pr_inventory_executable_keeps_only_integrated_unique_head() ->
     segment = text.split("              const allPRs = await", 1)[1]
     segment = "const allPRs = await" + segment.split("              eligible.sort(", 1)[0]
     segment = textwrap.dedent(segment)
+    equivalent = text.split("            const equivalentAtMerge = ", 1)[1]
+    equivalent = "const equivalentAtMerge = " + equivalent.split(
+        "            const reviewed = ", 1
+    )[0]
+    equivalent = textwrap.dedent(equivalent)
     js = r"""
 const owner = 'UglyGameFace', repo = 'Dank-Shield';
 const fullName = owner + '/' + repo, mainSha = 'mainsha';
@@ -188,6 +193,7 @@ const github = {
     }}
   }
 };
+""" + equivalent + r"""
 (async () => {
 """ + segment + r"""
 console.log(JSON.stringify({eligible,paginated,compared}));
