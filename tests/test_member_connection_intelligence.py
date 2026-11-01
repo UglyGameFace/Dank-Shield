@@ -177,7 +177,8 @@ def test_live_reader_uses_only_tables_in_dedicated_supabase(monkeypatch) -> None
     assert report["coverage"] == "available"
     assert report["matches"] == []
     assert len(tables) == 9
-    assert "identity_proof_matches" not in tables\n    assert report["history_gap"].startswith("No relationship evidence")
+    assert "identity_proof_matches" not in tables
+    assert report["history_gap"].startswith("No relationship evidence")
 
 def test_unverified_invitations_and_weak_names_do_not_trigger_ban_assertions() -> None:
     class Guild:
