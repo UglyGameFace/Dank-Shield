@@ -210,14 +210,15 @@ jobs:
                   a.sha === b.sha && a.mode === b.mode && a.type === b.type);
               });
             };
-            // A feature that implements recovery is not a recovery checkpoint.
+            // A feature/fix that implements recovery is not a recovery checkpoint.
             // Continue holding recovery/*, backups, deployment, database and
             // rollback refs. All candidates still need exact PR/main proof.
             const hasHeldHistoricalSegment = (name, held) =>
               name.split(/[\\/_-]+/).some(part => {
                 const segment = part.toLowerCase();
                 return held.has(segment) &&
-                  !(segment === 'recovery' && name.startsWith('feat/'));
+                  !(segment === 'recovery' &&
+                    (name.startsWith('feat/') || name.startsWith('fix/')));
               });
             const reviewed = mode === 'preview-reviewed-merged' || mode === 'delete-reviewed-merged';
             if (reviewed) {
