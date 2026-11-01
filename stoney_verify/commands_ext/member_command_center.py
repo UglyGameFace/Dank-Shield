@@ -910,7 +910,8 @@ def _connection_embed(report: dict[str, Any]) -> discord.Embed:
     )
     for row in matches[:8]:
         evidence = row.get("evidence") or []
-        summary = "\n".join(f"• {item['label']}" for item in evidence[:2])\n        summary += f"\n• Discord ban: {row.get('ban_status', 'not checked')}"
+        summary = "\n".join(f"• {item['label']}" for item in evidence[:2])
+        summary += f"\n• Discord ban: {row.get('ban_status', 'not checked')}"
         if row.get("identity_review") == "staff_marked_not_same_person":
             summary += "\n• Staff previously ruled out a same-person claim"
         embed.add_field(
