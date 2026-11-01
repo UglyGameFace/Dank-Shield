@@ -50,6 +50,8 @@ def test_reviewed_merged_branch_requires_actual_integration() -> None:
         "pr.base?.ref !== 'main'",
         "pr.merge_commit_sha",
         "github.rest.repos.compareCommits",
+        "branchGraph.ahead_by !== 0",
+        "base: mainSha, head: branch.commit.sha",
         "graph.behind_by !== 0",
         "Date.parse(pr.merged_at) > cutoff",
         "currentMain !== mainSha",
@@ -77,6 +79,7 @@ def test_no_unpreserved_work_or_production_refs_deleted() -> None:
         if hold == "scale/production-readiness-10k":
             continue  # The broad reviewed allowlist excludes scale/ by construction.
         assert hold in text
+    assert text.index("branchGraph.ahead_by !== 0") < text.index("eligible.push({name: branch.name")
     assert "archive.object.sha !== item.sha" in text
     assert "lease.object.sha !== item.sha" in text
     assert text.index("archive.object.sha !== item.sha") < text.index(
