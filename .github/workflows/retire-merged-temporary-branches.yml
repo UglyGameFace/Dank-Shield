@@ -8,6 +8,22 @@ on:
       - main # Also run after validated integration; scheduled triggers may be delayed or disabled
   schedule:
     - cron: '*/5 * * * *' # Frequent guarded cleanup; GitHub may delay scheduled starts
+  # Called only by the owner-validated issue_comment relay on main.
+  # Keep all deletion checks in this one authoritative workflow.
+  workflow_call:
+    inputs:
+      mode:
+        required: true
+        type: string
+      confirmation:
+        required: false
+        type: string
+      live_discloud_branch:
+        required: false
+        type: string
+      live_discloud_branch_ack:
+        required: false
+        type: string
   workflow_dispatch:
     inputs:
       mode:
@@ -76,7 +92,15 @@ jobs:
             ];
             const isEligible = name => eligible.some(pattern => pattern.test(name));
             const configuredDeployBranch = String(process.env.LINKED_PRODUCTION_BRANCH || '').trim();
-            const isManual = context.eventName === 'workflow_dispatch';
+            // Reusable workflow calls inherit the caller's issue_comment
+            // event and actor. Never treat arbitrary comments as owner review.
+            const ownerCommentRelay = context.eventName === 'issue_comment' &&
+              context.actor === 'UglyGameFace' &&
+              context.payload.comment?.user?.login === 'UglyGameFace' &&
+              context.payload.issue?.number === 788 &&
+              Boolean(context.payload.issue?.pull_request) &&
+              String(context.payload.comment?.body || '').startsWith('DANK_SHIELD_CLEANUP_V1 ');
+            const isManual = context.eventName === 'workflow_dispatch' || ownerCommentRelay;
             const mode = isManual ? process.env.REQUESTED_MODE : 'delete';
             // Owner can attest the actual Discloud-linked branch in a manual
             // preview/delete pair without changing repository variables.

@@ -1,0 +1,106 @@
+name: Owner-reviewed branch retirement command
+
+# Relay only: actual retirement continues to use the existing SHA-checked,
+# archive-first, deployment-ref-gated cleanup workflow. No direct delete here.
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dankshield-owner-cleanup-command
+  cancel-in-progress: false
+
+jobs:
+  validate-owner-command:
+    permissions:
+      contents: read
+    outputs:
+      mode: ${{ steps.validate.outputs.mode }}
+      confirmation: ${{ steps.validate.outputs.confirmation }}
+      live_discloud_branch: ${{ steps.validate.outputs.live_discloud_branch }}
+      live_discloud_branch_ack: ${{ steps.validate.outputs.live_discloud_branch_ack }}
+    if: >-
+      github.repository == 'UglyGameFace/Dank-Shield' &&
+      github.actor == 'UglyGameFace' &&
+      github.event.issue.number == 788 &&
+      github.event.issue.pull_request != null &&
+      startsWith(github.event.comment.body, 'DANK_SHIELD_CLEANUP_V1 ')
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Validate exact owner command for guarded reusable workflow
+        id: validate
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const marker = 'DANK_SHIELD_CLEANUP_V1 ';
+            const body = String(context.payload.comment?.body || '');
+            const commentAuthor = context.payload.comment?.user?.login;
+            if (context.repo.owner !== 'UglyGameFace' ||
+                context.repo.repo !== 'Dank-Shield' ||
+                context.actor !== 'UglyGameFace' ||
+                commentAuthor !== 'UglyGameFace' ||
+                context.payload.issue?.number !== 788 ||
+                !context.payload.issue?.pull_request ||
+                !body.startsWith(marker)) {
+              throw new Error('Not an authorized owner cleanup command');
+            }
+            let input;
+            try {
+              input = JSON.parse(body.slice(marker.length).trim());
+            } catch {
+              throw new Error('Command must contain a JSON object');
+            }
+            if (!input || typeof input !== 'object' || Array.isArray(input)) {
+              throw new Error('Command must contain a JSON object');
+            }
+            const fields = new Set(['mode','live_discloud_branch',
+              'live_discloud_branch_ack','confirmation']);
+            if (Object.keys(input).some(key => !fields.has(key))) {
+              throw new Error('Unexpected field in cleanup command');
+            }
+            if (!['preview-reviewed-merged','delete-reviewed-merged']
+                  .includes(input.mode)) {
+              throw new Error('Only owner-reviewed historical cleanup is supported');
+            }
+            const branch = String(input.live_discloud_branch || '').trim();
+            const ack = String(input.live_discloud_branch_ack || '');
+            const confirmation = String(input.confirmation || '');
+            if (input.mode === 'delete-reviewed-merged') {
+              if (!branch || ack !== 'I_VERIFIED_LIVE_DISCLOUD_BRANCH' ||
+                  !/^DELETE_REVIEWED_[0-9A-F]{16}$/.test(confirmation)) {
+                throw new Error('Delete requires verified live branch, owner attestation, and exact preview token');
+              }
+            } else if (confirmation) {
+              throw new Error('Preview must not supply a deletion confirmation');
+            }
+            if (branch && (
+              branch.length > 200 || !/^[A-Za-z0-9_./-]+$/.test(branch) ||
+              branch.startsWith('/') || branch.endsWith('/') ||
+              branch.includes('//') || branch.includes('..') ||
+              branch.includes('@{') || branch.endsWith('.lock'))) {
+              throw new Error('Invalid branch ref syntax');
+            }
+            // The reusable workflow inherits this authenticated owner comment.
+            // It separately enforces SHA leases, merge/PR gates, archival tags,
+            // production-ref existence and the exact preview confirmation.
+            core.setOutput('mode', input.mode);
+            core.setOutput('confirmation', confirmation);
+            core.setOutput('live_discloud_branch', branch);
+            core.setOutput('live_discloud_branch_ack', ack);
+            core.info('Validated owner command: ' + input.mode);
+
+  run-existing-guarded-retirement:
+    needs: validate-owner-command
+    permissions:
+      contents: write
+      pull-requests: read
+    uses: ./.github/workflows/retire-merged-temporary-branches.yml
+    with:
+      mode: ${{ needs.validate-owner-command.outputs.mode }}
+      confirmation: ${{ needs.validate-owner-command.outputs.confirmation }}
+      live_discloud_branch: ${{ needs.validate-owner-command.outputs.live_discloud_branch }}
+      live_discloud_branch_ack: ${{ needs.validate-owner-command.outputs.live_discloud_branch_ack }}
