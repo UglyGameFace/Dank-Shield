@@ -122,7 +122,7 @@ def _home_embed(guild: discord.Guild, options: Mapping[str, Any] | None = None) 
         name="Current look",
         value=(
             f"**{getattr(theme, 'label', 'Gothic Clean')}** · "
-            f"Strength **{_safe_int(options.get('strength'), 4)}/5**\\n"
+            f"Strength **{_safe_int(options.get('strength'), 4)}/5**\n"
             f"Saved appearance exceptions: **{exceptions}**"
         ),
         inline=False,
@@ -617,7 +617,7 @@ def _design_server_embed(guild: discord.Guild, options: Mapping[str, Any]) -> di
     embed.add_field(
         name="Current look",
         value=(
-            f"**{getattr(theme, 'label', 'Gothic Clean')}** · Strength **{strength}/5**\\n"
+            f"**{getattr(theme, 'label', 'Gothic Clean')}** · Strength **{strength}/5**\n"
             f"Separator: **{legacy._separator_choice_label(separator_id)}** · "
             f"Icons: **{icon_mode_label}**"
         ),
@@ -625,7 +625,7 @@ def _design_server_embed(guild: discord.Guild, options: Mapping[str, Any]) -> di
     )
     embed.add_field(
         name="Font",
-        value=f"**{studio.font_label(font)}** · {font_source}\\n`{studio.font_preview(font)}`",
+        value=f"**{studio.font_label(font)}** · {font_source}\n`{studio.font_preview(font)}`",
         inline=True,
     )
     embed.add_field(
@@ -635,7 +635,7 @@ def _design_server_embed(guild: discord.Guild, options: Mapping[str, Any]) -> di
     )
     embed.add_field(
         name="Style example",
-        value=f"Category: `{category_example}`\\nChannel: `{channel_example}`",
+        value=f"Category: `{category_example}`\nChannel: `{channel_example}`",
         inline=False,
     )
     if strength < 3 and font != "normal":
@@ -655,7 +655,7 @@ def _design_server_embed(guild: discord.Guild, options: Mapping[str, Any]) -> di
             name="⚠️ Old design overrides are active",
             value=(
                 f"**{narrow_count}** saved layout/name override(s) can make some channels ignore this server-wide style. "
-                "Use **Clean Redesign** to clear those old design exceptions **without removing protection rules**."
+                "Use **Advanced → History & Reset → Clean Redesign** to clear those exceptions **without removing protection rules**."
             ),
             inline=False,
         )
@@ -677,9 +677,9 @@ def _category_frame_picker_embed(
     selected_label = legacy._category_frame_choice_label(selected)  # type: ignore[attr-defined]
 
     embed = _design_server_embed(guild, options)
-    embed.title = f"🖼️ Category Frame & Icons · {group_label}"
+    embed.title = f"🖼️ Frame, Icons & Separator · {group_label}"
     embed.description = (
-        f"Browse **{len(studio.CATEGORY_FRAMES)} category frames** across {total_pages} style groups and choose how server-wide icons behave. "
+        f"Browse **{len(studio.CATEGORY_FRAMES)} category frames** across {total_pages} style groups and choose how server-wide icons behave. Separator-only preview is available here. "
         "**Theme Default** follows the selected theme for frames; icon behavior is an explicit server setting. "
         "Nothing is renamed until you return, Preview, and Apply."
     )
