@@ -902,10 +902,17 @@ def _connection_embed(report: dict[str, Any]) -> discord.Embed:
         color=discord.Color.blurple(),
     )
     matches = report.get("matches") or []
+    coverage_note = (
+        f"{report.get('total_matches', len(matches))} recorded account(s) • "
+        f"Evidence: {report.get('coverage', 'unknown')}"
+    )
+    if report.get("recovered_join_events"):
+        coverage_note += f" • Join events recovered: {report['recovered_join_events']}"
+    if report.get("history_gap"):
+        coverage_note += "\n" + str(report["history_gap"])[:680]
     embed.add_field(
         name="Connection results",
-        value=(f"{report.get('total_matches', len(matches))} recorded account(s) • "
-               f"Evidence: {report.get('coverage', 'unknown')}"),
+        value=coverage_note[:1024],
         inline=False,
     )
     for row in matches[:8]:
