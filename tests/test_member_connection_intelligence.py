@@ -8,6 +8,7 @@ from stoney_verify.member_connection_intelligence import (
     build_connection_report,
     _read_connection_report,
     verified_ban_connections,
+    enrich_connection_ban_status,
 )
 
 
@@ -174,7 +175,7 @@ def test_live_reader_uses_only_tables_in_dedicated_supabase(monkeypatch) -> None
 
     monkeypatch.setattr("stoney_verify.globals.get_supabase", lambda: DB())
     report = _read_connection_report(int(TARGET), int(OTHER))
-    assert report["coverage"] == "available"
+    assert report["coverage"] == "partial"
     assert report["matches"] == []
     assert len(tables) == 9
     assert "identity_proof_matches" not in tables
@@ -224,3 +225,72 @@ def test_single_existing_staff_surface_and_ban_join_hooks() -> None:
     assert "await require_review(interaction)" in center
     assert "analyze_member_connections(guild.id, user.id)" in events
     assert "verified_ban_connections(guild, join_context, risk_profile)" in events
+
+
+def test_ban_enrichment_keeps_identity_and_ban_status_separate() -> None:
+    import discord
+
+    banned_id = OTHER
+    unbanned_id = "303030303030303030"
+    report = {
+        "coverage": "available",
+        "matches": [
+            {"user_id": banned_id, "category": "documented server relationship", "evidence": [{"kind": "social"}]},
+            {"user_id": unbanned_id, "category": "unverified join relationship", "evidence": [{"kind": "weak"}]},
+        ],
+    }
+
+    class Guild:
+        async def fetch_ban(self, user):
+            if user.id == int(banned_id):
+                return SimpleNamespace(user=SimpleNamespace(id=user.id))
+            raise discord.NotFound(SimpleNamespace(status=404, reason="Not Found"), "Unknown Ban")
+
+    result = asyncio.run(enrich_connection_ban_status(Guild(), report))
+    assert [row["ban_status"] for row in result["matches"]] == ["banned", "not_banned"]
+    assert [row["category"] for row in result["matches"]] == [
+        "documented server relationship", "unverified join relationship"
+    ]
+    assert result["matches"][1]["evidence"] == [{"kind": "weak"}]
+    assert result["coverage"] == "available"
+
+
+def test_ban_lookup_permission_failure_marks_partial_without_erasing_evidence() -> None:
+    import discord
+
+    report = {"coverage": "available", "matches": [
+        {"user_id": OTHER, "evidence": [{"label": "Recorded vouch", "kind": "social"}]}
+    ]}
+
+    class Guild:
+        async def fetch_ban(self, user):
+            raise discord.Forbidden(SimpleNamespace(status=403, reason="Forbidden"), "Missing permission")
+
+    result = asyncio.run(enrich_connection_ban_status(Guild(), report))
+    assert result["matches"][0]["ban_status"] == "unavailable"
+    assert result["coverage"] == "partial"
+    assert result["matches"][0]["evidence"][0]["label"] == "Recorded vouch"
+
+
+def test_unexpected_ban_lookup_failure_keeps_report_and_marks_error() -> None:
+    report = {"coverage": "available", "matches": [{"user_id": OTHER}]}
+
+    class Guild:
+        async def fetch_ban(self, user):
+            raise RuntimeError("Discord connection unavailable")
+
+    result = asyncio.run(enrich_connection_ban_status(Guild(), report))
+    assert result["matches"][0]["ban_status"] == "unavailable"
+    assert result["coverage"] == "partial"
+    assert "RuntimeError" in result["errors"][0]
+
+
+def test_invalid_ban_identity_does_not_call_discord() -> None:
+    report = {"coverage": "available", "matches": [{"user_id": "invalid"}]}
+
+    class Guild:
+        async def fetch_ban(self, user):
+            raise AssertionError("No lookup for invalid account IDs")
+
+    result = asyncio.run(enrich_connection_ban_status(Guild(), report))
+    assert result["matches"][0]["ban_status"] == "unknown"
