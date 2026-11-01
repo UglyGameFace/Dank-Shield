@@ -178,7 +178,7 @@ def test_live_reader_uses_only_tables_in_dedicated_supabase(monkeypatch) -> None
     report = _read_connection_report(int(TARGET), int(OTHER))
     assert report["coverage"] == "partial"
     assert report["matches"] == []
-    assert len(tables) == 11
+    assert len(tables) == 13
     assert "identity_proof_matches" not in tables
     assert report["history_gap"].startswith("No recorded relationship")
 
@@ -481,3 +481,129 @@ def test_connection_report_paginates_all_loaded_matches() -> None:
     end_view = ConnectionReportView(123, int(TARGET), report, page=1)
     assert start_view.previous.disabled and not start_view.next_page.disabled
     assert end_view.next_page.disabled and not end_view.previous.disabled
+
+
+def test_owner_affiliation_does_not_turn_association_into_duplicate_identity() -> None:
+    from stoney_verify.member_connection_intelligence import build_connection_report
+    target = TARGET
+    report = build_connection_report(target_id=target, source={
+        "owner_affiliations": [
+            {"user_id": OTHER, "mode": "known"},
+            {"user_id": "303030303030303030", "mode": "possible"},
+            {"user_id": "404040404040404040", "mode": "cleared"},
+        ],
+    })
+    categories = {row["user_id"]: row["category"] for row in report["matches"]}
+    assert categories[OTHER] == "owner-reported known affiliate"
+    assert categories["303030303030303030"] == "owner-reported possible affiliate"
+    assert categories["404040404040404040"] == "owner-cleared association"
+    assert all(row["category"] not in {"reviewed identity record", "possible identity link"}
+               for row in report["matches"])
+    assert report["finding"] == "relationships_only_not_leak_proof"
+
+
+def test_owner_affiliation_is_append_only_separate_from_manual_alt_links(monkeypatch) -> None:
+    import pytest
+    from stoney_verify.member_connection_intelligence import save_owner_affiliation
+
+    inserts = []
+    class DB:
+        def table(self, name):
+            assert name == "member_events"
+            return self
+        def insert(self, row):
+            inserts.append(dict(row))
+            return self
+        def execute(self):
+            return SimpleNamespace(data=[{"id": "example"}])
+
+    monkeypatch.setattr("stoney_verify.globals.get_supabase", lambda: DB())
+    save_owner_affiliation(
+        guild_id=int(TARGET), target_id=int(OTHER),
+        other_id=int(TARGET), actor_id=int(TARGET),
+        mode="known", reason="Manually reviewed and acknowledged relationship.",
+    )
+    assert len(inserts) == 1
+    record = inserts[0]
+    assert record["event_type"] == "owner_affiliation_review"
+    assert record["user_id"] == TARGET
+    assert record["metadata"]["other_user_id"] == OTHER
+    assert record["metadata"]["does_not_prove_identity"] is True
+    assert record["metadata"]["origin"] == "owner_report"
+    with pytest.raises(ValueError):
+        save_owner_affiliation(guild_id=int(TARGET), target_id=int(OTHER),
+                               other_id=int(OTHER), actor_id=int(TARGET),
+                               mode="known", reason="Should never store self-links")
+    with pytest.raises(ValueError):
+        save_owner_affiliation(guild_id=int(TARGET), target_id=int(OTHER),
+                               other_id=int(TARGET), actor_id=int(TARGET),
+                               mode="confirmed_duplicate", reason="Not supported here")
+
+
+def test_owner_affiliation_review_latest_status_preserved_from_evidence_log() -> None:
+    from stoney_verify.member_connection_intelligence import _read_owner_affiliations
+
+    reviews = [
+        {"id": "a", "event_type": "owner_affiliation_review", "user_id": TARGET,
+         "created_at": "2026-10-25T10:00:00+00:00",
+         "metadata": {"origin": "owner_report", "other_user_id": OTHER, "relation": "known"}},
+        {"id": "b", "event_type": "owner_affiliation_review", "user_id": TARGET,
+         "created_at": "2026-10-26T10:00:00+00:00",
+         "metadata": {"origin": "owner_report", "other_user_id": OTHER, "relation": "cleared"}},
+        {"id": "c", "event_type": "owner_affiliation_review", "user_id": TARGET,
+         "created_at": "2026-10-27T10:00:00+00:00",
+         "metadata": {"origin": "owner_report", "other_user_id": "303030303030303030", "relation": "possible"}},
+    ]
+    class Query:
+        def __init__(self):
+            self.filters = {}
+        def select(self, _columns):
+            return self
+        def eq(self, key, value):
+            self.filters[key] = value
+            return self
+        def limit(self, amount):
+            assert amount == 40
+            return self
+        def execute(self):
+            if self.filters.get("user_id") == TARGET:
+                return SimpleNamespace(data=reviews)
+            return SimpleNamespace(data=[])
+    class DB:
+        def table(self, table):
+            assert table == "member_events"
+            return Query()
+
+    actual, errors, partial = _read_owner_affiliations(DB(), TARGET, TARGET)
+    assert not errors and not partial
+    by_user = {item["user_id"]: item["mode"] for item in actual}
+    assert by_user == {OTHER: "cleared", "303030303030303030": "possible"}
+
+
+def test_affiliate_action_is_server_owner_only_and_uses_existing_private_view() -> None:
+    from stoney_verify.commands_ext.member_command_center import (
+        _is_guild_owner_for_affiliations, ConnectionReportView,
+        OwnerAffiliationChoiceView, OwnerAffiliationModal,
+    )
+
+    owner = SimpleNamespace(user=SimpleNamespace(id=123),
+                            guild=SimpleNamespace(owner_id=123))
+    moderator = SimpleNamespace(user=SimpleNamespace(id=456),
+                                guild=SimpleNamespace(owner_id=123))
+    assert _is_guild_owner_for_affiliations(owner)
+    assert not _is_guild_owner_for_affiliations(moderator)
+    assert not _is_guild_owner_for_affiliations(SimpleNamespace(
+        user=owner.user, guild=None,
+    ))
+    review_view = OwnerAffiliationChoiceView(123, int(TARGET))
+    select = next(item for item in review_view.children
+                  if getattr(item, "placeholder", None) == "Choose relationship review")
+    assert {option.value for option in select.options} == {"known", "possible", "cleared"}
+    assert len(review_view.children) == 2
+    modal = OwnerAffiliationModal(int(TARGET), "known")
+    assert len(modal.children) == 2
+    report = {"target_user_id": TARGET, "matches": [], "total_matches": 0,
+              "coverage": "partial", "errors": [], "truncated": False}
+    view = ConnectionReportView(123, int(TARGET), report)
+    assert len(view.children) <= 9
+    assert "Record Affiliate" in {getattr(item, "label", "") for item in view.children}
