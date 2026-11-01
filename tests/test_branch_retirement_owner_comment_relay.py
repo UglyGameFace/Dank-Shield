@@ -28,8 +28,15 @@ def test_relay_never_deletes_branches_or_dispatches_another_workflow():
     assert "issue_comment:" in contents
     assert "github.actor == 'UglyGameFace'" in contents
     assert "github.event.issue.number == 788" in contents
-    assert "actions: write" in contents
     assert "contents: read" in contents
+    assert "contents: write" in contents
+    assert "uses: ./.github/workflows/retire-merged-temporary-branches.yml" in contents
+    assert "createWorkflowDispatch" not in contents
+    target = (WORKFLOW.parent / "retire-merged-temporary-branches.yml").read_text(encoding="utf-8")
+    assert "workflow_call:" in target
+    assert "const ownerCommentRelay = context.eventName === 'issue_comment'" in target
+    assert "context.payload.comment?.user?.login === 'UglyGameFace'" in target
+    assert "const isManual = context.eventName === 'workflow_dispatch' || ownerCommentRelay" in target
     assert "deleteRef" not in contents
     assert "createRef" not in contents
     assert "updateRef" not in contents
@@ -41,7 +48,7 @@ NODE_DRIVER = r"""
 const fs = require('node:fs');
 const spec = JSON.parse(fs.readFileSync(0, 'utf8'));
 const AsyncFunction = Object.getPrototypeOf(async function(){}).constructor;
-const invoked = [];
+const outputs = {};
 const context = {
   repo: {owner: 'UglyGameFace', repo: 'Dank-Shield'},
   actor: spec.actor || 'UglyGameFace',
@@ -50,16 +57,14 @@ const context = {
     comment: {body: spec.body, user: {login: spec.author || 'UglyGameFace'}}
   }
 };
-const github = {rest: {actions: {
-  createWorkflowDispatch: async args => {invoked.push(args);}
-}}};
-const core = {info: () => {}};
+const github = {};
+const core = {info: () => {}, setOutput: (name,value) => {outputs[name]=value;}};
 (async () => {
   try {
     await new AsyncFunction('context','github','core',spec.script)(context,github,core);
-    process.stdout.write(JSON.stringify({success:true,invoked}));
+    process.stdout.write(JSON.stringify({success:true,outputs}));
   } catch (error) {
-    process.stdout.write(JSON.stringify({success:false,error:String(error.message),invoked}));
+    process.stdout.write(JSON.stringify({success:false,error:String(error.message),outputs}));
   }
 })().catch(err => {process.stderr.write(String(err));process.exitCode=1;});
 """
@@ -81,15 +86,15 @@ def _run(input_json, **overrides):
     return json.loads(result.stdout)
 
 
-def test_owner_preview_dispatches_existing_workflow_without_deletion():
+def test_owner_preview_passes_validated_inputs_to_reusable_workflow():
     out = _run({"mode": "preview-reviewed-merged"})
     assert out["success"]
-    assert len(out["invoked"]) == 1
-    call = out["invoked"][0]
-    assert call["workflow_id"] == "retire-merged-temporary-branches.yml"
-    assert call["ref"] == "main"
-    assert call["inputs"]["mode"] == "preview-reviewed-merged"
-    assert call["inputs"]["live_discloud_branch"] == ""
+    assert out["outputs"] == {
+        "mode": "preview-reviewed-merged",
+        "confirmation": "",
+        "live_discloud_branch": "",
+        "live_discloud_branch_ack": "",
+    }
 
 
 @pytest.mark.parametrize("override", [
@@ -100,7 +105,7 @@ def test_owner_preview_dispatches_existing_workflow_without_deletion():
 def test_spoofed_owner_and_wrong_issue_never_dispatch(override):
     out = _run({"mode": "preview-reviewed-merged"}, **override)
     assert not out["success"]
-    assert not out["invoked"]
+    assert not out["outputs"]
 
 
 @pytest.mark.parametrize("input_json", [
@@ -115,7 +120,7 @@ def test_spoofed_owner_and_wrong_issue_never_dispatch(override):
 def test_incomplete_or_unsafe_requests_do_not_dispatch(input_json):
     out = _run(input_json)
     assert not out["success"]
-    assert not out["invoked"]
+    assert not out["outputs"]
 
 
 def test_well_formed_delete_delegates_all_remaining_guards():
@@ -126,8 +131,12 @@ def test_well_formed_delete_delegates_all_remaining_guards():
         "confirmation": "DELETE_REVIEWED_" + "A" * 16,
     })
     assert out["success"]
-    assert len(out["invoked"]) == 1
-    assert out["invoked"][0]["inputs"]["mode"] == "delete-reviewed-merged"
+    assert out["outputs"] == {
+        "mode": "delete-reviewed-merged",
+        "confirmation": "DELETE_REVIEWED_" + "A" * 16,
+        "live_discloud_branch": "verified-production-ref",
+        "live_discloud_branch_ack": "I_VERIFIED_LIVE_DISCLOUD_BRANCH",
+    }
     # This is a relay-only test: the protected target workflow still validates
     # that the branch is truly the owner-verified live one, and that the SHA-
     # bound token matches the latest preview. No real GitHub refs are deleted.
