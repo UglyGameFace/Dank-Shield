@@ -27,7 +27,10 @@ def test_auto_retirement_only_opt_in_namespaces() -> None:
     assert "pr.head?.sha !== branch.commit.sha" in workflow
     assert "pr.base?.ref !== defaultBranch" in workflow
     assert "prs.length !== 1" in workflow
-    assert "openPRs.length" in workflow
+    assert "usedByOpenPR(openPRs)" in workflow
+    assert "usedByOpenPR(latestOpenPRs)" in workflow
+    assert "integrated.ahead_by !== 0" in workflow
+    assert "merged.behind_by !== 0" in workflow
     assert "fresh.protected || fresh.commit.sha !== branch.commit.sha" in workflow
     assert "gitRef.object.sha !== branch.commit.sha" in workflow
 
