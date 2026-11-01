@@ -37,10 +37,11 @@ def test_session_controls_are_reachable_without_dense_button_wall():
         assert len(labels) == len(_buttons(view)), section
         assert "Back to Group" in labels
         assert _SESSION_CONTROL_SECTIONS[section] <= labels
-        assert len(labels & {"Session", "People", "Outside"}) == 2
+        assert any(getattr(item, "custom_id", None) == "dank:hub:manage:section:v1"
+                   for item in view.children)
         assert all(0 <= item.row <= 4 for item in _buttons(view))
         visible.update(labels)
-    assert expected == (visible - {"Back to Group", "Session", "People", "Outside"})
+    assert expected == (visible - {"Back to Group"})
 
 
 def test_community_option_editor_retains_each_action_with_small_sections():
