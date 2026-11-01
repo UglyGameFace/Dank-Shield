@@ -301,10 +301,13 @@ const names = [
   'feat/backup-recovery-20261024',
   'fix/rollback-recovery-20261024',
   'feat/action-center-release-lock-20261023',
+  'release/stable-20261023',
+  'fix/release-hotfix-20261023',
+  'feat/production-release-20261023',
   'feat/embed-studio-recurring-campaigns-20261024'
 ];
 console.log(JSON.stringify(names.map(name => hasHeldHistoricalSegment(name, held))));
 """
     result = subprocess.run(["node", "-e", js], text=True, capture_output=True)
     assert result.returncode == 0, result.stderr
-    assert json.loads(result.stdout) == [False, False, True, True, True, True, True, True, False]
+    assert json.loads(result.stdout) == [False, False, True, True, True, True, True, False, True, True, True, False]
