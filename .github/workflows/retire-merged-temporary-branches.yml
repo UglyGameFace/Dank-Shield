@@ -126,10 +126,9 @@ jobs:
             }
             const deleting = mode === 'delete' && deploymentBranchConfigured;
 
-            // An explicitly reviewed squash-merged branch may be content-equivalent
-            // to main despite retaining unique commit IDs. Never infer that
-            // equivalence from its PR status alone: freeze exact head, merge,
-            // paths and main tree blobs before allowing the reviewed path.
+            // Historical squash/rebase PR heads can retain unique commit IDs.
+            // Require exact changed-path equivalence at their immutable PR
+            // merge commit; never infer integration from PR status alone.
             // A squash/rebase PR can leave unique commit IDs even when every
             // changed path was integrated. Prove equivalence against the
             // actual PR merge commit, NOT moving main (which may later edit
