@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from stoney_verify.member_connection_intelligence import (
     build_connection_report,
     _read_connection_report,
+    _recorded_join_event,
     verified_ban_connections,
     enrich_connection_ban_status,
 )
@@ -177,9 +178,9 @@ def test_live_reader_uses_only_tables_in_dedicated_supabase(monkeypatch) -> None
     report = _read_connection_report(int(TARGET), int(OTHER))
     assert report["coverage"] == "partial"
     assert report["matches"] == []
-    assert len(tables) == 9
+    assert len(tables) == 10
     assert "identity_proof_matches" not in tables
-    assert report["history_gap"].startswith("No relationship evidence")
+    assert report["history_gap"].startswith("No recorded relationship")
 
 def test_unverified_invitations_and_weak_names_do_not_trigger_ban_assertions() -> None:
     class Guild:
@@ -294,3 +295,141 @@ def test_invalid_ban_identity_does_not_call_discord() -> None:
 
     result = asyncio.run(enrich_connection_ban_status(Guild(), report))
     assert result["matches"][0]["ban_status"] == "unknown"
+
+
+def _joined_event(*, member: str, actor: str, inviter: str = "",
+                  voucher: str = "", quality: str = "confirmed",
+                  event_type: str = "member_joined",
+                  joined_at: str = "2026-10-20T11:45:10+00:00",
+                  created_at: str = "2026-10-20T11:45:12+00:00",
+                  conflicted: bool = False) -> dict:
+    return {
+        "guild_id": TARGET,
+        "user_id": member,
+        "actor_id": actor,
+        "event_type": event_type,
+        "created_at": created_at,
+        "metadata": {
+            "joined_at": joined_at,
+            "invited_by": inviter,
+            "vouched_by": voucher,
+            "entry_truth_quality": quality,
+            "entry_conflict": conflicted,
+        },
+    }
+
+
+def test_original_join_event_requires_correct_type_and_timestamp() -> None:
+    valid = _joined_event(member=TARGET, actor=OTHER, inviter=OTHER)
+    assert _recorded_join_event(valid)["invited_by"] == OTHER
+    assert _recorded_join_event({**valid, "event_type": "member_banned"}) is None
+    assert _recorded_join_event({**valid, "created_at": "2026-10-22T11:45:12+00:00"}) is None
+    assert _recorded_join_event({**valid, "metadata": {"invited_by": OTHER}}) is None
+    assert _recorded_join_event({**valid, "metadata": "not a JSON object"}) is None
+
+
+def test_historical_events_preserve_quality_and_identity_boundaries() -> None:
+    event = {
+        "user_id": OTHER, "invited_by": TARGET, "entry_truth_quality": "partial",
+        "entry_conflict": False, "vouched_by": "",
+    }
+    report = build_connection_report(
+        target_id=TARGET, source={"event_related": [event]},
+    )
+    assert report["matches"][0]["category"] == "unverified join relationship"
+    assert report["matches"][0]["evidence"][0]["source"] == "original member_joined event"
+
+    event["entry_truth_quality"] = "confirmed"
+    report = build_connection_report(
+        target_id=TARGET, source={"event_related": [event]},
+    )
+    assert report["matches"][0]["category"] == "documented server relationship"
+    assert report["finding"] == "relationships_only_not_leak_proof"
+
+    event["entry_conflict"] = True
+    report = build_connection_report(target_id=TARGET, source={"event_related": [event]})
+    assert report["matches"][0]["category"] == "unverified join relationship"
+
+
+def test_missing_join_rows_recover_recorded_forward_and_reverse_events(monkeypatch) -> None:
+    # A member's event survives a failed member_joins insert. Reverse queries
+    # are limited to actor_id, and actor_id can be a staff approver, so require
+    # the original metadata to explicitly identify an inviter or voucher.
+    rows = [
+        _joined_event(member=TARGET, actor=OTHER, inviter=OTHER),
+        _joined_event(member=OTHER, actor=TARGET, inviter=TARGET),
+        _joined_event(member="303030303030303030", actor=TARGET,
+                      inviter=OTHER),  # approval, NOT an invite by TARGET
+        _joined_event(member="404040404040404040", actor=OTHER,
+                      inviter=OTHER, event_type="member_banned"),
+    ]
+
+    class Query:
+        def __init__(self, table: str):
+            self.table = table
+            self.filters = {}
+
+        def select(self, columns):
+            assert columns
+            return self
+
+        def eq(self, column, value):
+            self.filters[column] = str(value)
+            return self
+
+        def limit(self, amount):
+            assert amount <= 40
+            return self
+
+        def execute(self):
+            if self.table != "member_events":
+                return SimpleNamespace(data=[])
+            filtered = [
+                row for row in rows
+                if all(str(row.get(key)) == value for key, value in self.filters.items())
+            ]
+            return SimpleNamespace(data=filtered)
+
+    class DB:
+        def table(self, name):
+            assert name in {"guild_members", "member_joins", "manual_alt_links", "member_events"}
+            return Query(name)
+
+    monkeypatch.setattr("stoney_verify.globals.get_supabase", lambda: DB())
+    report = _read_connection_report(int(TARGET), int(TARGET))
+    assert report["history_status"] == "events_only"
+    assert report["recovered_join_events"] == 2
+    assert report["history_events"] == 3
+    assert report["coverage"] == "partial"  # History is still missing.
+    assert report["history_gap"].startswith("No join-history row")
+    assert [item["user_id"] for item in report["matches"]] == [OTHER]
+    assert len(report["matches"][0]["evidence"]) == 2
+
+
+def test_known_account_relationships_require_distinct_proofs() -> None:
+    # Two reviewed identities and two documented invitations must never
+    # become an automatically confirmed four-person alt cluster.
+    candidate_two = "303030303030303030"
+    social_one = "404040404040404040"
+    social_two = "505050505050505050"
+    report = build_connection_report(
+        target_id=TARGET,
+        source={
+            "manual_a": [{"user_a_id": TARGET, "user_b_id": OTHER,
+                          "link_type": "confirmed_duplicate", "status": "active"},
+                         {"user_a_id": TARGET, "user_b_id": candidate_two,
+                          "link_type": "same_person_likely", "status": "active"}],
+            "event_related": [
+                {"user_id": social_one, "invited_by": TARGET,
+                 "entry_truth_quality": "confirmed"},
+                {"user_id": social_two, "vouched_by": TARGET,
+                 "entry_truth_quality": "partial"},
+            ],
+        },
+    )
+    categories = {row["user_id"]: row["category"] for row in report["matches"]}
+    assert categories[OTHER] == "reviewed identity record"
+    assert categories[candidate_two] == "possible identity link"
+    assert categories[social_one] == "documented server relationship"
+    assert categories[social_two] == "documented server relationship"
+    assert report["finding"] == "relationships_only_not_leak_proof"
