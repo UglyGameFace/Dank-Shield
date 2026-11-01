@@ -246,12 +246,24 @@ async def enrich_connection_ban_status(guild: Any, report: dict[str, Any]) -> di
         if not uid:
             continue
         try:
-            await guild.fetch_ban(discord.Object(id=int(uid)))
+            ban = await guild.fetch_ban(discord.Object(id=int(uid)))
         except discord.NotFound:
             row["ban_status"] = "not_banned"
         except (discord.Forbidden, discord.HTTPException):
             row["ban_status"] = "unavailable"
             report["coverage"] = "partial"
+        except Exception as exc:
+            # A transient adapter or transport failure must not hide the
+            # historical evidence that was successfully collected.
+            row["ban_status"] = "unavailable"
+            report["coverage"] = "partial"
+            report.setdefault("errors", []).append(
+                f"Discord ban lookup unavailable ({type(exc).__name__})."
+            )
         else:
-            row["ban_status"] = "banned"
+            if getattr(ban, "user", None) is not None:
+                row["ban_status"] = "banned"
+            else:
+                row["ban_status"] = "unavailable"
+                report["coverage"] = "partial"
     return report
