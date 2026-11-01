@@ -75,7 +75,7 @@ def test_registry_preserves_all_previous_home_destinations() -> None:
         "Verification",
         "Welcome, Join & Exit",
         "Members & Moderation",
-        "Server Design",
+        "Server Appearance",
         "Roles & Profiles",
         "Logs & Activity",
         "My Profile",
@@ -84,7 +84,7 @@ def test_registry_preserves_all_previous_home_destinations() -> None:
         "Server Stats",
         "Status",
         "Diagnostics",
-        "Card Assets",
+        "Welcome Card Assets",
         "Live Captions",
         "AI Voice Safety",
         "Share Router Downloads",
@@ -380,10 +380,12 @@ def test_buttons_use_action_meaning_not_moderator_role_color() -> None:
     neutral = discord.ButtonStyle.secondary
     design = surface.FeatureCategoryView(100, "design")
     embed = next(item for item in design.children if getattr(item, "label", "") == "Post Builder")
-    card = next(item for item in design.children if getattr(item, "label", "") == "Card Assets")
+    access = surface.FeatureCategoryView(100, "access")
+    card = next(item for item in access.children if getattr(item, "label", "") == "Welcome Card Assets")
     assert embed.style is blue
     assert card.style is neutral
     assert registry.feature_by_key("card_assets").manager_only
+    assert registry.feature_by_key("card_assets").category == "access"
     home = surface.CompactDankHomeView(100)
     close = next(item for item in home.children if getattr(item, "label", "") == "Close")
     find = next(item for item in home.children if getattr(item, "label", "") == "Find Feature")
