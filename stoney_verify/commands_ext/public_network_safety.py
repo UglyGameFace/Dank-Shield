@@ -318,6 +318,61 @@ class AmendmentActionsView(discord.ui.View):
                 action="withdrawal", parent_id=str(self.report["id"])))
 
 
+class NetworkReportPages(discord.ui.View):
+    """Show each available reason in a small owner-only page, not a giant list."""
+
+    def __init__(self, subject: int, reports: list[dict[str, Any]], page: int = 0) -> None:
+        super().__init__(timeout=300)
+        self.subject = subject
+        self.reports = reports
+        self.page = max(0, min(page, max(0, (len(reports) - 1) // 4)))
+        self.previous.disabled = self.page <= 0
+        self.next.disabled = (self.page + 1) * 4 >= len(self.reports)
+
+    def embed(self) -> discord.Embed:
+        e = discord.Embed(
+            title="Cross-server advisory history",
+            description=(f"Exact account `{self.subject}` • Page {self.page + 1} of "
+                         f"{max(1, (len(self.reports) + 3) // 4)}.\n"
+                         "Owner-attested reports are not proof; withdrawn reports are excluded. "
+                         "Network history may be limited to 40 current reports."),
+            color=discord.Color.blurple(),
+        )
+        chunk = self.reports[self.page * 4:self.page * 4 + 4]
+        if not chunk:
+            e.add_field(name="No active shared incidents", value=(
+                "No current opted-in sources reported this ID, or receiving is OFF. "
+                "An empty report is not proof of a clean history."
+            ), inline=False)
+        for rec in chunk:
+            label = discord.utils.escape_mentions(discord.utils.escape_markdown(
+                str(rec.get("source_label") or "Participating server")[:70]))
+            reason = discord.utils.escape_mentions(discord.utils.escape_markdown(
+                str(rec.get("reason") or "No reason supplied")[:350]))
+            date = str(rec.get("occurred_at") or "")[:10] or "unknown date"
+            category = str(rec.get("category") or "other").title()[:28]
+            e.add_field(name=f"{label} • {category} • {date}", value=reason, inline=False)
+        e.set_footer(text="Read-only advisory. No automatic action against this account.")
+        return e
+
+    @discord.ui.button(label="Previous", style=discord.ButtonStyle.secondary)
+    async def previous(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if not await _deny(interaction):
+            view = NetworkReportPages(self.subject, self.reports, self.page - 1)
+            await _edit(interaction, view, view.embed())
+
+    @discord.ui.button(label="Next", style=discord.ButtonStyle.secondary)
+    async def next(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if not await _deny(interaction):
+            view = NetworkReportPages(self.subject, self.reports, self.page + 1)
+            await _edit(interaction, view, view.embed())
+
+    @discord.ui.button(label="Back", style=discord.ButtonStyle.secondary)
+    async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if not await _deny(interaction):
+            await _edit(interaction, SubjectActionsView(self.subject), _subject_embed(self.subject))
+
+
 class SubjectActionsView(discord.ui.View):
     def __init__(self, subject: int) -> None:
         super().__init__(timeout=300)
@@ -335,12 +390,11 @@ class SubjectActionsView(discord.ui.View):
         await interaction.response.defer(ephemeral=True)
         try:
             rows = await network.reports_for_owner(interaction.guild, self.subject, interaction.client)
-            detail = network.advisory_text(self.subject, rows) if rows else (
-                "No shared active incident reports, or receiving is disabled. "
-                "Only opted-in reporting servers can contribute.")
-            embed = discord.Embed(title="Cross-server advisory history", description=detail[:3900])
-            await interaction.edit_original_response(embed=embed, view=SubjectActionsView(self.subject),
-                                                     allowed_mentions=discord.AllowedMentions.none())
+            view = NetworkReportPages(self.subject, rows)
+            await interaction.edit_original_response(
+                embed=view.embed(), view=view,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
         except Exception:
             await interaction.edit_original_response(
                 content="Network reports unavailable; no negative finding is implied."
