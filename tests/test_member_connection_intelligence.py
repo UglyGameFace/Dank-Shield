@@ -25,7 +25,7 @@ def test_confirmed_invite_is_a_social_link_not_a_leak_or_alt() -> None:
             "entry_conflict": False,
         }]},
     )
-    assert report["coverage"] == "partial"
+    assert report["coverage"] == "available"
     assert report["total_matches"] == 1
     assert report["matches"][0]["category"] == "documented server relationship"
     assert report["finding"] == "relationships_only_not_leak_proof"
@@ -174,7 +174,7 @@ def test_live_reader_uses_only_tables_in_dedicated_supabase(monkeypatch) -> None
 
     monkeypatch.setattr("stoney_verify.globals.get_supabase", lambda: DB())
     report = _read_connection_report(int(TARGET), int(OTHER))
-    assert report["coverage"] == "available"
+    assert report["coverage"] == "partial"
     assert report["matches"] == []
     assert len(tables) == 9
     assert "identity_proof_matches" not in tables
