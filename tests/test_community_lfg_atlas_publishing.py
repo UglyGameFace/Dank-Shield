@@ -207,12 +207,20 @@ def test_live_eligibility_requires_both_consents_and_host(monkeypatch):
 
 
 def test_control_is_one_host_consent_form_and_live_public_buttons():
-    buttons = ui.SessionControlView(UID, session_id=SID).children
+    buttons = ui.SessionControlView(UID, session_id=SID, section="outside").children
     labels = {getattr(x, "label", None) for x in buttons}
     assert {"Share Outside Server", "Advertise Externally",
             "Remove External Ad", "External Ad Status"} <= labels
-    assert len(buttons) <= 25
+    assert any(getattr(x, "custom_id", "") == "dank:hub:manage:section:v1"
+               for x in buttons)
+    assert len(buttons) <= 9
     assert max(getattr(x, "row", 0) or 0 for x in buttons) <= 4
+    # A Discord select occupies the entire row (width 5). The outside
+    # recruiting buttons already occupy row 3; the section picker must not.
+    section = next(x for x in buttons if getattr(x, "custom_id", "") ==
+                   "dank:hub:manage:section:v1")
+    assert section.row == 4
+    assert all(x is section or getattr(x, "row", None) != section.row for x in buttons)
     modal = ui.ExternalAtlasPublishModal(SID, GID, UID)
     assert len(modal.children) == 4
     assert modal.confirm.label.startswith("Type POST")

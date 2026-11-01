@@ -3466,10 +3466,55 @@ async def _require_atlas_host(
     return allow_staff and _staff_authorized(interaction)
 
 
+_SESSION_CONTROL_SECTIONS = {
+    "session": {
+        "Start", "Pause", "Resume", "Lock / Unlock", "Keep Open", "End Session",
+    },
+    "people": {
+        "Transfer Host", "Choose Co-host", "Live Captions", "Call Game Crew",
+    },
+    "outside": {
+        "Share Outside Server", "Advertise Externally",
+        "Remove External Ad", "External Ad Status",
+    },
+}
+
+
+class SessionControlSectionSelect(discord.ui.Select):
+    def __init__(self, owner_id: int, session_id: str, section: str) -> None:
+        self.owner_id = int(owner_id)
+        self.session_id = session_id
+        super().__init__(
+            placeholder="Choose session controls",
+            options=[
+                discord.SelectOption(label=label, value=key, default=section == key)
+                for key, label in (
+                    ("session", "Session Controls"),
+                    ("people", "People & Captions"),
+                    ("outside", "Outside Recruiting"),
+                )
+            ],
+            row=4,
+            custom_id="dank:hub:manage:section:v1",
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        view = SessionControlView(
+            self.owner_id, session_id=self.session_id, section=self.values[0],
+        )
+        await view._switch_section(interaction, self.values[0])
+
+
 class SessionControlView(_OwnedView):
-    def __init__(self, owner_id: int, *, session_id: str) -> None:
+    def __init__(self, owner_id: int, *, session_id: str, section: str = "session") -> None:
         super().__init__(owner_id)
         self.session_id = session_id
+        self.section = section if section in _SESSION_CONTROL_SECTIONS else "session"
+        allowed = _SESSION_CONTROL_SECTIONS[self.section] | {"Back to Group"}
+        for item in tuple(self.children):
+            if getattr(item, "label", "") not in allowed:
+                self.remove_item(item)
+        self.add_item(SessionControlSectionSelect(self.owner_id, self.session_id, self.section))
 
     async def _transition(self, interaction: discord.Interaction, action: str, success: str) -> None:
         await _defer_update(interaction)
@@ -3795,6 +3840,23 @@ class SessionControlView(_OwnedView):
         members = await hub.list_session_members(self.session_id)
         await _edit_private_original(interaction, content=None, embed=build_session_embed(session, members), view=SessionDetailView(self.owner_id, session_id=self.session_id, return_kind="mine"))
 
+
+    async def _switch_section(self, interaction: discord.Interaction, section: str) -> None:
+        await _defer_update(interaction)
+        try:
+            session = await hub.get_session(
+                self.session_id, guild_id=int(interaction.guild_id or 0),
+            )
+            members = await hub.list_session_members(self.session_id)
+        except hub.CommunityHubError as exc:
+            return await _followup(interaction, f"❌ {_error_text(exc)}")
+        await _edit_private_original(
+            interaction, content=None,
+            embed=build_session_embed(session, members),
+            view=SessionControlView(
+                self.owner_id, session_id=self.session_id, section=section,
+            ),
+        )
 
 class CommunitySessionPublicView(discord.ui.View):
     def __init__(self, *, ended: bool = False) -> None:

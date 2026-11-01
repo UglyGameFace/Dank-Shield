@@ -635,10 +635,54 @@ class DeleteOptionConfirmView(_OwnedView):
         await _open_option_editor(interaction, self.owner_id, self.option_key)
 
 
+_OPTION_EDITOR_SECTIONS = {
+    "details": ("Edit Details", "Enable / Disable", "Toggle Removable", "Delete"),
+    "rules": ("Prerequisite", "Clear Prerequisite", "Mutual Exclusion"),
+    "notifications": ("Toke Starter", "Toke Notify", "Movie Night Notify"),
+    "order": ("Move Up", "Move Down"),
+}
+
+
+class CommunityOptionEditorSectionSelect(discord.ui.Select):
+    def __init__(self, owner_id: int, option_key: str, section: str) -> None:
+        self.owner_id = int(owner_id)
+        self.option_key = option_key
+        super().__init__(
+            placeholder="Choose what to change",
+            options=[
+                discord.SelectOption(label=label, value=key, default=key == section)
+                for key, label in (
+                    ("details", "Option Details"),
+                    ("rules", "Access Rules"),
+                    ("notifications", "Toke & Movie Notifications"),
+                    ("order", "Order & Position"),
+                )
+            ],
+            row=0,
+            custom_id="dank:pings:option:section:v1",
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        if not await _staff_authorized(interaction):
+            return
+        await _open_option_editor(
+            interaction, self.owner_id, self.option_key, section=self.values[0],
+        )
+
+
 class CommunityOptionEditorView(_OwnedView):
-    def __init__(self, owner_id: int, option_key: str) -> None:
+    def __init__(self, owner_id: int, option_key: str, *, section: str = "details") -> None:
         super().__init__(owner_id)
         self.option_key = option_key
+        self.section = section if section in _OPTION_EDITOR_SECTIONS else "details"
+        by_label = {str(getattr(item, "label", "")): item for item in self.children}
+        self.clear_items()
+        self.add_item(CommunityOptionEditorSectionSelect(self.owner_id, option_key, self.section))
+        actions = (*_OPTION_EDITOR_SECTIONS[self.section], "Back", "Close")
+        for index, label in enumerate(actions):
+            item = by_label[label]
+            item.row = 1 + index // 4
+            self.add_item(item)
 
     async def _state(
         self,
@@ -692,13 +736,13 @@ class CommunityOptionEditorView(_OwnedView):
             saved = await _save(pick_interaction, expected_config=raw, updated=updated)
             if saved is None:
                 return
-            await _open_option_editor(pick_interaction, self.owner_id, option.key)
+            await _open_option_editor(pick_interaction, self.owner_id, option.key, section=self.section)
 
         def allowed(role: Any) -> bool:
             return isinstance(role, discord.Role) and not role.is_default() and int(role.id) != int(option.role_id)
 
         async def back(back_interaction: discord.Interaction) -> None:
-            await _open_option_editor(back_interaction, self.owner_id, option.key)
+            await _open_option_editor(back_interaction, self.owner_id, option.key, section=self.section)
 
         browser = DankGuildResourceBrowserView(
             guild=guild,
@@ -726,7 +770,7 @@ class CommunityOptionEditorView(_OwnedView):
         saved = await _save(interaction, expected_config=raw, updated=updated)
         if saved is None:
             return
-        await _open_option_editor(interaction, self.owner_id, option.key)
+        await _open_option_editor(interaction, self.owner_id, option.key, section=self.section)
 
     @discord.ui.button(label="Mutual Exclusion", emoji="↔️", style=discord.ButtonStyle.secondary, row=1)
     async def exclusive(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -766,7 +810,7 @@ class CommunityOptionEditorView(_OwnedView):
         saved = await _save(interaction, expected_config=raw, updated=updated)
         if saved is None:
             return
-        await _open_option_editor(interaction, self.owner_id, option.key)
+        await _open_option_editor(interaction, self.owner_id, option.key, section=self.section)
 
     @discord.ui.button(label="Toke Starter", emoji="🌿", style=discord.ButtonStyle.secondary, row=2)
     async def toke_start(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -814,7 +858,7 @@ class CommunityOptionEditorView(_OwnedView):
         saved = await _save(interaction, expected_config=raw, updated=updated)
         if saved is None:
             return
-        await _open_option_editor(interaction, self.owner_id, option.key)
+        await _open_option_editor(interaction, self.owner_id, option.key, section=self.section)
 
     @discord.ui.button(label="Move Up", emoji="⬆️", style=discord.ButtonStyle.secondary, row=2)
     async def move_up(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -838,7 +882,7 @@ class CommunityOptionEditorView(_OwnedView):
         saved = await _save(interaction, expected_config=raw, updated=updated)
         if saved is None:
             return
-        await _open_option_editor(interaction, self.owner_id, option.key)
+        await _open_option_editor(interaction, self.owner_id, option.key, section=self.section)
 
     @discord.ui.button(label="Delete", emoji="🗑️", style=discord.ButtonStyle.danger, row=3)
     async def delete(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -873,7 +917,10 @@ class CommunityOptionEditorView(_OwnedView):
         await _replace(interaction, content="Community & Pings editor closed.", embed=None, view=None)
 
 
-async def _open_option_editor(interaction: discord.Interaction, owner_id: int, option_key: str) -> None:
+async def _open_option_editor(
+    interaction: discord.Interaction, owner_id: int, option_key: str,
+    *, section: str = "details",
+) -> None:
     guild = interaction.guild
     if guild is None:
         return await _reply(interaction, "This only works inside a server.")
@@ -884,7 +931,7 @@ async def _open_option_editor(interaction: discord.Interaction, owner_id: int, o
     await _replace(
         interaction,
         embed=_option_embed(guild, model, option),
-        view=CommunityOptionEditorView(owner_id, option.key),
+        view=CommunityOptionEditorView(owner_id, option.key, section=section),
     )
 
 
