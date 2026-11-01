@@ -136,6 +136,7 @@ def test_reviewed_pr_inventory_executable_keeps_only_integrated_unique_head() ->
     js = r"""
 const owner = 'UglyGameFace', repo = 'Dank-Shield';
 const fullName = owner + '/' + repo, mainSha = 'mainsha';
+const reconciledSquash = new Map();
 const inUse = new Set(['feat/open']);
 const safeName = name => name.startsWith('feat/');
 const cutoff = Date.now() - 48 * 60 * 60 * 1000;
