@@ -1,3 +1,12 @@
+## BRANCH RETIREMENT INTEGRATION CHECKPOINT (2026-11-01 UTC)
+
+- **Observed branches:** 127 before and 127 after; **0 actual deletions**. Existing cleanup cannot delete until the live Discloud-linked branch is independently verified and the guarded workflow is authorized. Do not mistake a GitHub ref's existence for live deployment proof.
+- **Existing PR extended:** #785, not a new PR. Found and corrected a separate unsafe opt-in path: an exact-head squash-merged PR could still have unique commits, and an open PR could use the candidate branch as its base. Both now block retirement. Recheck main, open PR dependencies and exact SHA immediately before any opt-in deletion; require zero-ahead ancestry and the merged PR commit on main.
+- **Regression coverage:** New executable Node.js simulation exercises unique commits, open PR base use, moving main and an eligible archive-before-delete path; updated static guards. Latest exact-head CI pending. No production, credential, database, host-file or Git ref deletion performed.
+- **Other work:** #783 remains an independent draft. Dedicated Supabase `viamriafkbqhquvrsnua` stays primary, original IdleGrowOp rollback source preserved, Discloud PostgreSQL isolated backup candidate. Main source does not prove live Discloud deployment.
+
+---
+
 ## LIVE INTEGRATION CHECKPOINT (2026-11-01 UTC, after PR #784 merge)
 
 - **Canonical main:** `1d24e0d8feb9b76247040c53c304b0ee8da99d3a` after merging PR #784. Its exact-main push CI is pending, so do not call it release-ready.
