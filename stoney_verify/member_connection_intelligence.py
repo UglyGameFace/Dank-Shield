@@ -57,11 +57,16 @@ def build_connection_report(
             record(row.get("user_id"), "This user vouched for their entry", "social", "guild_members")
 
     for row in source.get("target", []) + source.get("join_target", []):
-        for field, label in (
-            ("invited_by", "Invited this user"),
-            ("vouched_by", "Vouched for this user"),
-        ):
-            record(row.get(field), label, "social", "guild_members")
+        inviter = row.get("invited_by")
+        if _id(inviter):
+            quality = _text(row.get("entry_truth_quality")).lower()
+            if row.get("entry_conflict") or quality not in {
+                "confirmed", "verified", "high", "high_confidence", "exact", "trusted"
+            }:
+                record(inviter, "Possible inviter attribution (not confirmed)", "weak", "member join history")
+            else:
+                record(inviter, "This user's join was attributed to that inviter", "social", "member join history")
+        record(row.get("vouched_by"), "That user vouched for this user's entry", "social", "member join history")
 
     for row in source.get("manual_a", []) + source.get("manual_b", []):
         a, b = _id(row.get("user_a_id")), _id(row.get("user_b_id"))
@@ -104,7 +109,9 @@ def build_connection_report(
         "truncated": len(ordered) > _RESULT_LIMIT or any(
             len(rows) >= _QUERY_LIMIT for rows in source.values()
         ),
-        "coverage": "partial" if problems else "available",
+        "coverage": "partial" if problems or any(
+            len(rows) >= _QUERY_LIMIT for rows in source.values()
+        ) else "available",
         "errors": problems,
         "finding": "relationships_only_not_leak_proof",
     }
