@@ -24,6 +24,14 @@ on:
         description: 'Exact token from reviewed preview'
         type: string
         required: false
+      live_discloud_branch:
+        description: 'Owner-verified current Discloud-linked branch (optional manual override)'
+        type: string
+        required: false
+      live_discloud_branch_ack:
+        description: 'Type I_VERIFIED_LIVE_DISCLOUD_BRANCH for manual override'
+        type: string
+        required: false
 
 permissions:
   contents: write
@@ -44,6 +52,8 @@ jobs:
         env:
           REQUESTED_MODE: ${{ inputs.mode }}
           LINKED_PRODUCTION_BRANCH: ${{ vars.DANK_DISCLOUD_DEPLOY_BRANCH }}
+          MANUAL_DEPLOY_BRANCH: ${{ inputs.live_discloud_branch }}
+          MANUAL_DEPLOY_ACK: ${{ inputs.live_discloud_branch_ack }}
           CLEANUP_CONFIRMATION: ${{ inputs.confirmation }}
         with:
           script: |
@@ -65,28 +75,44 @@ jobs:
               /^migration\/dankshield-[a-z0-9-]+-20\d{6}$/
             ];
             const isEligible = name => eligible.some(pattern => pattern.test(name));
+            const configuredDeployBranch = String(process.env.LINKED_PRODUCTION_BRANCH || '').trim();
+            const isManual = context.eventName === 'workflow_dispatch';
+            const mode = isManual ? process.env.REQUESTED_MODE : 'delete';
+            // Owner can attest the actual Discloud-linked branch in a manual
+            // preview/delete pair without changing repository variables.
+            // Scheduled and push runs NEVER accept an input override.
+            const manualDeployBranch = isManual
+              ? String(process.env.MANUAL_DEPLOY_BRANCH || '').trim() : '';
+            if (manualDeployBranch) {
+              if (context.actor !== 'UglyGameFace' ||
+                  process.env.MANUAL_DEPLOY_ACK !== 'I_VERIFIED_LIVE_DISCLOUD_BRANCH') {
+                throw new Error('Manual deployment ref requires owner attestation');
+              }
+              if (configuredDeployBranch && configuredDeployBranch !== manualDeployBranch) {
+                throw new Error('Manual deployment ref disagrees with configured ref; resolve conflict first');
+              }
+            }
+            const effectiveDeployBranch = manualDeployBranch || configuredDeployBranch;
             const protectedHeads = new Set([
               'main',
               'aaa-cinema-pre-pregateway-bind',
               'backup/stoneyverify-stable-7fdc331-20261008',
-              String(process.env.LINKED_PRODUCTION_BRANCH || '').trim()
+              configuredDeployBranch,
+              effectiveDeployBranch
             ]);
-            // A nonempty variable is not proof that the branch exists. Fail
-            // closed if it is mistyped or was deleted since configuration.
-            const configuredDeployBranch = String(process.env.LINKED_PRODUCTION_BRANCH || '').trim();
+            // An owner-entered branch name is not sufficient by itself:
+            // verify that the ref still exists before permitting deletion.
             let deploymentBranchConfigured = false;
-            if (configuredDeployBranch) {
+            if (effectiveDeployBranch) {
               try {
                 const deployed = (await github.rest.repos.getBranch({
-                  owner, repo, branch: configuredDeployBranch
+                  owner, repo, branch: effectiveDeployBranch
                 })).data;
                 deploymentBranchConfigured = Boolean(deployed.commit?.sha);
               } catch (error) {
-                core.warning('Configured Discloud deployment branch cannot be resolved; historical deletion disabled');
+                core.warning('Discloud deployment branch cannot be resolved; deletion disabled');
               }
             }
-            const isManual = context.eventName === 'workflow_dispatch';
-            const mode = isManual ? process.env.REQUESTED_MODE : 'delete';
             if (!['preview', 'delete', 'preview-reviewed-merged', 'delete-reviewed-merged'].includes(mode)) {
               throw new Error('Unsupported branch hygiene mode');
             }
@@ -154,6 +180,14 @@ jobs:
                     pr.base?.ref !== 'main' || pr.base?.repo?.full_name !== fullName ||
                     pr.head?.repo?.full_name !== fullName ||
                     pr.head.sha !== branch.commit.sha || !pr.merge_commit_sha) continue;
+                // A merged PR does not prove its branch tip is in main:
+                // squash/rebase histories can retain unique commits. Hold
+                // those refs for explicit content reconciliation instead.
+                const branchGraph = (await github.rest.repos.compareCommits({
+                  owner, repo, base: mainSha, head: branch.commit.sha
+                })).data;
+                if (branchGraph.ahead_by !== 0 ||
+                    !['behind', 'identical'].includes(branchGraph.status)) continue;
                 const graph = (await github.rest.repos.compareCommits({
                   owner, repo, base: pr.merge_commit_sha, head: mainSha
                 })).data;
@@ -164,7 +198,7 @@ jobs:
               eligible.sort((a,b) => a.name.localeCompare(b.name));
               const batch = eligible.slice(0, 12);
               const fingerprint = require('crypto').createHash('sha256')
-                .update(JSON.stringify({mainSha,batch})).digest('hex')
+                .update(JSON.stringify({mainSha,batch,effectiveDeployBranch})).digest('hex')
                 .slice(0, 16).toUpperCase();
               const token = 'DELETE_REVIEWED_' + fingerprint;
               if (deleteReviewed && process.env.CLEANUP_CONFIRMATION !== token) {
@@ -277,12 +311,41 @@ jobs:
                 rows.push([name, 'held', 'Unmerged, different base, or branch tip changed']);
                 continue;
               }
-              const openPRs = await github.paginate(
-                github.rest.pulls.list,
-                { owner, repo, head: owner + ':' + name, state: 'open', per_page: 100 }
-              );
-              if (openPRs.length) {
-                rows.push([name, 'held', 'Still used by an open PR']);
+              // An open PR may use this ref as either head OR base. A
+              // head-only search would delete a branch supporting active work.
+              const openPRs = await github.paginate(github.rest.pulls.list, {
+                owner, repo, state: 'open', per_page: 100
+              });
+              const usedByOpenPR = prs => prs.some(pr =>
+                (pr.head.repo?.full_name === fullName && pr.head.ref === name) ||
+                (pr.base.repo?.full_name === fullName && pr.base.ref === name));
+              if (usedByOpenPR(openPRs)) {
+                rows.push([name, 'held', 'Head or base of an open PR']);
+                continue;
+              }
+              // Even an exact-head merged PR can have unique commits after a
+              // squash/rebase merge. Never retire those original commits.
+              const optInMainSha = (await github.rest.repos.getBranch({
+                owner, repo, branch: 'main'
+              })).data.commit.sha;
+              const integrated = (await github.rest.repos.compareCommits({
+                owner, repo, base: optInMainSha, head: branch.commit.sha
+              })).data;
+              if (integrated.ahead_by !== 0 ||
+                  !['behind', 'identical'].includes(integrated.status)) {
+                rows.push([name, 'held', 'Unique commits require reconciliation']);
+                continue;
+              }
+              if (!pr.merge_commit_sha) {
+                rows.push([name, 'held', 'Missing merged PR commit']);
+                continue;
+              }
+              const merged = (await github.rest.repos.compareCommits({
+                owner, repo, base: pr.merge_commit_sha, head: optInMainSha
+              })).data;
+              if (merged.behind_by !== 0 ||
+                  !['ahead', 'identical'].includes(merged.status)) {
+                rows.push([name, 'held', 'PR merge not verified on current main']);
                 continue;
               }
               const fresh = (await github.rest.repos.getBranch({ owner, repo, branch: name })).data;
@@ -293,6 +356,18 @@ jobs:
               }
 
               if (deleting) {
+                // Revalidate main and both directions of PR dependency just
+                // before deletion. A preview is never a deletion lease.
+                const latestMain = (await github.rest.repos.getBranch({
+                  owner, repo, branch: 'main'
+                })).data.commit.sha;
+                const latestOpenPRs = await github.paginate(github.rest.pulls.list, {
+                  owner, repo, state: 'open', per_page: 100
+                });
+                if (latestMain !== optInMainSha || usedByOpenPR(latestOpenPRs)) {
+                  rows.push([name, 'held', 'Main or active PR changed']);
+                  continue;
+                }
                 // Race guard: recheck immutable Git ref immediately before delete.
                 const gitRef = (await github.rest.git.getRef({
                   owner, repo, ref: 'heads/' + name

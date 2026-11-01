@@ -1,3 +1,36 @@
+## BRANCH RETIREMENT INTEGRATION CHECKPOINT (2026-11-01 UTC)
+
+- **Observed branches:** 127 before and 127 after; **0 actual deletions**. Existing cleanup cannot delete until the live Discloud-linked branch is independently verified and the guarded workflow is authorized. Do not mistake a GitHub ref's existence for live deployment proof.
+- **Existing PR extended:** #785, not a new PR. Found and corrected a separate unsafe opt-in path: an exact-head squash-merged PR could still have unique commits, and an open PR could use the candidate branch as its base. Both now block retirement. Recheck main, open PR dependencies and exact SHA immediately before any opt-in deletion; require zero-ahead ancestry and the merged PR commit on main.
+- **Regression coverage:** New executable Node.js simulation exercises unique commits, open PR base use, moving main and an eligible archive-before-delete path; updated static guards. Latest exact-head CI pending. No production, credential, database, host-file or Git ref deletion performed.
+- **Other work:** #783 remains an independent draft. Dedicated Supabase `viamriafkbqhquvrsnua` stays primary, original IdleGrowOp rollback source preserved, Discloud PostgreSQL isolated backup candidate. Main source does not prove live Discloud deployment.
+
+---
+
+## LIVE INTEGRATION CHECKPOINT (2026-11-01 UTC, after PR #784 merge)
+
+- **Canonical main:** `1d24e0d8feb9b76247040c53c304b0ee8da99d3a` after merging PR #784. Its exact-main push CI is pending, so do not call it release-ready.
+- **Member sync integration:** PR #784 merged after all four exact-head workflows passed at `cd5f4610411d0fd24772d1ddc23342b490c867a7`. Source merged only; production Supabase write improvement, egress and Discloud deployment remain unverified. Dedicated Supabase `viamriafkbqhquvrsnua` stays primary; original IdleGrowOp rollback source and isolated Discloud PostgreSQL candidate remain untouched.
+- **Branch retirement:** 127 branches before and after this run, **zero deleted**. PR #785 now conservatively holds squash-diverged heads with any unique commits, even when their merged PR commit is on main. The live Discloud-linked branch is still not independently verified; manual attestation does not replace production evidence. No deletion workflow was dispatched or repo variable changed.
+- **PR coordination:** #785 is draft and under new exact-head CI; #783 remains independent draft. Do not merge #785 before latest CI and review. No production deployment, credential or database mutation.
+- **Next:** Confirm exact-main CI for #784, verify latest #785 CI, preserve unique branch heads, then use the existing guarded workflow only with verified deployment-ref evidence and authorized owner preview/delete.
+
+---
+
+## LIVE INTEGRATION CHECKPOINT (2026-11-01 08:00 UTC)
+
+- **Canonical main:** `2ac0e846efe15ea27515161fd4dd00fc3adcce91`; exact-main push CI passed (run #41269102512). This is **not** proof of a Discloud deployment.
+- **Member sync:** PR #784 at `cd5f4610411d0fd24772d1ddc23342b490c867a7` passed all four exact-head workflows and was marked ready for review. Not merged, not deployed; dedicated Supabase `viamriafkbqhquvrsnua` remains intended primary. Preserve original IdleGrowOp source and isolated Discloud PostgreSQL candidate.
+- **Safety Network:** PR #783 remains draft; privacy, SQL and multi-guild acceptance gates are independent of #784.
+- **Connection intelligence:** PRs #779 and #780 are merged; production Discord acceptance remains unverified. Earlier 'active PR #780' instructions below are historical and no longer current.
+- **Branch cleanup:** 126 branches at run start; 127 after new PR #785 working branch. **Actual deleted: 0.** The scheduled workflow still has no configured `DANK_DISCLOUD_DEPLOY_BRANCH` and archives only. PR #785 proposes an owner-attested manual preview/delete alternative, preserving all SHA, PR, age, archive and branch-protection checks. No deletion or variable change occurred.
+- **Fresh ancestry sample:** 30 branch heads compared with current main: 28 have zero unique commits; `feat/embed-studio-recurring-campaigns-20261024` has one unique SQL migration and `fix/dankshield-automatic-integrated-branch-retirement-20261031` has seven unique commits. Preserve both until reconciliation; zero-ahead alone does not authorize deletion.
+- **Release gates:** No production deployment, credentials or irreversible database/host changes without explicit approval, exact-main CI, independent verified off-Discloud backup, canary and tested rollback. Preserve linked `aaa-cinema-pre-pregateway-bind` until independently superseded.
+
+The ordered delivery and older checkpoints below are retained as history; their earlier PR statuses must not override this current live checkpoint.
+
+---
+
 ## CURRENT ORDERED DELIVERY: Dank Shield production completion (2026-10-31 / 2026-11-01 UTC)
 
 - **Owner direction:** Work through remaining Dank Shield gaps in priority order without breaking existing behavior. Do not interpret historical task-lock sections below as vetoing this newly authorized task. Inspect current GitHub/main/PR/CI and coordinate active work; never silently deploy or mutate production databases.

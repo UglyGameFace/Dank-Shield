@@ -36,7 +36,7 @@ def test_broad_retirement_is_manual_and_sha_leased() -> None:
     assert "DANK_DISCLOUD_DEPLOY_BRANCH" in text
     assert "CLEANUP_CONFIRMATION" in text
     assert "createHash('sha256')" in text
-    assert "JSON.stringify({mainSha,batch})" in text
+    assert "JSON.stringify({mainSha,batch,effectiveDeployBranch})" in text
     assert "DELETE_REVIEWED_" in text
     assert "eligible.slice(0, 12)" in text
 
@@ -50,6 +50,8 @@ def test_reviewed_merged_branch_requires_actual_integration() -> None:
         "pr.base?.ref !== 'main'",
         "pr.merge_commit_sha",
         "github.rest.repos.compareCommits",
+        "branchGraph.ahead_by !== 0",
+        "base: mainSha, head: branch.commit.sha",
         "graph.behind_by !== 0",
         "Date.parse(pr.merged_at) > cutoff",
         "currentMain !== mainSha",
@@ -77,6 +79,7 @@ def test_no_unpreserved_work_or_production_refs_deleted() -> None:
         if hold == "scale/production-readiness-10k":
             continue  # The broad reviewed allowlist excludes scale/ by construction.
         assert hold in text
+    assert text.index("branchGraph.ahead_by !== 0") < text.index("eligible.push({name: branch.name")
     assert "archive.object.sha !== item.sha" in text
     assert "lease.object.sha !== item.sha" in text
     assert text.index("archive.object.sha !== item.sha") < text.index(
