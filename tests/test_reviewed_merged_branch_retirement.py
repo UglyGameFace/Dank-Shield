@@ -104,3 +104,18 @@ def test_no_opt_in_delete_when_deployment_reference_is_unknown() -> None:
     assert "if (isManual && mode === 'delete' && !deploymentBranchConfigured)" in text
     assert "const deleting = mode === 'delete' && deploymentBranchConfigured;" in text
     assert text.index("const deleting = mode === 'delete' && deploymentBranchConfigured;") < text.index("if (deleting) {", text.index("const allBranches ="))
+
+
+def test_reviewed_inventory_uses_one_paged_pr_index_without_loosening_guards() -> None:
+    text = _workflow()
+    reviewed = text.split("if (reviewed) {", 1)[1].split("const allBranches =", 1)[0]
+    assert "const allPRs = await github.paginate(github.rest.pulls.list" in reviewed
+    assert "const prsByHead = new Map();" in reviewed
+    assert "pr.head?.repo?.full_name !== fullName" in reviewed
+    assert "const prs = prsByHead.get(branch.name) || [];" in reviewed
+    assert "prs.length !== 1" in reviewed
+    assert "head: owner + ':' + branch.name" not in reviewed
+    assert "branchGraph.ahead_by !== 0" in reviewed
+    assert "graph.behind_by !== 0" in reviewed
+    assert "Date.parse(pr.merged_at) > cutoff" in reviewed
+    assert "deleteReviewed && process.env.CLEANUP_CONFIRMATION !== token" in reviewed
