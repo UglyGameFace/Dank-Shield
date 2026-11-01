@@ -535,6 +535,27 @@ def _is_missing_column_error(exc: Exception, column_name: str) -> bool:
         return False
 
 
+def _learn_optional_column_support_from_full_row(row: Any) -> None:
+    """Reuse an existing select('*') response as schema evidence.
+
+    PostgREST includes every visible column even when its value is null.
+    Do not infer column absence from partial projections or incomplete mocks.
+    This avoids repeated PGRST204 writes for optional fields missing from the
+    dedicated schema without adding another network request.
+    """
+    if not isinstance(row, dict):
+        return
+    required = {
+        "guild_id", "user_id", "username", "display_name",
+        "role_ids", "role_names", "in_guild", "data_health",
+        "synced_at", "created_at", "updated_at",
+    }
+    if not required.issubset(row):
+        return
+    for col in _OPTIONAL_GUILD_MEMBER_COLUMNS:
+        _OPTIONAL_GUILD_MEMBER_COLUMN_SUPPORT[col] = col in row
+
+
 def _strip_optional_unsupported_columns(payload: Dict[str, Any]) -> Dict[str, Any]:
     out = dict(payload or {})
     for col, supported in _OPTIONAL_GUILD_MEMBER_COLUMN_SUPPORT.items():
@@ -599,7 +620,9 @@ def _guild_members_select_existing_sync(
         )
         rows = getattr(res, "data", None) or []
         if rows:
-            return dict(rows[0])
+            row = dict(rows[0])
+            _learn_optional_column_support_from_full_row(row)
+            return row
     except Exception:
         return None
     return None
