@@ -52,3 +52,5 @@ the Discloud host's actual runtime SHA. If the configured repository variable
 disagrees with the manual input, the workflow refuses to proceed. The
 automatic path ignores manual inputs entirely. This change does not run a
 deletion, change production configuration, or approve a Discloud release.
+
+The reviewed deletion path additionally requires the exact branch head to have **zero unique commits ahead of current main**. A squash-merged PR is not enough by itself: a divergent branch remains held for content reconciliation, even if its merge commit is on main. This avoids retiring unique user commits merely because a PR was marked merged.
