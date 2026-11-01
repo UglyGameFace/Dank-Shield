@@ -571,22 +571,30 @@ def _strip_optional_columns(payload: Dict[str, Any], columns: Sequence[str]) -> 
     return out
 
 
+_VOICE_GUILD_MEMBER_COLUMNS = frozenset({
+    "in_voice", "voice_channel_id", "voice_channel_name", "voice_muted",
+    "voice_deafened", "voice_self_muted", "voice_self_deafened",
+    "voice_streaming", "voice_video", "voice_suppressed",
+})
+
+
 def _strip_voice_fields(payload: Dict[str, Any]) -> Dict[str, Any]:
-    out = dict(payload or {})
-    for key in (
-        "in_voice",
-        "voice_channel_id",
-        "voice_channel_name",
-        "voice_muted",
-        "voice_deafened",
-        "voice_self_muted",
-        "voice_self_deafened",
-        "voice_streaming",
-        "voice_video",
-        "voice_suppressed",
-    ):
-        out.pop(key, None)
-    return out
+    return _strip_optional_columns(payload, _VOICE_GUILD_MEMBER_COLUMNS)
+
+
+def _retry_payload_after_missing_optional(
+    payload: Dict[str, Any], removed: Sequence[str]
+) -> Dict[str, Any]:
+    """Preserve core writes if a new member has no full-row schema evidence.
+
+    One confirmed missing voice field means this particular write cannot
+    include the complete voice group. Do not mark the other fields globally
+    unsupported without independent schema evidence.
+    """
+    reduced = _strip_optional_columns(payload, removed)
+    if any(column in _VOICE_GUILD_MEMBER_COLUMNS for column in removed):
+        return _strip_voice_fields(reduced)
+    return reduced
 
 
 def _detect_unsupported_optional_columns(exc: Exception, payload: Dict[str, Any]) -> List[str]:
@@ -1201,7 +1209,7 @@ async def _guild_members_upsert_safe_async(
         if not removed:
             raise
 
-    retry_payload = (_strip_voice_fields(current) if any(\n        column in {"in_voice", "voice_channel_id", "voice_channel_name",\n                   "voice_muted", "voice_deafened", "voice_self_muted",\n                   "voice_self_deafened", "voice_streaming", "voice_video",\n                   "voice_suppressed"} for column in removed\n    ) else _strip_optional_columns(current, removed))
+    retry_payload = _retry_payload_after_missing_optional(current, removed)
     try:
         try:
             await _guild_members_upsert_async(sb, retry_payload, on_conflict=True)
@@ -1229,7 +1237,7 @@ async def _guild_members_update_safe_async(
         if not removed:
             raise
 
-    retry_payload = (_strip_voice_fields(current) if any(\n        column in {"in_voice", "voice_channel_id", "voice_channel_name",\n                   "voice_muted", "voice_deafened", "voice_self_muted",\n                   "voice_self_deafened", "voice_streaming", "voice_video",\n                   "voice_suppressed"} for column in removed\n    ) else _strip_optional_columns(current, removed))
+    retry_payload = _retry_payload_after_missing_optional(current, removed)
     await _guild_members_update_member_async(sb, guild_id, user_id, retry_payload)
 
 
