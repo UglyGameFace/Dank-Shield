@@ -583,7 +583,8 @@ def test_owner_affiliation_review_latest_status_preserved_from_evidence_log() ->
 def test_affiliate_action_is_server_owner_only_and_uses_existing_private_view() -> None:
     from stoney_verify.commands_ext.member_command_center import (
         _is_guild_owner_for_affiliations, ConnectionReportView,
-        OwnerAffiliationChoiceView, OwnerAffiliationModal,
+        OwnerAffiliationChoiceView, OwnerAffiliationTargetView,
+        OwnerAffiliationUserSelect, OwnerAffiliationModal,
     )
 
     owner = SimpleNamespace(user=SimpleNamespace(id=123),
@@ -600,8 +601,16 @@ def test_affiliate_action_is_server_owner_only_and_uses_existing_private_view() 
                   if getattr(item, "placeholder", None) == "Choose relationship review")
     assert {option.value for option in select.options} == {"known", "possible", "cleared"}
     assert len(review_view.children) == 2
+    choice = OwnerAffiliationTargetView(123, int(TARGET), "known")
+    assert len(choice.children) == 3
+    assert sum(isinstance(item, OwnerAffiliationUserSelect) for item in choice.children) == 1
+    assert {"Enter Account ID", "Back to Relationship"} <= {
+        getattr(item, "label", "") for item in choice.children
+    }
     modal = OwnerAffiliationModal(int(TARGET), "known")
+    prefilled = OwnerAffiliationModal(int(TARGET), "known", other_id=int(OTHER))
     assert len(modal.children) == 2
+    assert str(prefilled.other_account.default) == OTHER
     report = {"target_user_id": TARGET, "matches": [], "total_matches": 0,
               "coverage": "partial", "errors": [], "truncated": False}
     view = ConnectionReportView(123, int(TARGET), report)
