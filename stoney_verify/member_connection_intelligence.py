@@ -162,7 +162,37 @@ def _read_connection_report(guild_id: int, user_id: int) -> dict[str, Any]:
             source[key] = []
             # No silent success on schema/permission/egress failure.
             errors.append(f"{key} could not be read ({type(exc).__name__}).")
-    return build_connection_report(target_id=uid, source=source, errors=errors)
+    report = build_connection_report(target_id=uid, source=source, errors=errors)
+    # An empty graph is not an exhaustive investigation. Member events can
+    # establish that an account was observed even when join-history ingestion
+    # failed; they do not establish identity or social relationships.
+    report["history_status"] = "unknown"
+    report["history_events"] = 0
+    if source.get("target") or source.get("join_target"):
+        report["history_status"] = "member_record_found"
+    try:
+        result = (db.table("member_events").select("id")
+                  .eq("guild_id", gid).eq("user_id", uid)
+                  .limit(_QUERY_LIMIT).execute())
+        events = getattr(result, "data", None) or []
+        report["history_events"] = len(events)
+        if events and report["history_status"] == "unknown":
+            report["history_status"] = "events_only"
+        if len(events) >= _QUERY_LIMIT:
+            report["coverage"] = "partial"
+            report["truncated"] = True
+    except Exception:
+        report["errors"].append("Member event history could not be read.")
+        report["coverage"] = "partial"
+    if not source.get("join_target") and report["history_status"] != "unknown":
+        report["history_gap"] = "No join-history row for this recorded account; event history cannot reconstruct invite or identity links."
+        report["coverage"] = "partial"
+    if not report["matches"]:
+        report["history_gap"] = report.get("history_gap") or (
+            "No relationship evidence was recorded. Unrecorded friendships and alternate accounts cannot be inferred."
+        )
+        report["coverage"] = "partial"
+    return report
 
 
 async def analyze_member_connections(guild_id: int, user_id: int) -> dict[str, Any]:
