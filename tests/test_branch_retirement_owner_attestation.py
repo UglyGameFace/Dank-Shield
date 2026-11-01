@@ -29,6 +29,7 @@ def _simulate(*, event="workflow_dispatch", actor="UglyGameFace",
         pytest.skip("Node.js is required to execute the workflow's JavaScript guard")
     script = """
 const context = {eventName: %s, actor: %s};
+const owner = "UglyGameFace", repo = "Dank-Shield";
 const core = {warning: () => {}};
 const github = {rest: {repos: {getBranch: async ({branch}) => {
   if (%s || !branch) throw new Error('missing branch');
