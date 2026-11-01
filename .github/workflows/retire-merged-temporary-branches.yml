@@ -311,12 +311,41 @@ jobs:
                 rows.push([name, 'held', 'Unmerged, different base, or branch tip changed']);
                 continue;
               }
-              const openPRs = await github.paginate(
-                github.rest.pulls.list,
-                { owner, repo, head: owner + ':' + name, state: 'open', per_page: 100 }
-              );
-              if (openPRs.length) {
-                rows.push([name, 'held', 'Still used by an open PR']);
+              // An open PR may use this ref as either head OR base. A
+              // head-only search would delete a branch supporting active work.
+              const openPRs = await github.paginate(github.rest.pulls.list, {
+                owner, repo, state: 'open', per_page: 100
+              });
+              const usedByOpenPR = prs => prs.some(pr =>
+                (pr.head.repo?.full_name === fullName && pr.head.ref === name) ||
+                (pr.base.repo?.full_name === fullName && pr.base.ref === name));
+              if (usedByOpenPR(openPRs)) {
+                rows.push([name, 'held', 'Head or base of an open PR']);
+                continue;
+              }
+              // Even an exact-head merged PR can have unique commits after a
+              // squash/rebase merge. Never retire those original commits.
+              const optInMainSha = (await github.rest.repos.getBranch({
+                owner, repo, branch: 'main'
+              })).data.commit.sha;
+              const integrated = (await github.rest.repos.compareCommits({
+                owner, repo, base: optInMainSha, head: branch.commit.sha
+              })).data;
+              if (integrated.ahead_by !== 0 ||
+                  !['behind', 'identical'].includes(integrated.status)) {
+                rows.push([name, 'held', 'Unique commits require reconciliation']);
+                continue;
+              }
+              if (!pr.merge_commit_sha) {
+                rows.push([name, 'held', 'Missing merged PR commit']);
+                continue;
+              }
+              const merged = (await github.rest.repos.compareCommits({
+                owner, repo, base: pr.merge_commit_sha, head: optInMainSha
+              })).data;
+              if (merged.behind_by !== 0 ||
+                  !['ahead', 'identical'].includes(merged.status)) {
+                rows.push([name, 'held', 'PR merge not verified on current main']);
                 continue;
               }
               const fresh = (await github.rest.repos.getBranch({ owner, repo, branch: name })).data;
@@ -327,6 +356,18 @@ jobs:
               }
 
               if (deleting) {
+                // Revalidate main and both directions of PR dependency just
+                // before deletion. A preview is never a deletion lease.
+                const latestMain = (await github.rest.repos.getBranch({
+                  owner, repo, branch: 'main'
+                })).data.commit.sha;
+                const latestOpenPRs = await github.paginate(github.rest.pulls.list, {
+                  owner, repo, state: 'open', per_page: 100
+                });
+                if (latestMain !== optInMainSha || usedByOpenPR(latestOpenPRs)) {
+                  rows.push([name, 'held', 'Main or active PR changed']);
+                  continue;
+                }
                 // Race guard: recheck immutable Git ref immediately before delete.
                 const gitRef = (await github.rest.git.getRef({
                   owner, repo, ref: 'heads/' + name
