@@ -28,26 +28,28 @@ def _button_labels(view: object) -> list[str]:
     return [str(getattr(item, "label", "")) for item in getattr(view, "children", []) if getattr(item, "label", None)]
 
 
-def test_home_has_exactly_six_explicit_workflows() -> None:
+def test_home_has_four_owner_tasks_and_advanced_has_one_owner_per_tool() -> None:
     view = studio_v2.DesignHomeView({})
-    assert _button_labels(view) == [
-        "Design Entire Server",
-        "Edit One Category / Channel",
-        "Fix Inconsistent Names",
-        "Saved Rules & Protection",
-        "Search-Safe Naming",
-        "Undo Last Apply",
+    assert _button_labels(view) == ["Style All Names", "Edit One Item", "Check & Fix", "Advanced"]
+
+    advanced = studio_v2.DesignAdvancedView()
+    assert _button_labels(advanced) == [
+        "Saved Style Exceptions",
+        "Searchable Names",
+        "History & Reset",
+        "Back to Appearance",
     ]
 
 
-def test_clean_redesign_button_only_enables_when_layout_exceptions_exist() -> None:
-    clean = studio_v2.DesignServerView({})
-    clean_button = next(item for item in clean.children if getattr(item, "custom_id", "") == "dank_design_v2:clean_redesign")
+def test_clean_redesign_only_enables_for_saved_visual_exceptions() -> None:
+    clean = studio_v2.DesignHistoryView({})
+    clean_button = next(item for item in clean.children if getattr(item, "custom_id", "") == "dank_design_v2:history_clean")
     assert clean_button.disabled is True
 
-    crossed = studio_v2.DesignServerView({"channel_format_locks": {"123": {"enabled": True}}})
-    crossed_button = next(item for item in crossed.children if getattr(item, "custom_id", "") == "dank_design_v2:clean_redesign")
+    crossed = studio_v2.DesignHistoryView({"channel_format_locks": {"123": {"enabled": True}}})
+    crossed_button = next(item for item in crossed.children if getattr(item, "custom_id", "") == "dank_design_v2:history_clean")
     assert crossed_button.disabled is False
+    assert not any(getattr(item, "custom_id", "") == "dank_design_v2:clean_redesign" for item in studio_v2.DesignServerView({}).children)
 
 
 def test_server_style_controls_are_only_inside_design_server() -> None:
@@ -151,8 +153,11 @@ def test_server_category_frame_browser_exposes_full_catalog_without_row_overflow
     assert str(frame_button.label) == "Frame / Icons"
 
     buttons = [item for item in view.children if getattr(item, "label", None) is not None]
-    assert len(buttons) == 5
+    assert len(buttons) == 3
     assert all(getattr(item, "row", None) == 4 for item in buttons)
+    detail = studio_v2.DesignServerCategoryFrameView({"theme_id": "night_gothic", "strength": 5})
+    assert "Preview Separator Only" in _button_labels(detail)
+
 
     seen: set[str] = set()
     groups = studio_v2._category_frame_groups()
