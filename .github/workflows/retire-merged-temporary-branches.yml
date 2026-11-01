@@ -166,13 +166,24 @@ jobs:
                 !protectedHeads.has(name) &&
                 !name.split(/[\\/_-]+/).some(x => sensitive.has(x.toLowerCase()));
               const cutoff = Date.now() - 48 * 60 * 60 * 1000;
+              // Fetch the PR history once, not once per branch. With hundreds
+              // of stale refs, per-ref pagination can exhaust the 12m job
+              // before the owner receives an actionable preview. Preserve
+              // the original exactly-one-PR and exact-head requirements.
+              const allPRs = await github.paginate(github.rest.pulls.list, {
+                owner, repo, state: 'all', per_page: 100
+              });
+              const prsByHead = new Map();
+              for (const pr of allPRs) {
+                if (pr.head?.repo?.full_name !== fullName || !pr.head.ref) continue;
+                const matches = prsByHead.get(pr.head.ref) || [];
+                matches.push(pr);
+                prsByHead.set(pr.head.ref, matches);
+              }
               const eligible = [];
               for (const branch of branches) {
                 if (branch.protected || inUse.has(branch.name) || !safeName(branch.name)) continue;
-                const prs = await github.paginate(github.rest.pulls.list, {
-                  owner, repo, head: owner + ':' + branch.name,
-                  state: 'all', per_page: 100
-                });
+                const prs = prsByHead.get(branch.name) || [];
                 if (prs.length !== 1) continue;
                 const pr = prs[0];
                 if (!pr.merged_at || pr.state !== 'closed' ||
