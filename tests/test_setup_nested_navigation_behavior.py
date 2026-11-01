@@ -160,6 +160,8 @@ def test_existing_server_route_uses_direct_customization_view(monkeypatch: Any) 
 def test_config_history_navigation_matches_aio_hierarchy() -> None:
     main = config_history_ui.ConfigHistoryView([])
     assert labels(main) == [
+        "Previous Versions",
+        "Next Versions",
         "Choose Backup Contents",
         "Refresh",
         "Back to All Features",
