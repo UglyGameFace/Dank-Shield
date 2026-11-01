@@ -445,3 +445,39 @@ def test_known_account_relationships_require_distinct_proofs() -> None:
     assert categories[social_one] == "documented server relationship"
     assert categories[social_two] == "documented server relationship"
     assert report["finding"] == "relationships_only_not_leak_proof"
+
+
+def test_connection_report_paginates_all_loaded_matches() -> None:
+    from stoney_verify.commands_ext.member_command_center import (
+        _connection_embed, ConnectionReportView,
+    )
+
+    rows = [
+        {
+            "user_id": str(600000000000000000 + number),
+            "category": "documented server relationship",
+            "evidence": [{"label": "Original recorded join evidence", "kind": "social"}],
+            "ban_status": "banned" if number == 11 else "not_banned",
+        }
+        for number in range(12)
+    ]
+    report = {
+        "target_user_id": TARGET, "matches": rows, "total_matches": 12,
+        "coverage": "available", "errors": [], "truncated": False,
+    }
+    first = _connection_embed(report, page=0)
+    second = _connection_embed(report, page=1)
+    names_first = [field.name for field in first.fields]
+    names_second = [field.name for field in second.fields]
+    assert "Page 1/2" in first.fields[0].value
+    assert "Page 2/2" in second.fields[0].value
+    assert len([name for name in names_first if name.startswith("Account ")]) == 6
+    assert len([name for name in names_second if name.startswith("Account ")]) == 6
+    assert {name for name in names_first if name.startswith("Account ")}.isdisjoint(
+        {name for name in names_second if name.startswith("Account ")}
+    )
+    assert any("Discord ban: Banned" in field.value for field in second.fields)
+    start_view = ConnectionReportView(123, int(TARGET), report)
+    end_view = ConnectionReportView(123, int(TARGET), report, page=1)
+    assert start_view.previous.disabled and not start_view.next_page.disabled
+    assert end_view.next_page.disabled and not end_view.previous.disabled
