@@ -217,11 +217,13 @@ def test_shared_hourly_budget_and_one_ping_per_session(monkeypatch):
 
 def test_staff_manager_and_session_controls_are_discoverable_and_bounded():
     staff = ui.StaffDashboardView(1)
-    manage = ui.SessionControlView(1, session_id="session")
+    manage = ui.SessionControlView(1, session_id="session", section="people")
     ids = [getattr(child, "custom_id", "") for child in staff.children]
     assert "dank:hub:staff:gamepings:v1" in ids
     ids = [getattr(child, "custom_id", "") for child in manage.children]
     assert "dank:hub:manage:gameping:v1" in ids
+    assert "dank:hub:manage:section:v1" in ids
+    assert len(manage.children) <= 9
     for view in (staff, manage, ui.GameRolePingsManagerView(1)):
         rows = {}
         for child in view.children:
