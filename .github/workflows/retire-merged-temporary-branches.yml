@@ -263,7 +263,9 @@ jobs:
                 !heldPrefixes.some(p => name.startsWith(p)) &&
                 !protectedHeads.has(name) &&
                 !hasHeldHistoricalSegment(name, sensitive);
-              const cutoff = Date.now() - 48 * 60 * 60 * 1000;
+              // Owner-reviewed cleanup has an exact-SHA preview token and
+              // fresh main/PR/ref leases. The 48-hour cooldown remains on
+              // unattended cleanup, not on explicitly approved owner batches.
               // Fetch the PR history once, not once per branch. With hundreds
               // of stale refs, per-ref pagination can exhaust the 12m job
               // before the owner receives an actionable preview. Preserve
@@ -285,7 +287,8 @@ jobs:
                 if (prs.length !== 1) continue;
                 const pr = prs[0];
                 if (!pr.merged_at || pr.state !== 'closed' ||
-                    Date.parse(pr.merged_at) > cutoff ||
+                    (!Number.isFinite(Date.parse(pr.merged_at)) ||
+                     Date.parse(pr.merged_at) > Date.now()) ||
                     pr.base?.ref !== 'main' || pr.base?.repo?.full_name !== fullName ||
                     pr.head?.repo?.full_name !== fullName ||
                     pr.head.sha !== branch.commit.sha || !pr.merge_commit_sha) continue;
