@@ -48,7 +48,8 @@ def test_history_by_id_does_not_require_fetching_departed_user() -> None:
     assert "get_member_review_history," in src
     assert "fetch_user(user_id)" not in src
     assert "from .public_member_review_feedback import review_history" not in src
-    assert "await _show_stored_member_history(interaction, self.member_id)" in src
+    assert "self.member_id, presence=status, view=self" in src
+    assert "HistoricalIntelligenceTargetView(int(interaction.user.id), target_id)" in src
 
 
 def test_scope_is_not_limited_to_verified_or_resident() -> None:
