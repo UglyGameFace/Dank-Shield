@@ -83,7 +83,8 @@ def test_network_lookup_failure_does_not_become_clean_history(monkeypatch):
 def test_member_intelligence_reuses_one_network_and_no_third_party_dependency():
     source = (Path(__file__).resolve().parents[1] /
               "stoney_verify/commands_ext/member_command_center.py").read_text()
-    assert source.count('label="Safety Reports"') == 2
+    assert source.count('label="Safety Reports"') == 3
+    assert "class HistoricalIntelligenceTargetView(OwnedView)" in source
     assert "from stoney_verify.network_safety import reports_for_owner" in source
     assert "from .public_network_safety import NetworkReportPages" in source
     assert "Only the physical server owner" in source
