@@ -765,6 +765,78 @@ jobs:
                     !newTests.includes('test_plain_proxy_message_has_no_torrent_engine_or_route')) {
                   throw new Error('Share Router/Cinema separation is not verified');
                 }
+              // The four post-#727 manual-reminder commits were replaced by
+              // merged #728's full-guild, saved-role, 25-person channel/DM
+              // implementation. The historical migration loosened a counter
+              // constraint; main deliberately retains the 2-value constraint
+              // and saturates the diagnostic counter while allowing later
+              // sends after the durable six-hour cooldown. Never restore the
+              // historical unbounded counter or discard an unreviewed commit.
+              const manualHead = '381dc5bab68f9a1589dac60be675ffeff162d993';
+              const manualBase = '199de140f929de2c2de29d80e79800bbcd29346e';
+              const manualOriginal = (await github.rest.pulls.get({
+                owner,repo,pull_number:727
+              })).data;
+              const manualReplacement = (await github.rest.pulls.get({
+                owner,repo,pull_number:728
+              })).data;
+              if (!manualOriginal.merged_at ||
+                  manualOriginal.merge_commit_sha !== manualBase ||
+                  manualOriginal.base?.ref !== 'main' ||
+                  !manualReplacement.merged_at ||
+                  manualReplacement.base?.ref !== 'main' ||
+                  manualReplacement.head?.ref !== 'fix/verification-manual-guild-role-audience-20261025' ||
+                  manualReplacement.head?.sha !== '2887dc757dd46516b872a93e92db58700b451290' ||
+                  manualReplacement.merge_commit_sha !==
+                    '930f1796c3c1dd5d81d505f9ee4b4946de0952e7') {
+                throw new Error('Manual reminder replacement PR provenance is not verified');
+              }
+              const manualAncestry = (await github.rest.repos.compareCommits({
+                owner,repo,base:manualReplacement.merge_commit_sha,head:currentMain
+              })).data;
+              const manualHistory = (await github.rest.repos.compareCommits({
+                owner,repo,base:manualBase,head:manualHead
+              })).data;
+              const historicalPaths = [
+                'postgres/migrations/202610250001_verify_manual_reminders.sql',
+                'stoney_verify/role_truth.py',
+                'stoney_verify/verification_reminder_postgres.py',
+                'stoney_verify/verification_reminders.py'
+              ];
+              if (manualAncestry.behind_by !== 0 ||
+                  !['ahead','identical'].includes(manualAncestry.status) ||
+                  manualHistory.behind_by !== 0 || manualHistory.ahead_by !== 4 ||
+                  !Array.isArray(manualHistory.files) ||
+                  JSON.stringify(manualHistory.files.map(f => f.filename).sort()) !==
+                    JSON.stringify(historicalPaths.slice().sort())) {
+                throw new Error('Manual reminder four-commit replacement is not proven');
+              }
+              const manualEvidence = [
+                ['stoney_verify/role_truth.py',
+                 ['def member_is_pending_verification(', 'def member_role_truth(']],
+                ['stoney_verify/verification_reminders.py',
+                 ['member_is_pending_verification(member, config=cfg)',
+                  'if not 1 <= len(members) <= 25:']],
+                ['stoney_verify/verification_reminder_postgres.py',
+                 ['_MANUAL_MEMBER_CLAIM_SQL', 'least(public.dank_verify_manual_member_delivery.attempts + 1, 2)',
+                  "interval '6 hours'"]],
+                ['postgres/migrations/202610250001_verify_manual_reminders.sql',
+                 ['attempts between 1 and 2']],
+                ['tests/test_verification_reminder_manual_send.py',
+                 ['test_preview_scans_124_members_and_finds_all_24_with_custom_named_role',
+                  'test_confirm_sends_24_mentions_in_one_channel_message',
+                  'test_manual_dm_sends_same_full_group_without_public_post',
+                  'test_incomplete_full_scan_blocks_instead_of_claiming_zero']],
+                ['tests/test_verification_reminder_postgres.py',
+                 ['test_manual_channel_or_dm_batch_can_claim_24_members_without_lifetime_limit',
+                  'test_manual_claim_parallel_shards_only_one_wins']]
+              ];
+              for (const [path,needles] of manualEvidence) {
+                const source = await shareRouterSource(path,currentMain);
+                if (!needles.every(needle => source.includes(needle))) {
+                  throw new Error('Manual reminder replacement evidence changed: ' + path);
+                }
+              }
               }
               const rejectedHeads = reconciled ? [
                 {name:'fix/trace-application-command-ingress-20261007',
@@ -776,7 +848,9 @@ jobs:
                 {name:'fix/role-center-navigation-audit-20260929',
                  sha:'a9553b9a7cddfb34086970fb98bbf2d675601d2e'},
                 {name:'fix/share-router-existing-channel-nondestructive-20261024',
-                 sha:'b4a1ab8d68b2cf2e96aac9148b6cf04a400d4934'}
+                 sha:'b4a1ab8d68b2cf2e96aac9148b6cf04a400d4934'},
+                {name:'fix/verify-manual-all-pending-20261025',
+                 sha:'381dc5bab68f9a1589dac60be675ffeff162d993'}
               ] : [
                 {name:'feat/cinema-rolling-supervised-worker-20261014',
                  sha:'8bccd1ee9a5203cebc7862eec8addd48ba9706a6'},

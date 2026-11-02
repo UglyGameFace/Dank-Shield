@@ -1,3 +1,12 @@
+## VERIFICATION REMINDER HISTORICAL RECONCILIATION (2026-11-02 UTC)
+
+- **Before:** 28 branches including main; no open PRs; main `d1741b70` with exact-main Dank Shield CI #41529930489 passed. All 27 non-main refs inspected by category; backups/recovery refs held. Reviewed-merged preview #41532456456 found zero eligible merged branches, so no unsupported deletion was attempted.
+- **Historical work:** `fix/verify-manual-all-pending-20261025` at `381dc5bab68f9a1589dac60be675ffeff162d993` has exactly four post-#727 commits touching role truth, reminder sender, private PostgreSQL claim logic and manual DDL. PR #728 later merged full-guild saved-role truth and 25-person channel/DM batching, with a six-hour cooldown and saturating attempt counter compatible with the existing two-value SQL constraint. The historical DDL relaxation is intentionally NOT restored.
+- **Implementation:** This branch extends the existing owner-only `preview-reconciled` / `delete-reconciled` workflow with exact branch SHA, #727/#728 provenance, four-commit changed-path verification, main ancestry, current source and regression-test evidence. Existing fresh-main/PR/ref leases, deployment-ref guard, owner confirmation and archive-tag readback remain intact. Added dedicated regression tests. No new cleanup authority or 75-branch deletion threshold.
+- **Gates:** PR-head CI, merge, exact-main CI, owner-reviewed preview/token/delete and independent branch/archive readback. No deletion is claimed before these gates. No production, credentials, database, or hosting change. Dedicated Supabase `viamriafkbqhquvrsnua` intended primary; original IdleGrowOp Supabase rollback source and isolated Discloud PostgreSQL backup candidate preserved. Live Discloud SHA, off-Discloud backup, canary and tested rollback unverified.
+
+---
+
 ## SHARE ROUTER HISTORICAL BRANCH RECONCILIATION (2026-11-02 UTC)
 
 - **Before:** 29 branches including main, zero open PRs, main `2ec9d93b`; exact-main Dank Shield CI #41513060452 passed. Historical `fix/share-router-existing-channel-nondestructive-20261024` remains at `b4a1ab8d68b2cf2e96aac9148b6cf04a400d4934`, five commits after merged PR #709's exact head `414b9188`.
