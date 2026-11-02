@@ -249,7 +249,11 @@ jobs:
                 if (pr.head.repo?.full_name === fullName) inUse.add(pr.head.ref);
                 if (pr.base.repo?.full_name === fullName) inUse.add(pr.base.ref);
               }
-              const prefixes = ['feat/', 'fix/', 'hotfix/', 'extract/', 'docs/', 'audit/', 'chore/'];
+              // Only owner-reviewed cleanup may consider merged work/dankshield-* refs.
+              // The unattended opt-in path remains ancestry-only. Every
+              // divergent worktree still requires an exact-head merged PR,
+              // changed-path tree equivalence and the owner SHA-bound token.
+              const prefixes = ['feat/', 'fix/', 'hotfix/', 'extract/', 'docs/', 'audit/', 'chore/', 'work/dankshield-'];
               const heldPrefixes = [
                 'aaa-', 'archive/', 'backup/', 'recovery/', 'integration/',
                 'reconcile/', 'release/', 'deploy/', 'ops/', 'ci/', 'migration/'
@@ -291,12 +295,6 @@ jobs:
               const reconciledWorkHeads = new Map([
                 ['work/dankshield-owner-cleanup-relay-20261101',
                  'bafe17a86225d71700f65496fb8339190418792f'],
-                // PR #809 was squash-merged. All nine changed paths were
-                // independently compared at its immutable merge commit;
-                // reviewed retirement must still recheck exact tree equality,
-                // main ancestry, PR ownership and the archive SHA lease.
-                ['work/dankshield-role-navigation-20261102',
-                 '60a3650cea68536e605bbc677110b4c1865195b6'],
               ]);
               const safeName = name =>
                 (prefixes.some(p => name.startsWith(p)) ||
