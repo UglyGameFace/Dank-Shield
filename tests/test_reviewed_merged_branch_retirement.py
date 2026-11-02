@@ -320,3 +320,27 @@ console.log(JSON.stringify(names.map(name => hasHeldHistoricalSegment(name, held
     result = subprocess.run(["node", "-e", js], text=True, capture_output=True)
     assert result.returncode == 0, result.stderr
     assert json.loads(result.stdout) == [False, False, True, True, True, True, True, False, True, True, True, False]
+
+
+def test_integrated_cleanup_exception_is_exact_and_ancestor_only() -> None:
+    text = _workflow()
+    reviewed = text.split("if (reviewed) {", 1)[1].split("const allBranches =", 1)[0]
+    for name in (
+        "fix/branch-retirement-and-migration-approval-20261031",
+        "fix/dankshield-archive-first-retirement-20261031",
+        "fix/owner-attested-discloud-branch-retirement-20261101",
+        "fix/squash-merged-retirement-archive-20261101",
+    ):
+        assert reviewed.count("'" + name + "'") == 1
+    assert "const integratedCleanupRefs = new Set([" in reviewed
+    assert "integratedCleanupRefs.has(name)" in reviewed
+    assert "integratedCleanupRefs.has(branch.name)" in reviewed
+    assert "branchGraph.ahead_by !== 0" in reviewed
+    assert "['behind', 'identical'].includes(branchGraph.status)" in reviewed
+    assert reviewed.index("integratedCleanupRefs.has(branch.name)") < reviewed.index(
+        "eligible.push({name: branch.name, sha: branch.commit.sha,"
+    )
+    assert "archive.object.sha !== item.sha" in reviewed
+    assert "lease.object.sha !== item.sha" in reviewed
+    assert "currentMain !== mainSha" in reviewed
+    assert "nowOpen.some(pr => pr.head.ref === item.name || pr.base.ref === item.name)" in reviewed
