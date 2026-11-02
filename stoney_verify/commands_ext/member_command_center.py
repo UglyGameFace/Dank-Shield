@@ -689,7 +689,8 @@ class IntelligenceTargetView(OwnedView):
         # a second history-only message.
         member, status = await _resolve_intelligence_member(interaction.guild, self.member_id)
         await _show_stored_member_history(
-            interaction, self.member_id, presence=status, view=self, live_member=member,
+            interaction, self.member_id, presence=status, view=self,
+            live_member=member, force_refresh=True,
         )
 
     @discord.ui.button(label="Moderation Panel", emoji="🛡️", style=discord.ButtonStyle.secondary, row=0)
@@ -749,7 +750,9 @@ class HistoricalIntelligenceTargetView(OwnedView):
     async def history(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await _show_stored_member_history(
-            interaction, self.target_id, view=HistoricalIntelligenceTargetView(self.owner_id, self.target_id),
+            interaction, self.target_id,
+            view=HistoricalIntelligenceTargetView(self.owner_id, self.target_id),
+            force_refresh=True,
         )
 
     @discord.ui.button(label="Connections", emoji="🔗", style=discord.ButtonStyle.secondary, row=0)
@@ -979,6 +982,26 @@ def _historical_member_embed(
     )
     if no_records:
         note += " No records returned; Discord cannot restore uncollected or deleted history."
+    cache_state = str(snapshot.get("cache_state") or "")
+    if cache_state == "hit":
+        note = (
+            f"Cached evidence ({snapshot.get('cache_age_seconds', 0):.0f}s old). "
+            + note
+        )
+    elif cache_state == "fresh":
+        note = "Fresh database read. " + note
+    elif cache_state == "stale":
+        refreshed = ", ".join(snapshot.get("cache_refresh_unavailable") or [])
+        note = (
+            "⚠️ STALE cached evidence; refresh failed"
+            + (f" ({refreshed})" if refreshed else "")
+            + ". Do not treat these records as current. "
+            + note
+        )
+    elif cache_state == "partial":
+        note = "Some sources failed; partial live read. " + note
+    elif cache_state == "superseded":
+        note = "Member records changed during this lookup. Tap Stored History to refresh. " + note
     samples = (
         f"Readback limits: {sample_limits.get('joins', 15)} joins, "
         f"{sample_limits.get('events', 30)} member events, "
@@ -999,6 +1022,7 @@ async def _show_stored_member_history(
     interaction: discord.Interaction, user_id: int, *, presence: Optional[str] = None,
     view: Optional[discord.ui.View] = None,
     live_member: Optional[discord.Member] = None,
+    force_refresh: bool = False,
 ) -> None:
     """Read historical guild records without fetch_user() or a live member."""
     if not interaction.response.is_done():
@@ -1019,6 +1043,8 @@ async def _show_stored_member_history(
                     guild_id=guild_id, user_id=user_id,
                     ticket_limit=15, event_limit=30, join_limit=15,
                     include_extended_intelligence=True,
+                    use_intelligence_cache=True,
+                    force_refresh=force_refresh,
                 ),
                 asyncio.to_thread(
                     get_member_review_history,
