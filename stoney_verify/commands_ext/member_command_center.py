@@ -1052,6 +1052,12 @@ async def _show_stored_member_history(
         and context_result.get("source_status") is not None else {}
     )
     verdicts = feedback_result if isinstance(feedback_result, list) else []
+    if snapshot and not isinstance(feedback_result, list):
+        snapshot = dict(snapshot)
+        snapshot["source_status"] = {
+            **(snapshot.get("source_status") or {}),
+            "staff_verdicts": "unavailable",
+        }
     if not snapshot and not verdicts:
         if view is None:
             return await reply_ephemeral(
