@@ -292,18 +292,6 @@ jobs:
                 ['work/dankshield-owner-cleanup-relay-20261101',
                  'bafe17a86225d71700f65496fb8339190418792f'],
               ]);
-              // Two stacked feature heads: #724 reached main, but #725 merged
-              // into the feature branch. PR #803 explicitly ports #725 into
-              // main. Retire only these exact SHAs, after that integration
-              // merges, exact-main CI passes, and current main still contains
-              // its executable tests and UI hooks. This is NOT a blanket
-              // exception for old feature branches or backup refs.
-              const stackedPickerHeads = new Map([
-                ['fix/legacy-use-this-channel-20261025',
-                 '65992a7c414ea09a9557c47ac2065636d01faa34'],
-                ['fix/shared-use-this-channel-20261025',
-                 '2416f81a002b3a57da678c6bab1e3c1b84ba3eed']
-              ]);
               const safeName = name =>
                 (prefixes.some(p => name.startsWith(p)) ||
                  reconciledWorkHeads.has(name)) &&
@@ -321,6 +309,18 @@ jobs:
               const allPRs = await github.paginate(github.rest.pulls.list, {
                 owner, repo, state: 'all', per_page: 100
               });
+              // Two stacked feature heads: #724 reached main, but #725 merged
+              // into the feature branch. PR #803 explicitly ports #725 into
+              // main. Retire only these exact SHAs, after that integration
+              // merges, exact-main CI passes, and current main still contains
+              // its executable tests and UI hooks. This is NOT a blanket
+              // exception for old feature branches or backup refs.
+              const stackedPickerHeads = new Map([
+                ['fix/legacy-use-this-channel-20261025',
+                 '65992a7c414ea09a9557c47ac2065636d01faa34'],
+                ['fix/shared-use-this-channel-20261025',
+                 '2416f81a002b3a57da678c6bab1e3c1b84ba3eed']
+              ]);
               const prsByHead = new Map();
               for (const pr of allPRs) {
                 if (pr.head?.repo?.full_name !== fullName || !pr.head.ref) continue;
