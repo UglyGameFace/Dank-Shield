@@ -63,7 +63,7 @@ jobs:
             if (Object.keys(input).some(key => !fields.has(key))) {
               throw new Error('Unexpected field in cleanup command');
             }
-            if (!['preview','delete','preview-reviewed-merged','delete-reviewed-merged','preview-rejected','delete-rejected']
+            if (!['preview','delete','preview-reviewed-merged','delete-reviewed-merged','preview-rejected','delete-rejected','preview-reconciled','delete-reconciled']
                   .includes(input.mode)) {
               throw new Error('Only guarded opt-in or owner-reviewed cleanup is supported');
             }
@@ -75,15 +75,17 @@ jobs:
             if (!/^(0|[1-9][0-9]{0,3})$/.test(batchIndex)) {
               throw new Error('batch_index must be an integer from 0 to 9999');
             }
-            if ((input.mode.endsWith('reviewed-merged') || input.mode.endsWith('rejected')) && batchIndex !== '0') {
+            if ((input.mode.endsWith('reviewed-merged') || input.mode.endsWith('rejected') || input.mode.endsWith('reconciled')) && batchIndex !== '0') {
               throw new Error('batch_index is only for opt-in temporary branches');
             }
-            if (input.mode === 'delete-reviewed-merged' || input.mode === 'delete-rejected' || input.mode === 'delete') {
+            if (input.mode === 'delete-reviewed-merged' || input.mode === 'delete-rejected' || input.mode === 'delete-reconciled' || input.mode === 'delete') {
               const expectedToken = input.mode === 'delete'
                 ? /^DELETE_OPT_IN_[0-9A-F]{16}$/
                 : input.mode === 'delete-rejected'
                   ? /^DELETE_REJECTED_[0-9A-F]{16}$/
-                  : /^DELETE_REVIEWED_[0-9A-F]{16}$/;
+                  : input.mode === 'delete-reconciled'
+                    ? /^DELETE_RECONCILED_[0-9A-F]{16}$/
+                    : /^DELETE_REVIEWED_[0-9A-F]{16}$/;
               if (!branch || ack !== 'I_VERIFIED_LIVE_DISCLOUD_BRANCH' ||
                   !expectedToken.test(confirmation)) {
                 throw new Error('Delete requires verified live branch, owner attestation, and exact preview token');

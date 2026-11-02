@@ -100,6 +100,20 @@ assert app_commands.CommandTree.sync is sync
     )
 
 
+def test_command_tree_uses_supported_opt_in_interaction_trace() -> None:
+    source = (ROOT / "stoney_verify" / "command_runtime.py").read_text(encoding="utf-8")
+    tree_start = source.index("class DankCommandTree")
+    tree_end = source.index("async def clear_stale_guild_command_copies", tree_start)
+    tree_source = source[tree_start:tree_end]
+    assert "async def interaction_check" in tree_source
+    assert "DANK_INTERACTION_INGRESS_TRACE" in tree_source
+    assert "return await super().interaction_check(interaction)" in tree_source
+    assert "CommandTree._call" not in tree_source
+    assert "_from_interaction" not in tree_source
+    assert "custom_id" not in tree_source
+    assert "user_id" not in tree_source
+
+
 def test_native_command_runtime_replaces_retired_startup_owner_expectations() -> None:
     assert "stoney_verify.command_runtime" in EXPECTED_STARTUP_OWNER_MODULES
     assert "stoney_verify.startup_guards.command_safety" not in EXPECTED_STARTUP_OWNER_MODULES
