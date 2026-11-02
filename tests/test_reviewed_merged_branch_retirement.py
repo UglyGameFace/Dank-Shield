@@ -101,7 +101,8 @@ def test_no_unpreserved_work_or_production_refs_deleted() -> None:
         if hold == "scale/production-readiness-10k":
             continue  # The broad reviewed allowlist excludes scale/ by construction.
         assert hold in text
-    assert text.index("branchGraph.ahead_by !== 0") < text.index("eligible.push({name: branch.name")
+    assert text.index("branchGraph.ahead_by === 0") < text.index("proof: 'ancestor-of-main'")
+    assert text.index("branchGraph.ahead_by !== 0") < text.index("eligible.push({name: branch.name, sha: branch.commit.sha, pr: pr.number})")
     assert "archive.object.sha !== item.sha" in text
     assert "lease.object.sha !== item.sha" in text
     assert text.index("archive.object.sha !== item.sha") < text.index(
@@ -177,6 +178,7 @@ const branches = [
   {name:'feat/truncated',protected:false,commit:{sha:'truncatedsha'}},
   {name:'feat/deleted',protected:false,commit:{sha:'deletedsha'}},
   {name:'feat/multi',protected:false,commit:{sha:'multisha'}},
+  {name:'feat/no-pr-ancestor',protected:false,commit:{sha:'nopsha'}},
   {name:'feat/open',protected:false,commit:{sha:'opensha'}},
   {name:'backup/retained',protected:false,commit:{sha:'backupsha'}}
 ];
@@ -241,12 +243,14 @@ console.log(JSON.stringify({eligible,paginated,compared}));
     actual = json.loads(result.stdout)
     assert actual["paginated"] == 1
     assert actual["eligible"] == [
-        {"name": "feat/integrated", "sha": "oldsha", "pr": 1},
-        {"name": "feat/recent-merged", "sha": "recentsha", "pr": 12},
+        {"name": "feat/integrated", "sha": "oldsha", "pr": None, "proof": "ancestor-of-main"},
+        {"name": "feat/recent-merged", "sha": "recentsha", "pr": None, "proof": "ancestor-of-main"},
         {"name": "feat/unique", "sha": "uniquesha", "pr": 2},
         {"name": "feat/deleted", "sha": "deletedsha", "pr": 11},
+        {"name": "feat/multi", "sha": "multisha", "pr": None, "proof": "ancestor-of-main"},
+        {"name": "feat/no-pr-ancestor", "sha": "nopsha", "pr": None, "proof": "ancestor-of-main"},
     ]
-    assert actual["compared"] >= 13
+    assert actual["compared"] >= 12
 
 
 def test_squash_reconciliation_requires_complete_fork_delta_and_merge_tree_parity() -> None:
