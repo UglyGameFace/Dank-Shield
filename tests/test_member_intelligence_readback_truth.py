@@ -157,8 +157,9 @@ def test_history_embed_discloses_unavailable_sources_and_actual_activity():
     assert "Could not read" in fields["Evidence coverage & freshness"]
     assert "joins" in fields["Evidence coverage & freshness"]
     assert "2026-09-01" in fields["Evidence coverage & freshness"]
-    assert "EarlierDisplay" in fields["Known retained names (not identity links)"]
-    assert "Abusive spam" in fields["Most recent retained activity (sample)"]
+    assert "EarlierDisplay" in fields["Membership History"]
+    assert "Abusive spam" in fields["Activity & Moderation Evidence"]
+    assert len(embed.fields) <= 6  # compact on mobile, details retained
 
 
 def test_ticket_repository_strict_mode_exposes_error_without_changing_existing_callers(monkeypatch):
