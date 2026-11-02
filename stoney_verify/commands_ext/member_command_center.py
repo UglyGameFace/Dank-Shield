@@ -871,7 +871,7 @@ def _historical_member_embed(
     embed.add_field(
         name="Activity & Moderation Evidence",
         value=(
-            f"Recent retained events (up to 12): **{events.get('total', 0)}** • "
+            f"Recent retained events (up to {sample_limits.get('events', 30)}): **{events.get('total', 0)}** • "
             f"Moderation: **{events.get('moderation_count', 0)}**\\n"
             f"Last event: `{str(events.get('latest_event_type') or 'unknown')[:65]}`\\n"
             f"Types: {type_text}"
@@ -881,7 +881,7 @@ def _historical_member_embed(
     embed.add_field(
         name="Tickets & Staff Decisions",
         value=(
-            f"Recent retained tickets (up to 10): **{tickets.get('total', 0)}** • "
+            f"Recent retained tickets (up to {sample_limits.get('tickets', 15)}): **{tickets.get('total', 0)}** • "
             f"Staff verdicts: **{len(verdicts)}** (last 10 queried)\\n"
             + "\\n".join(
                 f"• {str((row.get('metadata') or {}).get('verdict_label') or (row.get('metadata') or {}).get('verdict') or 'Decision')[:42]}"
@@ -890,6 +890,19 @@ def _historical_member_embed(
         ).replace("\\n", "\n")[:1024],
         inline=False,
     )
+    recent_tickets = snapshot.get("recent_tickets") or []
+    if recent_tickets:
+        lines = []
+        for ticket in recent_tickets[:3]:
+            category = _plain(str(ticket.get("category") or "uncategorized"), 32)
+            ticket_state = _plain(str(ticket.get("status") or "unknown"), 24)
+            title = _plain(str(ticket.get("title") or ""), 70)
+            lines.append(f"• **{category}** [{ticket_state}]" + (f" {title}" if title else ""))
+        embed.add_field(
+            name="Recent ticket records (sample)",
+            value="\\n".join(lines).replace("\\\\n", "\\n")[:1024],
+            inline=False,
+        )
     if not (snapshot.get("recent_joins") or snapshot.get("recent_events") or snapshot.get("recent_tickets") or verdicts
             or member.get("username") or member.get("joined_at")):
         embed.add_field(
@@ -966,7 +979,7 @@ async def _show_stored_member_history(
             asyncio.gather(
                 get_member_context_snapshot(
                     guild_id=guild_id, user_id=user_id,
-                    ticket_limit=10, event_limit=12, join_limit=8,
+                    ticket_limit=15, event_limit=30, join_limit=15,
                 ),
                 asyncio.to_thread(
                     get_member_review_history,
