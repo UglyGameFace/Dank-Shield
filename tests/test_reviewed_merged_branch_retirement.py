@@ -360,20 +360,23 @@ def test_integrated_cleanup_exception_is_exact_and_ancestor_only() -> None:
     assert "nowOpen.some(pr => pr.head.ref === item.name || pr.base.ref === item.name)" in reviewed
 
 
-def test_squash_merged_role_worktree_has_exact_sha_owner_review_only() -> None:
+
+def test_squash_merged_dankshield_worktree_is_owner_reviewed_not_automatic() -> None:
     text = _workflow()
     reviewed = text.split("if (reviewed) {", 1)[1].split("const allBranches =", 1)[0]
-    allowlist = reviewed.split("const reconciledWorkHeads = new Map([", 1)[1].split("]);", 1)[0]
-    assert "['work/dankshield-role-navigation-20261102'," in allowlist
-    assert "'60a3650cea68536e605bbc677110b4c1865195b6'" in allowlist
+    prefixes = reviewed.split("const prefixes =", 1)[1].split(";", 1)[0]
+    assert "'work/dankshield-'" in prefixes
+    assert "'work/'" not in prefixes
+    assert "'backup/'" in reviewed
     assert "reconciledWorkHeads.get(branch.name) !== branch.commit.sha" in reviewed
-    assert "if (!await equivalentAtMerge(branch, pr, branchGraph)) continue;" in reviewed
+    assert "prs.length !== 1" in reviewed
     assert "pr.head.sha !== branch.commit.sha" in reviewed
+    assert "if (!await equivalentAtMerge(branch, pr, branchGraph)) continue;" in reviewed
+    assert "graph.behind_by !== 0" in reviewed
     assert "currentMain !== mainSha" in reviewed
     assert "archive.object.sha !== item.sha" in reviewed
     assert "lease.object.sha !== item.sha" in reviewed
     assert "branch-retirement-reviewed-20261031/" in reviewed
     assert "const prefixes = ['feat/', 'fix/'" in reviewed
-    assert "work/dankshield-" not in reviewed.split("const prefixes =", 1)[1].split(";", 1)[0]
-    # The unattended opt-in path must still reject unmerged squash histories.
+    # Automatic opt-in deletion still holds squash-merged unique commits.
     assert "integrated.ahead_by !== 0" in text.split("const rows = [];", 1)[1]
