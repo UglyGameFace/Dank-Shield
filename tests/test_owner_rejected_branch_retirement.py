@@ -7,7 +7,7 @@ RELAY = (ROOT / ".github/workflows/owner-reviewed-branch-retirement-command.yml"
 
 
 def test_rejected_work_is_exact_sha_pinned_and_not_scheduled():
-    assert "if (mode === 'preview-rejected' || mode === 'delete-rejected')" in CLEANUP
+    # Both owner-rejected and reconciled retirements share the same gated path.\n    assert "'preview-rejected', 'delete-rejected'" in CLEANUP\n    assert "if (!isManual || !ownerCommentRelay || context.actor !== 'UglyGameFace'" in CLEANUP\n    assert "const rejectedHeads = reconciled ? [" in CLEANUP
     assert "!isManual || !ownerCommentRelay" in CLEANUP
     assert "!deploymentBranchConfigured" in CLEANUP
     assert "feat/cinema-rolling-supervised-worker-20261014" in CLEANUP
