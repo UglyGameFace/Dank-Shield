@@ -339,6 +339,20 @@ def _should_clear_public_guild_copy(guild: Optional[discord.abc.Snowflake]) -> b
 class DankCommandTree(app_commands.CommandTree):
     """Command tree whose policy applies only to the shared Dank Shield bot."""
 
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        # Supported discord.py hook, not a private CommandTree monkey-patch.
+        if _env_bool("DANK_INTERACTION_INGRESS_TRACE"):
+            from .startup_guards.process_health import _safe_trace_label
+
+            data = getattr(interaction, "data", None)
+            payload = data if isinstance(data, dict) else {}
+            print(
+                "🧭 command_runtime tree_interaction_check "
+                f"command={_safe_trace_label(payload.get('name'))}",
+                flush=True,
+            )
+        return await super().interaction_check(interaction)
+
     async def sync(self, *, guild: Optional[discord.abc.Snowflake] = None):  # type: ignore[override]
         public_scope = public_command_scope_enabled()
 
