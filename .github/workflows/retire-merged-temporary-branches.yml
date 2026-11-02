@@ -765,7 +765,6 @@ jobs:
                     !newTests.includes('test_plain_proxy_message_has_no_torrent_engine_or_route')) {
                   throw new Error('Share Router/Cinema separation is not verified');
                 }
-              }
               // The four post-#727 manual-reminder commits were replaced by
               // merged #728's full-guild, saved-role, 25-person channel/DM
               // implementation. The historical migration loosened a counter
@@ -837,6 +836,7 @@ jobs:
                 if (!needles.every(needle => source.includes(needle))) {
                   throw new Error('Manual reminder replacement evidence changed: ' + path);
                 }
+              }
               }
               const rejectedHeads = reconciled ? [
                 {name:'fix/trace-application-command-ingress-20261007',
