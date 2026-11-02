@@ -20,7 +20,7 @@ def test_rejected_work_is_exact_sha_pinned_and_not_scheduled():
 
 def test_rejected_work_uses_archive_before_delete_and_ref_leases():
     section = CLEANUP.split("// Explicit owner rejection:", 1)[1].split(
-        "const reviewed = mode ===", 1
+        "const allBranches = await", 1
     )[0]
     assert section.index("github.rest.git.createRef") < section.index(
         "github.rest.git.deleteRef"
