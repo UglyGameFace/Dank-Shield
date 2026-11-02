@@ -384,3 +384,31 @@ def test_compact_history_renders_separately_labeled_feed_and_member_events():
     assert "Activity feed" in activity
     assert "Documented moderation" in activity
     assert "2" in activity and "1" in activity
+
+
+def test_failed_readbacks_are_never_displayed_as_zero_activity_or_tickets():
+    snapshot = {
+        "member": {"display_name": "Unverified history"},
+        "join_summary": {"times_joined": 0, "times_left": 0},
+        "event_summary": {"total": 0, "moderation_count": 0},
+        "activity_feed_summary": {"total": 0, "moderation_count": 0},
+        "ticket_summary": {"total": 0},
+        "source_status": {
+            "profile": "unavailable", "joins": "unavailable",
+            "events": "unavailable", "tickets": "unavailable",
+            "activity_feed": "unavailable", "activity_ledger": "unavailable",
+        },
+        "sample_limits": {
+            "joins": 15, "events": 30, "tickets": 15, "activity_feed": 30,
+        },
+    }
+    embed = center._historical_member_embed(
+        USER_ID, snapshot, [{"metadata": {"verdict": "watch"}}],
+        presence="unavailable",
+    )
+    fields = {field.name: field.value for field in embed.fields}
+    assert "**unavailable**" in fields["Activity & Moderation Evidence"]
+    assert "**unavailable**" in fields["Tickets & Staff Decisions"]
+    assert "unavailable" in fields["Membership History"]
+    assert "activity_feed" in fields["Evidence coverage & freshness"]
+    assert len(embed.fields) <= 6
