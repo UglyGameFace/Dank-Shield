@@ -38,3 +38,8 @@ def test_stacked_retirement_reuses_existing_owner_archive_and_ref_leases():
     assert "archive.object.sha !== item.sha" in WORKFLOW
     assert "lease.object.sha !== item.sha" in WORKFLOW
     assert "github.rest.git.deleteRef" in WORKFLOW
+
+def test_exact_main_ci_lookup_has_read_only_actions_permission():
+    relay = (ROOT / ".github/workflows/owner-reviewed-branch-retirement-command.yml").read_text()
+    assert "  actions: read" in WORKFLOW
+    assert "      actions: read" in relay
