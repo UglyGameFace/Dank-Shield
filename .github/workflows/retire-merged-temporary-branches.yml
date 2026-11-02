@@ -249,7 +249,11 @@ jobs:
                 if (pr.head.repo?.full_name === fullName) inUse.add(pr.head.ref);
                 if (pr.base.repo?.full_name === fullName) inUse.add(pr.base.ref);
               }
-              const prefixes = ['feat/', 'fix/', 'hotfix/', 'extract/', 'docs/', 'audit/', 'chore/'];
+              // Only owner-reviewed cleanup may consider merged work/dankshield-* refs.
+              // The unattended opt-in path remains ancestry-only. Every
+              // divergent worktree still requires an exact-head merged PR,
+              // changed-path tree equivalence and the owner SHA-bound token.
+              const prefixes = ['feat/', 'fix/', 'hotfix/', 'extract/', 'docs/', 'audit/', 'chore/', 'work/dankshield-'];
               const heldPrefixes = [
                 'aaa-', 'archive/', 'backup/', 'recovery/', 'integration/',
                 'reconcile/', 'release/', 'deploy/', 'ops/', 'ci/', 'migration/'
