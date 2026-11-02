@@ -150,19 +150,10 @@ class MemberIntelligenceSnapshotCache:
     ) -> dict[str, Any]:
         task = asyncio.current_task()
         try:
-            try:
-                snapshot = await loader()
-            except Exception:
-                now = self._clock()
-                with self._lock:
-                    current = self._flights.get(key)
-                    invalidated = current is None or current.task is not task or current.invalidated
-                if stale and not invalidated and now < stale.stale_until:
-                    return self._decorate(
-                        stale.snapshot, "stale", age=now - stale.created_monotonic,
-                        cached_at=stale.created_at, unavailable=["current_read"],
-                    )
-                raise
+            # Unexpected errors are code defects, not proof of a database
+            # outage. Only explicit per-source read failures can use a
+            # labeled stale snapshot; never conceal programming exceptions.
+            snapshot = await loader()
             if not isinstance(snapshot, dict):
                 raise TypeError("Member intelligence snapshot must be a dict")
 
