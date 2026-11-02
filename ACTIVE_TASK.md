@@ -1,3 +1,13 @@
+## SCHEDULED SQUASH-HEAD ARCHIVAL INTEGRATION (2026-11-02 UTC)
+
+- **Main at inspection:** `be029a1d617f551f91457b47ae5eb29d59929843`, exact-main CI #41369167344 passed; 52 branches, zero open PRs. Live Discloud build remains unverified.
+- **Working branch:** `fix/squash-merged-retirement-archive-20261101` (new integration branch, temporarily increases branch count to 53). The existing scheduled historical cleanup previously accepted only zero-ahead commits, even though the owner-reviewed workflow already proves exact squash/rebase merge-tree equivalence.
+- **Change:** Reuse the canonical `equivalentAtMerge` proof for scheduled archival/retirement after the existing 48-hour cooldown, require the immutable merged PR commit to be an ancestor of pinned main, preserve exact PR head, tag-before-delete, current main/branch leases, open-PR exclusions and deployment-ref gate. No relaxation for backups, production, database, or recovery refs.
+- **Validation:** executable regression for directly integrated, squash-integrated, divergent, missing merge ancestry, stale PR head, young PR, wrong base and duplicate PR. CI and merge pending; **branches actually deleted this run: 0**.
+- **Blocked production gate:** `DANK_DISCLOUD_DEPLOY_BRANCH` is empty in the latest scheduled job #41372403105. No production release, credentials, migration or host change; dedicated Supabase primary and original IdleGrowOp rollback preserved, Discloud PostgreSQL isolated backup candidate.
+
+---
+
 ## OWNER-COMMENT RETIREMENT INTEGRATION (2026-11-01 17:44 UTC)
 
 - **Observed main:** `181c05f494b134ab6c1f5bdddcb61b11fe17ff80` after merged #788; exact-main CI #41330456025 succeeded. Main is not proof of the live Discloud build.
