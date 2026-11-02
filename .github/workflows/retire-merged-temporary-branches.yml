@@ -276,8 +276,18 @@ jobs:
                 'fix/postgres-production-caller-inventory-20261028',
                 'fix/supabase-egress-configuration-20261028',
               ]);
+              // PR #789's original branch head was proven byte-for-byte equal
+              // to its merged tree on every changed path, and its merge commit
+              // is an ancestor of main. It is an obsolete implementation ref,
+              // not a deployment, rollback, or backup. Do not open the work/
+              // namespace generally: only this SHA may enter reviewed cleanup.
+              const reconciledWorkHeads = new Map([
+                ['work/dankshield-owner-cleanup-relay-20261101',
+                 'bafe17a86225d71700f65496fb8339190418792f'],
+              ]);
               const safeName = name =>
-                prefixes.some(p => name.startsWith(p)) &&
+                (prefixes.some(p => name.startsWith(p)) ||
+                 reconciledWorkHeads.has(name)) &&
                 !heldPrefixes.some(p => name.startsWith(p)) &&
                 !protectedHeads.has(name) &&
                 (!hasHeldHistoricalSegment(name, sensitive) ||
@@ -301,7 +311,9 @@ jobs:
               }
               const eligible = [];
               for (const branch of branches) {
-                if (branch.protected || inUse.has(branch.name) || !safeName(branch.name)) continue;
+                if (branch.protected || inUse.has(branch.name) || !safeName(branch.name) ||
+                  (reconciledWorkHeads.has(branch.name) &&
+                   reconciledWorkHeads.get(branch.name) !== branch.commit.sha)) continue;
                 const prs = prsByHead.get(branch.name) || [];
                 // Owner-reviewed fast-forward ancestry proof: a branch with zero
                 // commits ahead of main is already contained byte-for-byte in
