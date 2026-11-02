@@ -147,7 +147,7 @@ jobs:
               }
             }
             if (!['preview', 'delete', 'preview-reviewed-merged', 'delete-reviewed-merged'].includes(mode) &&
-                !['preview-rejected', 'delete-rejected'].includes(mode)) {
+                !['preview-rejected', 'delete-rejected', 'preview-reconciled', 'delete-reconciled'].includes(mode)) {
               throw new Error('Unsupported branch hygiene mode');
             }
             if (isManual && mode === 'delete' && context.actor !== 'UglyGameFace') {
@@ -506,13 +506,34 @@ jobs:
             // no requested runtime integration. Preserve their entire commits in
             // immutable-SHA archive refs before deleting their branch pointers.
             // No wildcard names, no automatic/scheduled invocation.
-            if (mode === 'preview-rejected' || mode === 'delete-rejected') {
+            if (['preview-rejected', 'delete-rejected', 'preview-reconciled', 'delete-reconciled'].includes(mode)) {
               if (!isManual || !ownerCommentRelay || context.actor !== 'UglyGameFace' ||
                   !deploymentBranchConfigured) {
                 throw new Error('Rejected-work retirement requires owner relay and verified deployment branch');
               }
-              const deleting = mode === 'delete-rejected';
-              const rejectedHeads = [
+              const reconciled = mode.endsWith('-reconciled');
+              const deleting = mode.startsWith('delete-');
+              // Reconciled refs require a proven merged replacement, not just
+              // an owner's desire to remove an old branch.
+              if (reconciled) {
+                const replacement = (await github.rest.pulls.get({owner,repo,pull_number:806})).data;
+                if (!replacement.merged_at || replacement.base?.ref !== 'main' ||
+                    replacement.head?.ref !== 'fix/reconcile-private-interaction-ingress-tracing-20261102' ||
+                    !replacement.merge_commit_sha) {
+                  throw new Error('PR #806 replacement is not merged into main');
+                }
+                const currentMain = (await github.rest.repos.getBranch({owner,repo,branch:'main'})).data.commit.sha;
+                const ancestry = (await github.rest.repos.compareCommits({
+                  owner,repo,base:replacement.merge_commit_sha,head:currentMain
+                })).data;
+                if (ancestry.behind_by !== 0 || !['ahead','identical'].includes(ancestry.status)) {
+                  throw new Error('PR #806 replacement merge is not an ancestor of main');
+                }
+              }
+              const rejectedHeads = reconciled ? [
+                {name:'fix/trace-application-command-ingress-20261007',
+                 sha:'be80019ddcce56dd89daa89aef480c499107f373'}
+              ] : [
                 {name:'feat/cinema-rolling-supervised-worker-20261014',
                  sha:'8bccd1ee9a5203cebc7862eec8addd48ba9706a6'},
                 {name:'fix/517-permanent-optout-20261013',
@@ -539,9 +560,9 @@ jobs:
                 batch.push(target);
               }
               const fingerprint = require('crypto').createHash('sha256')
-                .update(JSON.stringify({mainSha,batch,effectiveDeployBranch,mode:'rejected'}))
+                .update(JSON.stringify({mainSha,batch,effectiveDeployBranch,mode:reconciled ? 'reconciled' : 'rejected'}))
                 .digest('hex').slice(0,16).toUpperCase();
-              const token = 'DELETE_REJECTED_' + fingerprint;
+              const token = (reconciled ? 'DELETE_RECONCILED_' : 'DELETE_REJECTED_') + fingerprint;
               core.info('Owner-rejected retirement preview: ' +
                 JSON.stringify({mainSha,batch,effectiveDeployBranch}));
               core.info('Owner-rejected retirement confirmation token: ' + token);
@@ -566,7 +587,7 @@ jobs:
                   held.push(item.name + ': changed ref, main, or open PR');
                   continue;
                 }
-                const tag = 'tags/branch-retirement-rejected-20261102/' + item.name;
+                const tag = 'tags/branch-retirement-' + (reconciled ? 'reconciled' : 'rejected') + '-20261102/' + item.name;
                 let archive;
                 try {
                   archive = (await github.rest.git.getRef({owner,repo,ref:tag})).data;
