@@ -678,7 +678,28 @@ def _build_relationships(
 ) -> Dict[str, Any]:
     latest_join = join_rows[0] if join_rows else {}
     member = member_row or {}
-    event = _matching_join_event(member_row, join_rows, event_rows)
+
+    # A stored profile may describe the previous visit while member_joins
+    # already records a newer one. Never combine an old inviter/code with a
+    # different join and then present that mixture as confirmed attribution.
+    if latest_join and member:
+        try:
+            join_at = datetime.fromisoformat(
+                str(latest_join["joined_at"]).replace("Z", "+00:00")
+            )
+            profile_at = datetime.fromisoformat(
+                str(member["joined_at"]).replace("Z", "+00:00")
+            )
+            if join_at.tzinfo is None:
+                join_at = join_at.replace(tzinfo=timezone.utc)
+            if profile_at.tzinfo is None:
+                profile_at = profile_at.replace(tzinfo=timezone.utc)
+            if abs((join_at - profile_at).total_seconds()) > 5:
+                member = {}
+        except (KeyError, TypeError, ValueError, OverflowError):
+            # An unverified timestamp cannot authorize cross-visit attribution.
+            member = {}
+    event = _matching_join_event(member, join_rows, event_rows)
 
     def _pick(*values: Any) -> Optional[str]:
         for value in values:
@@ -808,9 +829,12 @@ def _build_join_summary(
     times_joined = member_times_joined or len(join_rows) or (1 if isinstance(member_row, dict) else 0)
     times_left = member_times_left or leave_events
 
-    first_joined_at = _latest_ts(
-        earliest_join.get("joined_at") if isinstance(earliest_join, dict) else None,
-        member_row.get("first_seen_at") if isinstance(member_row, dict) else None,
+    # first_seen_at can predate membership, whereas _latest_ts picks the
+    # newest timestamp. Neither is a reliable first-join calculation.
+    first_joined_at = (
+        earliest_join.get("joined_at")
+        if isinstance(earliest_join, dict) and earliest_join.get("joined_at")
+        else member_row.get("joined_at") if isinstance(member_row, dict) else None
     )
     latest_joined_at = _latest_ts(
         latest_join.get("joined_at") if isinstance(latest_join, dict) else None,
@@ -828,7 +852,7 @@ def _build_join_summary(
         "rejoined_at": member_row.get("rejoined_at") if isinstance(member_row, dict) else None,
         "times_joined": int(times_joined),
         "times_left": int(times_left),
-        "in_guild": _boolish(member_row.get("in_guild"), True) if isinstance(member_row, dict) else True,
+        "in_guild": _boolish(member_row.get("in_guild"), True) if isinstance(member_row, dict) else None,
         "latest_entry_method": relationships.get("entry_method"),
         "latest_verification_source": relationships.get("verification_source"),
         "latest_invite_code": relationships.get("invite_code"),
@@ -1174,7 +1198,7 @@ async def get_member_context_snapshot(
             "role_names": [],
             "role_ids": [],
             "roles": [],
-            "in_guild": True,
+            "in_guild": None,
             "has_unverified": False,
             "has_verified_role": False,
             "has_staff_role": False,
