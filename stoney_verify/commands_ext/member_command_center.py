@@ -828,7 +828,7 @@ def _historical_member_embed(
         f"Latest recorded join: `{str(joins.get('latest_joined_at') or 'unknown')[:50]}`\\n"
         f"Earliest retained join: `{str(joins.get('first_joined_at') or 'unknown')[:50]}`\\n"
         f"Last recorded departure: `{str(joins.get('left_at') or 'not recorded')[:50]}`\\n"
-        f"Stored last seen: `{str(joins.get('last_seen_at') or 'unknown')[:50]}`"
+        f"Last seen (stored): `{str(joins.get('last_seen_at') or 'unknown')[:50]}`"
     ).replace("\\n", "\n")
     all_names = names.get("all_names") or []
     if all_names:
