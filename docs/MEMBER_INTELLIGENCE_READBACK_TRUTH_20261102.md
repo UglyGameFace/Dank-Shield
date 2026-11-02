@@ -64,12 +64,44 @@ matching original join-event evidence.
   provides retroactive Discord history, and no automatic cross-server
   membership inference is introduced.
 
+## Smart caching (staff history only)
+
+- The normal reader remains uncached. Only a staff-authorized Member
+  Intelligence screen opts into the process-local cache. It keys by the exact
+  server ID, user ID, read limits and enabled source families. It never
+  caches staff authorization decisions, external provider API results,
+  staff verdicts or live Discord membership/roles.
+- Bounded to **128** account snapshots, **25 seconds** for evidence, **5
+  seconds** for empty records. Every duplicate simultaneous lookup within
+  one event loop shares a single read. A cancelled Discord interaction does
+  not cancel another user's pending lookup.
+- Tapping **Stored History** bypasses the fresh cache; live account selection
+  always verifies current membership independently through Discord.
+- Join/leave/ban/profile-update Discord events invalidate the corresponding
+  exact account. Completion of persisted join context invalidates again so
+  an in-flight read cannot repopulate evidence from before the write.
+  Other write families remain protected by the short TTL and forced refresh;
+  this is not a distributed cache across Discloud workers.
+- Incomplete or failed reads never become cached clean results. A partially
+  fresh read shows its missing sources. When **every** source is unavailable,
+  the previous complete result may be shown for at most **120 seconds**,
+  clearly marked **STALE**, with the failed source names and cached age.
+  After that, the report is unavailable, not cleared/empty.
+- External safety providers retain their **separate** existing positive
+  account-response cache (15-minute TTL) and consent-based, on-demand
+  request flow. This new staff-history cache does not trigger paid API calls.
+
+Test cancellation, concurrent same-account lookup, per-guild isolation, bounded
+capacity, TTL/negative TTL, failure handling, forced refresh, mutation safety,
+in-flight invalidation and live Discord status separation. These snapshots
+are review aids only, never evidence that enables automatic bans.
+
 ## Production verification
 
 1. Confirm PR head CI passes and merge to the existing `main` branch.
 2. Confirm the existing Discloud bot restarted with the exact merged commit
    SHA (branch is always `main`, but SHA matters).
-3. On Android, open `/dank members` → Intelligence → select a current
+3. On Android, open `/mod` → Member Command Center → Intelligence → select a current
    member: one report with External Sources and Safety Reports buttons.
 4. Use **Stored History by ID** with a departed/banned member: the
    historical evidence panel must also have buttons.
