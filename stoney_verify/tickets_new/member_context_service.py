@@ -1226,8 +1226,8 @@ async def get_member_context_snapshot(
     relationships = _build_relationships(member_row, join_rows, attribution_events)
     name_history = _build_name_history(member_row, join_rows, ticket_rows)
     join_summary = _build_join_summary(member_row, join_rows, event_rows, relationships)
-    # The newest 8 joins cannot establish a first-ever join. If the sample
-    # reaches its cap, ask for the oldest actual retained row separately.
+    # The newest bounded joins cannot establish a first-ever join. If the
+    # sample reaches its cap, ask for the oldest retained row separately.
     # This is still the earliest *retained*, not necessarily first-ever.
     if (join_rows and len(join_rows) >= max(1, min(int(join_limit or 10), 100))
             and source_status.get("joins") == "sampled"):
@@ -1237,6 +1237,11 @@ async def get_member_context_snapshot(
         )
         if oldest_rows and oldest_rows[0].get("joined_at"):
             join_summary["first_joined_at"] = oldest_rows[0]["joined_at"]
+        else:
+            # The oldest read was unavailable/inconsistent. Do not mislabel
+            # the last row in a truncated recent sample as the earliest.
+            join_summary["first_joined_at"] = None
+            source_status["earliest_join"] = "unavailable"
     ticket_summary = _build_ticket_history_summary(ticket_rows, open_ticket)
     event_summary = _build_event_summary(event_rows)
     dashboard = _build_dashboard_block(member_row, relationships, ticket_summary, join_summary)
