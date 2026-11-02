@@ -278,3 +278,15 @@ def test_protection_repair_does_not_grant_broad_access_or_replace_navigation() -
     assert "center._require_setup_permission(interaction)" in source
     assert "set_permissions(" not in source
     assert 'row=3' in source
+
+
+def test_historical_audit_branch_retirement_is_sha_pinned_and_requires_merged_replacement() -> None:
+    from pathlib import Path
+    workflow = (Path(__file__).resolve().parents[1] / ".github/workflows/retire-merged-temporary-branches.yml").read_text()
+    assert "pull_number:808" in workflow
+    assert "protectionReplacement.merged_at" in workflow
+    assert "protectionAncestry.behind_by !== 0" in workflow
+    assert "audit/protection-contextual-repair" in workflow
+    assert "764ec309aa777b7fe74764b94e1d594ed64e50fb" in workflow
+    assert "DELETE_RECONCILED_" in workflow
+    assert workflow.index("github.rest.git.createRef") < workflow.index("github.rest.git.deleteRef")
