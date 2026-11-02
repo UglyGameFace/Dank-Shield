@@ -678,6 +678,93 @@ jobs:
                     throw new Error('Integrated role navigation contract changed: ' + path);
                   }
                 }
+                // PR #709 merged the existing-channel Share Router into main.
+                // Five later media-fallback commits on its original branch are
+                // also present in current main. Compare the exact source and
+                // regression blobs, rather than treating a merged PR as proof
+                // that its later commits were included.
+                const shareRouterHead = 'b4a1ab8d68b2cf2e96aac9148b6cf04a400d4934';
+                const shareRouterPR = (await github.rest.pulls.get({
+                  owner,repo,pull_number:709
+                })).data;
+                if (!shareRouterPR.merged_at || shareRouterPR.base?.ref !== 'main' ||
+                    shareRouterPR.head?.ref !== 'fix/share-router-existing-channel-nondestructive-20261024' ||
+                    shareRouterPR.head?.sha !== '414b9188395c0366745bf868a8ceb6c105a001de' ||
+                    !shareRouterPR.merge_commit_sha) {
+                  throw new Error('PR #709 Share Router original merge is not verified');
+                }
+                const shareRouterAncestry = (await github.rest.repos.compareCommits({
+                  owner,repo,base:shareRouterPR.merge_commit_sha,head:currentMain
+                })).data;
+                if (shareRouterAncestry.behind_by !== 0 ||
+                    !['ahead','identical'].includes(shareRouterAncestry.status)) {
+                  throw new Error('PR #709 Share Router merge is not an ancestor of main');
+                }
+                const laterMedia = (await github.rest.repos.compareCommits({
+                  owner,repo,base:shareRouterPR.head.sha,head:shareRouterHead
+                })).data;
+                if (laterMedia.behind_by !== 0 || laterMedia.ahead_by !== 5) {
+                  throw new Error('Share Router later media commits changed; manual reconciliation required');
+                }
+                const shareRouterSource = async (path,ref) => {
+                  const blob = (await github.rest.repos.getContent({
+                    owner,repo,path,ref
+                  })).data;
+                  if (Array.isArray(blob) || blob.encoding !== 'base64' || !blob.content) {
+                    throw new Error('Missing Share Router reconciliation evidence: ' + path);
+                  }
+                  return Buffer.from(blob.content,'base64').toString('utf8');
+                };
+                for (const path of [
+                  'stoney_verify/share_router_media_resolver.py',
+                  'tests/test_share_router_media_resolver.py'
+                ]) {
+                  const [historical,integrated] = await Promise.all([
+                    shareRouterSource(path,shareRouterHead),
+                    shareRouterSource(path,currentMain)
+                  ]);
+                  if (historical !== integrated) {
+                    throw new Error('Unintegrated Share Router media changes: ' + path);
+                  }
+                }
+                const [oldRequirements,newRequirements] = await Promise.all([
+                  shareRouterSource('requirements.txt',shareRouterHead),
+                  shareRouterSource('requirements.txt',currentMain)
+                ]);
+                const oldDeps = oldRequirements.split(/\r?\n/).filter(Boolean);
+                const newDeps = new Set(newRequirements.split(/\r?\n/).filter(Boolean));
+                if (oldDeps.filter(dep => dep !== 'libtorrent==2.1.1')
+                      .some(dep => !newDeps.has(dep)) ||
+                    [...newDeps].some(dep => dep.startsWith('libtorrent'))) {
+                  throw new Error('Share Router media dependencies are not reconciled');
+                }
+                const [oldRuntime,newRuntime,newTests] = await Promise.all([
+                  shareRouterSource('stoney_verify/share_router_runtime.py',shareRouterHead),
+                  shareRouterSource('stoney_verify/share_router_runtime.py',currentMain),
+                  shareRouterSource('tests/test_share_router_native_runtime.py',currentMain)
+                ]);
+                const extractFunction = (source,name) => {
+                  const at = source.indexOf('def ' + name + '(');
+                  if (at < 0) throw new Error('Missing Share Router function: ' + name);
+                  const tail = source.slice(at);
+                  const next = tail.slice(1).search(/\n(?:async )?def |\nclass /);
+                  return next < 0 ? tail : tail.slice(0,next+1);
+                };
+                for (const name of [
+                  'save_existing_share_route','save_managed_share_route',
+                  'create_custom_share_source','save_route',
+                  'create_or_repair_hidden_share_hub'
+                ]) {
+                  if (extractFunction(oldRuntime,name) !== extractFunction(newRuntime,name)) {
+                    throw new Error('Share Router existing-channel behavior diverged: ' + name);
+                  }
+                }
+                // The old branch still couples a general proxy to libtorrent;
+                // current main deliberately keeps Cinema out of Share Router.
+                if (newRuntime.includes('def _route_torrent_media(') ||
+                    !newTests.includes('test_plain_proxy_message_has_no_torrent_engine_or_route')) {
+                  throw new Error('Share Router/Cinema separation is not verified');
+                }
               }
               const rejectedHeads = reconciled ? [
                 {name:'fix/trace-application-command-ingress-20261007',
@@ -687,7 +774,9 @@ jobs:
                 {name:'audit/protection-contextual-repair',
                  sha:'764ec309aa777b7fe74764b94e1d594ed64e50fb'},
                 {name:'fix/role-center-navigation-audit-20260929',
-                 sha:'a9553b9a7cddfb34086970fb98bbf2d675601d2e'}
+                 sha:'a9553b9a7cddfb34086970fb98bbf2d675601d2e'},
+                {name:'fix/share-router-existing-channel-nondestructive-20261024',
+                 sha:'b4a1ab8d68b2cf2e96aac9148b6cf04a400d4934'}
               ] : [
                 {name:'feat/cinema-rolling-supervised-worker-20261014',
                  sha:'8bccd1ee9a5203cebc7862eec8addd48ba9706a6'},
