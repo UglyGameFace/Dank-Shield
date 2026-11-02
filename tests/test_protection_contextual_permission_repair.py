@@ -1,0 +1,303 @@
+from __future__ import annotations
+
+import asyncio
+import inspect
+from types import SimpleNamespace
+
+import pytest
+
+from stoney_verify.commands_ext import public_protection_contextual_permission_repair as repair
+from stoney_verify.commands_ext import public_setup_gate as gate
+
+
+def _full_cfg() -> dict[str, object]:
+    ids = {
+        key: str(index)
+        for index, key in enumerate(repair.STAT_CHANNEL_PREFIXES, start=101)
+    }
+    return {
+        "guild_id": "777",
+        repair.SECURITY_STATS_ENABLED_KEY: True,
+        repair.SECURITY_STATS_CATEGORY_ID_KEY: "100",
+        repair.SECURITY_STATS_CHANNEL_IDS_KEY: ids,
+    }
+
+
+def test_protection_integration_owns_no_discord_overwrite_mutation() -> None:
+    source = inspect.getsource(repair)
+    assert "set_permissions(" not in source
+    assert "core.apply_target_repair(" in source
+    assert "clear_explicit_denies=False" in source
+
+
+def test_live_stats_targets_use_only_exact_persisted_ids() -> None:
+    cfg = _full_cfg()
+    specs = repair._target_specs(cfg)
+    assert specs[0].channel_id == 100
+    assert specs[0].label == "Live Stats category"
+    assert specs[0].feature == "tickets"
+    assert specs[0].mode == "minimum"
+
+    raw_ids = cfg[repair.SECURITY_STATS_CHANNEL_IDS_KEY]
+    assert isinstance(raw_ids, dict)
+    saved_ids = {int(value) for value in raw_ids.values()}
+    child_ids = {spec.channel_id for spec in specs[1:]}
+    assert child_ids == saved_ids
+
+    source = inspect.getsource(repair._target_specs)
+    assert "SECURITY_STATS_CATEGORY_NAME" not in source
+    assert "guild.channels" not in source
+    assert "discord.utils.get" not in source
+
+
+def test_disabled_live_stats_has_no_contextual_targets() -> None:
+    cfg = _full_cfg()
+    cfg[repair.SECURITY_STATS_ENABLED_KEY] = False
+    assert repair._target_specs(cfg) == ()
+
+
+def test_missing_saved_mapping_stays_manual_instead_of_guessing(monkeypatch: pytest.MonkeyPatch) -> None:
+    cfg = _full_cfg()
+    cfg[repair.SECURITY_STATS_CATEGORY_ID_KEY] = "0"
+    cfg[repair.SECURITY_STATS_CHANNEL_IDS_KEY] = {}
+
+    class FakeMember:
+        guild_permissions = SimpleNamespace(
+            manage_channels=True,
+            manage_roles=True,
+            administrator=False,
+        )
+
+    monkeypatch.setattr(repair.discord, "Member", FakeMember)
+    lines = repair._manual_prerequisites(SimpleNamespace(me=FakeMember()), cfg)
+    assert any("saved stats category mapping is missing" in line for line in lines)
+    assert any("saved counter mappings are missing" in line for line in lines)
+
+
+def test_server_level_live_stats_permissions_remain_manual(monkeypatch: pytest.MonkeyPatch) -> None:
+    cfg = _full_cfg()
+
+    class FakeMember:
+        guild_permissions = SimpleNamespace(
+            manage_channels=False,
+            manage_roles=False,
+            administrator=False,
+        )
+
+    monkeypatch.setattr(repair.discord, "Member", FakeMember)
+    lines = repair._manual_prerequisites(SimpleNamespace(me=FakeMember()), cfg)
+    text = " ".join(lines)
+    assert "server-level Manage Channels" in text
+    assert "server-level Manage Roles / Manage Permissions" in text
+
+
+def test_button_contract_has_three_expected_states() -> None:
+    healthy = repair.ProtectionStatsAudit(
+        rows=[
+            repair.ProtectionStatsRow(
+                spec=repair.ProtectionStatsTarget(1, "Stats", "tickets", "minimum"),
+                audit=SimpleNamespace(missing=[]),
+            )
+        ]
+    )
+    assert repair._button_state(healthy)[:2] == ("Access Healthy", "✅")
+    assert repair._button_state(healthy)[3] is True
+
+    repairable_audit = SimpleNamespace(missing=["view_channel"], can_apply=True)
+    repairable = repair.ProtectionStatsAudit(
+        rows=[
+            repair.ProtectionStatsRow(
+                spec=repair.ProtectionStatsTarget(1, "Stats", "tickets", "minimum"),
+                audit=repairable_audit,
+            )
+        ]
+    )
+    assert repair._button_state(repairable)[:2] == ("Fix Issues", "🛠️")
+
+    mixed = repair.ProtectionStatsAudit(
+        rows=repairable.rows,
+        manual_issues=["Separate manual prerequisite"],
+    )
+    assert repair._button_state(mixed)[:2] == ("Fix Issues", "🛠️")
+
+    blocked_audit = SimpleNamespace(missing=["view_channel"], can_apply=False)
+    manual = repair.ProtectionStatsAudit(
+        rows=[
+            repair.ProtectionStatsRow(
+                spec=repair.ProtectionStatsTarget(1, "Stats", "tickets", "minimum"),
+                audit=blocked_audit,
+            )
+        ],
+        manual_issues=["Server permission missing"],
+    )
+    assert repair._button_state(manual)[:2] == ("Manual Fix Needed", "⚠️")
+
+
+def test_repair_uses_shared_core_and_fresh_reaudit(monkeypatch: pytest.MonkeyPatch) -> None:
+    cfg = _full_cfg()
+
+    class FakeChannel:
+        def __init__(self, channel_id: int) -> None:
+            self.id = channel_id
+            self.name = f"target-{channel_id}"
+            self.mention = f"<#{channel_id}>"
+            self.fixed = False
+
+    class FakeMember:
+        guild_permissions = SimpleNamespace(
+            manage_channels=True,
+            manage_roles=True,
+            administrator=False,
+        )
+
+    specs = repair._target_specs(cfg)
+    channels = {spec.channel_id: FakeChannel(spec.channel_id) for spec in specs}
+
+    class FakeGuild:
+        id = 777
+        me = FakeMember()
+
+        def __init__(self) -> None:
+            self.fetches: list[int] = []
+
+        def get_channel(self, channel_id: int):
+            return channels.get(channel_id)
+
+        async def fetch_channel(self, channel_id: int):
+            self.fetches.append(channel_id)
+            return channels.get(channel_id)
+
+    guild = FakeGuild()
+    calls: list[tuple[int, str, str]] = []
+
+    def fake_audit(_guild, channel, *, feature: str, mode: str):
+        missing = [] if channel.fixed else ["view_channel"]
+        return SimpleNamespace(
+            target_id=channel.id,
+            missing=missing,
+            blockers=[],
+            explicit_denies=[],
+            warnings=[],
+            can_apply=bool(missing),
+        )
+
+    async def fake_apply(
+        _guild,
+        channel,
+        *,
+        actor_id: int,
+        feature: str,
+        mode: str,
+        include_children: bool,
+        clear_explicit_denies: bool,
+    ):
+        assert actor_id == 99
+        assert include_children is False
+        assert clear_explicit_denies is False
+        calls.append((channel.id, feature, mode))
+        channel.fixed = True
+        return SimpleNamespace(
+            changed_targets=[f"{channel.mention} repaired"],
+            failed_targets=[],
+        )
+
+    monkeypatch.setattr(repair.discord.abc, "GuildChannel", FakeChannel)
+    monkeypatch.setattr(repair.discord, "Member", FakeMember)
+    monkeypatch.setattr(repair.core, "audit_target", fake_audit)
+    monkeypatch.setattr(repair.core, "apply_target_repair", fake_apply)
+
+    after, changed, failed = asyncio.run(
+        repair.repair_protection_stats(guild, cfg, actor_id=99)
+    )
+
+    assert after.healthy is True
+    assert failed == []
+    assert len(changed) == len(specs)
+    assert len(calls) == len(specs)
+    assert guild.fetches
+    assert calls[0] == (100, "tickets", "minimum")
+    assert all(mode == "full" for _cid, _feature, mode in calls[1:])
+
+
+def test_repair_keeps_safe_targets_repairable_when_manual_issue_also_exists() -> None:
+    repairable = SimpleNamespace(missing=["view_channel"], can_apply=True)
+    audit = repair.ProtectionStatsAudit(
+        rows=[
+            repair.ProtectionStatsRow(
+                spec=repair.ProtectionStatsTarget(1, "Stats", "tickets", "minimum"),
+                audit=repairable,
+            )
+        ],
+        manual_issues=["Another prerequisite stays manual"],
+    )
+    assert audit.repairable_count == 1
+    assert repair._button_state(audit)[0] == "Fix Issues"
+
+
+def test_callback_refreshes_same_component_message() -> None:
+    source = inspect.getsource(repair.ProtectionAccessButton.callback)
+    refresh = inspect.getsource(repair._refresh_same_screen)
+    assert "await _defer_update(interaction)" in source
+    assert "await _refresh_same_screen(" in source
+    assert "interaction.edit_original_response(" in refresh
+    assert "interaction.followup.send(" not in refresh
+    assert "center._refresh_panel(" not in source
+
+
+def test_late_public_bootstrap_activates_protection_contextual_repair() -> None:
+    source = inspect.getsource(gate.register_public_setup_gate)
+    assert "apply_protection_contextual_permission_repair" in source
+    assert "protection_contextual_repair" in source
+
+
+def test_protection_view_is_composed_without_replacing_component_callbacks() -> None:
+    source = inspect.getsource(repair.apply_protection_contextual_permission_repair)
+    assert "center.ProtectionCenterView = ContextualProtectionCenterView" in source
+    assert ".callback =" not in source
+    assert "ProtectionCenterView.__init__ =" not in source
+
+
+def test_protection_repair_respects_modern_section_navigation_and_degraded_state() -> None:
+    source = inspect.getsource(repair.apply_protection_contextual_permission_repair)
+    assert 'section: str = "overview"' in source
+    assert 'degraded: bool = False' in source
+    assert 'section != "tools"' in source
+    assert 'degraded or section != "tools"' in source
+    assert 'super().__init__(author_id=author_id, cfg=cfg, spam=spam, degraded=degraded, section=section)' in source
+    assert "self.add_item(" in source
+    refresh = inspect.getsource(repair._refresh_same_screen)
+    assert 'section="tools"' in refresh
+    assert "interaction.edit_original_response(" in refresh
+    assert "interaction.followup.send(" not in refresh
+
+
+def test_protection_repair_does_not_grant_broad_access_or_replace_navigation() -> None:
+    source = inspect.getsource(repair)
+    assert "clear_explicit_denies=False" in source
+    assert "include_children=False" in source
+    assert "center._require_setup_permission(interaction)" in source
+    assert "set_permissions(" not in source
+    assert 'row=3' in source
+
+
+def test_historical_audit_branch_retirement_is_sha_pinned_and_requires_merged_replacement() -> None:
+    from pathlib import Path
+    workflow = (Path(__file__).resolve().parents[1] / ".github/workflows/retire-merged-temporary-branches.yml").read_text()
+    assert "pull_number:808" in workflow
+    assert "protectionReplacement.merged_at" in workflow
+    assert "protectionAncestry.behind_by !== 0" in workflow
+    assert "audit/protection-contextual-repair" in workflow
+    assert "764ec309aa777b7fe74764b94e1d594ed64e50fb" in workflow
+    assert "DELETE_RECONCILED_" in workflow
+    assert workflow.index("github.rest.git.createRef") < workflow.index("github.rest.git.deleteRef")
+
+
+def test_hidden_live_stats_counters_are_not_repair_targets() -> None:
+    cfg = _full_cfg()
+    only_visible = next(iter(repair.STAT_CHANNEL_PREFIXES))
+    cfg["security_stats_visible_keys"] = [only_visible]
+    specs = repair._target_specs(cfg)
+    assert len(specs) == 2
+    assert specs[0].label == "Live Stats category"
+    assert specs[1].channel_id == int(cfg[repair.SECURITY_STATS_CHANNEL_IDS_KEY][only_visible])
+    assert repair._visible_stat_keys(cfg) == (only_visible,)

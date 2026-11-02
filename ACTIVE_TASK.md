@@ -1,3 +1,13 @@
+## PROTECTION LIVE STATS ACCESS RECONCILIATION (2026-11-02 UTC)
+
+- **Objective:** Integrate valuable unmerged Live Stats permission-repair behavior from `audit/protection-contextual-repair` without restoring its outdated pre-section Protection Center UI; safely archive and retire that historical branch only after verified integration.
+- **Before:** 31 Git branch refs (30 non-main), no open PRs, `main` `e9af9a79b22b3aedd4477e21268eecb2e1a6a066`, exact-main CI #41486245372 passed. Historical audit ref `764ec309aa777b7fe74764b94e1d594ed64e50fb` is 6 commits ahead of main and its new module/test are absent from main.
+- **Implementation:** PR #808 adds scoped Live Stats access auditing and repair via existing `permission_repair_core`; retains explicit-deny preservation and no child recursion. Uses current focused Protection **Tools** section, respects degraded mode and section constructor, refreshes same message, registers with existing setup gate, and carries original plus new regression tests. Cleanup mode now pins the historical audit branch SHA and requires merged PR #808, replacement main ancestry, current source/test evidence, verified deployment ref, owner SHA-bound preview and archive-tag readback before deletion.
+- **Current state:** PR-head CI running. **Actually deleted in this integration: 0.** Work branch temporarily changes 31 to 32 refs. Do not merge without PR-head CI; do not delete original until exact-main CI passes and owner-authorized preview/delete succeeds.
+- **Production boundary:** No deployment, credentials, host or DB changes. Dedicated Supabase `viamriafkbqhquvrsnua` intended primary, original IdleGrowOp Supabase rollback source preserved; Discloud PostgreSQL isolated backup candidate. Linked branch does not prove live Discloud SHA. Independent off-Discloud backup, live canary and tested rollback remain unverified.
+
+---
+
 ## RECONCILE SUPERSEDED HISTORICAL TICKET PANEL (2026-11-02 UTC)
 
 - **Before:** 32 Git branch refs (31 non-main), zero open PRs, main `4ef7cd06e32296dfbf6761008bf3dad71c3dc15c`. Exact-main Dank Shield CI #41476225330 passed. Eight branch heads are ancestors of main but are explicit backup/known-good refs; 23 non-main heads have unique commits. Discloud owner-linked branch is main, but live running commit is not verified.
