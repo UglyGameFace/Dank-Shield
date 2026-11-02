@@ -327,12 +327,21 @@ def test_integrated_cleanup_exception_is_exact_and_ancestor_only() -> None:
     text = _workflow()
     reviewed = text.split("if (reviewed) {", 1)[1].split("const allBranches =", 1)[0]
     for name in (
-        "fix/branch-retirement-and-migration-approval-20261031",
-        "fix/dankshield-archive-first-retirement-20261031",
-        "fix/owner-attested-discloud-branch-retirement-20261101",
-        "fix/squash-merged-retirement-archive-20261101",
+        "extract/discloud-packaging-gate-20261025",
+        "fix/dankshield-live-migration-history-20261031",
+        "fix/dankshield-live-migration-target-20261022",
+        "fix/discloud-pg-audit-test-20261027",
+        "fix/discloud-pg-guild-readiness-20261027",
+        "fix/discloud-pg-readiness-regression-20261027",
+        "fix/discloud-pg-runtime-inventory-20261027",
+        "fix/postgres-production-caller-inventory-20261028",
+        "fix/supabase-egress-configuration-20261028",
     ):
         assert reviewed.count("'" + name + "'") == 1
+    for held in ("audit/idle-grow-discloud-backup-retire-aiven-20261026",
+                 "backup/stoneyverify-stable-7fdc331-20261008",
+                 "feat/embed-studio-recurring-campaigns-20261024"):
+        assert "'" + held + "'" not in reviewed.split("const integratedCleanupRefs = new Set([", 1)[1].split("]);", 1)[0]
     assert "const integratedCleanupRefs = new Set([" in reviewed
     assert "integratedCleanupRefs.has(name)" in reviewed
     assert "integratedCleanupRefs.has(branch.name)" in reviewed
