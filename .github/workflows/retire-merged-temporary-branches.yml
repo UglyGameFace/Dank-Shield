@@ -284,6 +284,19 @@ jobs:
               for (const branch of branches) {
                 if (branch.protected || inUse.has(branch.name) || !safeName(branch.name)) continue;
                 const prs = prsByHead.get(branch.name) || [];
+                // Owner-reviewed fast-forward ancestry proof: a branch with zero
+                // commits ahead of main is already contained byte-for-byte in
+                // main's history. Still require exact-SHA preview, archive and
+                // deletion leases below. Never extend to divergent branches.
+                const branchGraph = (await github.rest.repos.compareCommits({
+                  owner, repo, base: mainSha, head: branch.commit.sha
+                })).data;
+                if (branchGraph.ahead_by === 0 &&
+                    ['behind', 'identical'].includes(branchGraph.status)) {
+                  eligible.push({name: branch.name, sha: branch.commit.sha,
+                    pr: null, proof: 'ancestor-of-main'});
+                  continue;
+                }
                 if (prs.length !== 1) continue;
                 const pr = prs[0];
                 if (!pr.merged_at || pr.state !== 'closed' ||
@@ -295,9 +308,6 @@ jobs:
                 // A merged PR does not prove its branch tip is in main:
                 // squash/rebase histories can retain unique commits. Hold
                 // those refs for explicit content reconciliation instead.
-                const branchGraph = (await github.rest.repos.compareCommits({
-                  owner, repo, base: mainSha, head: branch.commit.sha
-                })).data;
                 if (branchGraph.ahead_by !== 0 ||
                     !['behind', 'identical'].includes(branchGraph.status)) {
                   if (!await equivalentAtMerge(branch, pr, branchGraph)) continue;
