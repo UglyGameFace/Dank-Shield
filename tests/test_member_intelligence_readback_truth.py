@@ -159,3 +159,43 @@ def test_history_embed_discloses_unavailable_sources_and_actual_activity():
     assert "2026-09-01" in fields["Evidence coverage & freshness"]
     assert "EarlierDisplay" in fields["Known retained names (not identity links)"]
     assert "Abusive spam" in fields["Most recent retained activity (sample)"]
+
+
+def test_ticket_repository_strict_mode_exposes_error_without_changing_existing_callers(monkeypatch):
+    from unittest.mock import AsyncMock
+    import pytest
+    from stoney_verify.tickets_new import repository
+    broken = AsyncMock(side_effect=RuntimeError("Read unavailable"))
+    monkeypatch.setattr(repository, "_select_tickets_for_owner_async", broken)
+
+    old_behavior = asyncio.run(repository.list_tickets_for_owner(
+        guild_id=GUILD_ID, owner_id=USER_ID,
+    ))
+    assert old_behavior == []
+    with pytest.raises(RuntimeError, match="Read unavailable"):
+        asyncio.run(repository.list_tickets_for_owner(
+            guild_id=GUILD_ID, owner_id=USER_ID, strict=True,
+        ))
+
+
+def test_stored_history_buttons_do_not_open_a_second_disconnected_panel():
+    import ast
+    from pathlib import Path
+    src = (Path(__file__).resolve().parents[1] /
+           "stoney_verify/commands_ext/member_command_center.py").read_text()
+    tree = ast.parse(src)
+    selector = next(x for x in tree.body if isinstance(x, ast.ClassDef)
+                    and x.name == "IntelligenceMemberSelect")
+    callback = next(x for x in selector.body
+                    if isinstance(x, ast.AsyncFunctionDef) and x.name == "callback")
+    code = ast.unparse(callback)
+    assert code.count("_show_stored_member_history(") == 1
+    assert "view=view" in code
+    assert "live_member=member" in code
+    assert "await _replace_panel(" not in code
+    history = next(x for x in tree.body if isinstance(x, ast.AsyncFunctionDef)
+                   and x.name == "_show_stored_member_history")
+    history_src = ast.unparse(history)
+    assert "await _replace_panel(" in history_src
+    assert "if view is not None" in history_src
+    assert "Live Discord facts (checked now)" in history_src
