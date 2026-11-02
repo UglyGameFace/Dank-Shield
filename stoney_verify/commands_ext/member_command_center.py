@@ -1181,7 +1181,7 @@ async def _show_external_sources(interaction: discord.Interaction, target_id: in
     embed = discord.Embed(
         title="🔎 External Safety Sources",
         description=(
-            f"Discord ID: \`{target_id}\`\\n"
+            f"Discord ID: `{target_id}`\n"
             "On-demand independent provider claims, **not Dank Shield verified incidents**. "
             "A missing report is not proof of safety. No automatic moderation, "
             "third-party bot installation or other-server membership profiling."
