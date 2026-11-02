@@ -178,6 +178,7 @@ const branches = [
   {name:'feat/truncated',protected:false,commit:{sha:'truncatedsha'}},
   {name:'feat/deleted',protected:false,commit:{sha:'deletedsha'}},
   {name:'feat/multi',protected:false,commit:{sha:'multisha'}},
+  {name:'feat/no-pr-ancestor',protected:false,commit:{sha:'nopsha'}},
   {name:'feat/open',protected:false,commit:{sha:'opensha'}},
   {name:'backup/retained',protected:false,commit:{sha:'backupsha'}}
 ];
@@ -246,6 +247,8 @@ console.log(JSON.stringify({eligible,paginated,compared}));
         {"name": "feat/recent-merged", "sha": "recentsha", "pr": None, "proof": "ancestor-of-main"},
         {"name": "feat/unique", "sha": "uniquesha", "pr": 2},
         {"name": "feat/deleted", "sha": "deletedsha", "pr": 11},
+        {"name": "feat/multi", "sha": "multisha", "pr": None, "proof": "ancestor-of-main"},
+        {"name": "feat/no-pr-ancestor", "sha": "nopsha", "pr": None, "proof": "ancestor-of-main"},
     ]
     assert actual["compared"] >= 12
 
