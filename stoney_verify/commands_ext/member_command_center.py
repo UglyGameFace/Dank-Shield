@@ -717,6 +717,11 @@ class IntelligenceTargetView(OwnedView):
         _ = button
         await _show_native_safety_reports(interaction, self.member_id)
 
+    @discord.ui.button(label="External Sources", emoji="🔎", style=discord.ButtonStyle.secondary, row=2)
+    async def external_sources(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _show_external_sources(interaction, self.member_id)
+
     @discord.ui.button(label="Back to Intelligence", emoji="◀️", style=discord.ButtonStyle.secondary, row=1)
     async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
@@ -1061,6 +1066,11 @@ class ConnectionReportView(OwnedView):
         _ = button
         await _show_native_safety_reports(interaction, self.target_id)
 
+    @discord.ui.button(label="External Sources", emoji="🔎", style=discord.ButtonStyle.secondary, row=2)
+    async def external_sources(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _show_external_sources(interaction, self.target_id)
+
     @discord.ui.button(label="Intelligence Menu", emoji="↩️", style=discord.ButtonStyle.secondary, row=2)
     async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
@@ -1107,6 +1117,92 @@ async def _show_native_safety_reports(
         return
     view = NetworkReportPages(target_id, reports)
     await _replace_panel(interaction, embed=view.embed(), view=view)
+
+
+class ExternalLinkCheckModal(discord.ui.Modal, title="Check historical scam-domain list"):
+    url = discord.ui.TextInput(
+        label="Link or hostname to check",
+        placeholder="example.com",
+        min_length=4, max_length=300, required=True,
+    )
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        if not _is_guild_owner_for_affiliations(interaction):
+            return await reply_ephemeral(interaction, "Only the server owner can use external safety checks.")
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        from stoney_verify.member_external_safety_sources import check_historical_scam_domain
+        try:
+            finding = await asyncio.wait_for(
+                check_historical_scam_domain(str(self.url.value)), timeout=10,
+            )
+            message = f"**{finding.source}** • {finding.status.replace('_', ' ').title()}\\n{finding.detail}\\n{finding.url}"
+        except ValueError:
+            message = "Enter a valid HTTP(S) link or hostname."
+        except (asyncio.TimeoutError, Exception):
+            message = "Historical domain feed is unavailable; no safety conclusion."
+        await interaction.followup.send(message, ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
+
+
+class ExternalSourcesView(OwnedView):
+    def __init__(self, owner_id: int):
+        super().__init__(owner_id)
+
+    @discord.ui.button(label="Check Scam Domain", emoji="🔗", style=discord.ButtonStyle.secondary)
+    async def check_link(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        if not _is_guild_owner_for_affiliations(interaction):
+            return await reply_ephemeral(interaction, "Only the server owner can use external safety checks.")
+        await interaction.response.send_modal(ExternalLinkCheckModal())
+
+    @discord.ui.button(label="Back to Intelligence", emoji="↩️", style=discord.ButtonStyle.secondary)
+    async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        if not await require_review(interaction):
+            return
+        await _replace_panel(interaction, embed=_intelligence_embed(), view=IntelligenceMenuView(self.owner_id))
+
+
+async def _show_external_sources(interaction: discord.Interaction, target_id: int) -> None:
+    """Never silently convert third-party accusations into enforcement evidence."""
+    if not _is_guild_owner_for_affiliations(interaction):
+        return await reply_ephemeral(interaction, "Only the server owner can inspect external safety checks.")
+    await interaction.response.defer(ephemeral=True)
+    from stoney_verify.member_external_safety_sources import inspect_external_sources
+    # Fetch only this exact member. A failed fetch must not cause us to guess a
+    # username from outdated guild history or connect unrelated account reviews.
+    member, status = await _resolve_intelligence_member(interaction.guild, target_id)
+    username = str(member.name) if status == "verified" and member is not None else None
+    try:
+        findings = await asyncio.wait_for(
+            inspect_external_sources(target_id, username=username), timeout=9,
+        )
+    except Exception:
+        return await reply_ephemeral(interaction, "External services unavailable. No negative finding is implied.")
+    embed = discord.Embed(
+        title="🔎 External Safety Sources",
+        description=(
+            f"Discord ID: \`{target_id}\`\\n"
+            "On-demand independent provider claims, **not Dank Shield verified incidents**. "
+            "A missing report is not proof of safety. No automatic moderation, "
+            "third-party bot installation or other-server membership profiling."
+        ).replace("\\\\n", "\\n"),
+        color=discord.Color.blurple(),
+    )
+    for finding in findings:
+        title = {
+            "reported": "⚠️ Provider report (unverified)",
+            "none_reported": "No provider report (not a clearance)",
+            "unavailable": "Unavailable / not configured",
+            "manual_review": "Manual search only",
+        }.get(finding.status, "Unknown")
+        detail = discord.utils.escape_mentions(discord.utils.escape_markdown(finding.detail[:240]))
+        embed.add_field(
+            name=f"{finding.source}: {title}",
+            value=(detail + (f"\\nSource: {finding.url}" if finding.url else ""))[:1024],
+            inline=False,
+        )
+    embed.set_footer(text="Private owner review • provider quotas apply • never punish on these entries alone")
+    await _replace_panel(interaction, embed=embed, view=ExternalSourcesView(int(interaction.user.id)))
 
 
 class OwnerAffiliationModal(discord.ui.Modal, title="Owner Affiliate Review"):
