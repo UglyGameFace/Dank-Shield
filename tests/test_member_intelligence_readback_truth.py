@@ -200,3 +200,187 @@ def test_stored_history_buttons_do_not_open_a_second_disconnected_panel():
     assert "await _replace_panel(" in history_src
     assert "if view is not None" in history_src
     assert "Live Discord facts (checked now)" in history_src
+
+
+def test_activity_feed_lookup_uses_exact_discord_target_and_guild(monkeypatch):
+    from types import SimpleNamespace
+    calls = []
+
+    class Query:
+        def table(self, name):
+            calls.append(("table", name))
+            return self
+        def select(self, fields):
+            calls.append(("select", fields))
+            return self
+        def eq(self, key, value):
+            calls.append(("eq", key, value))
+            return self
+        def order(self, key, desc):
+            calls.append(("order", key, desc))
+            return self
+        def limit(self, limit):
+            calls.append(("limit", limit))
+            return self
+        def execute(self):
+            return SimpleNamespace(data=[{
+                "id": "e123", "event_family": "moderation",
+                "event_type": "ban", "title": "Confirmed staff action",
+                "reason": "Verified event", "created_at": NEW,
+                "source": "staff_action_logs",
+            }])
+
+    monkeypatch.setattr(svc, "_sb", lambda: Query())
+    async def sync_call(_name, fn):
+        return fn()
+    monkeypatch.setattr(svc, "_run_db_op", sync_call)
+    rows = asyncio.run(svc.list_member_activity_feed_rows(
+        guild_id=GUILD_ID, user_id=USER_ID, strict=True,
+    ))
+    assert rows[0]["event_family"] == "moderation"
+    assert rows[0]["event_type"] == "ban"
+    assert ("table", "activity_feed_events") in calls
+    assert ("eq", "guild_id", str(GUILD_ID)) in calls
+    assert ("eq", "target_user_id", str(USER_ID)) in calls
+    assert not any(x[1] in {"actor_user_id", "actor_id", "target_id"}
+                   for x in calls if x[0] == "eq")
+    assert ("limit", 30) in calls
+
+
+def test_activity_ledger_uses_exact_member_scope(monkeypatch):
+    from types import SimpleNamespace
+    calls = []
+
+    class Query:
+        def table(self, name):
+            calls.append(("table", name))
+            return self
+        def select(self, fields):
+            calls.append(("select", fields))
+            return self
+        def eq(self, key, value):
+            calls.append(("eq", key, value))
+            return self
+        def limit(self, number):
+            calls.append(("limit", number))
+            return self
+        def execute(self):
+            return SimpleNamespace(data=[{
+                "last_activity_at": NEW, "last_activity_type": "message",
+                "first_observed_at": OLD, "updated_at": NEW,
+            }])
+
+    monkeypatch.setattr(svc, "_sb", lambda: Query())
+    async def sync_call(_name, fn):
+        return fn()
+    monkeypatch.setattr(svc, "_run_db_op", sync_call)
+    row = asyncio.run(svc.get_member_activity_ledger_row(
+        guild_id=GUILD_ID, user_id=USER_ID, strict=True,
+    ))
+    assert row["last_activity_type"] == "message"
+    assert ("table", "member_activity_ledger") in calls
+    assert ("eq", "guild_id", str(GUILD_ID)) in calls
+    assert ("eq", "user_id", str(USER_ID)) in calls
+    assert ("limit", 1) in calls
+
+
+def test_extended_intelligence_opt_in_and_independent_counts(monkeypatch):
+    feed_calls = []
+    async def profile(**kwargs):
+        return {"joined_at": NEW, "times_joined": 1}
+    async def no_rows(**kwargs):
+        return []
+    async def no_open(**kwargs):
+        return None
+    async def feed(**kwargs):
+        feed_calls.append(kwargs)
+        return [
+            {"event_family": "moderation", "event_type": "ban",
+             "title": "Ban for spam", "created_at": NEW},
+            {"event_family": "member", "event_type": "member_joined",
+             "created_at": NEW},
+        ]
+    async def ledger(**kwargs):
+        return {"last_activity_at": NEW, "last_activity_type": "message"}
+    monkeypatch.setattr(svc, "get_guild_member_row", profile)
+    monkeypatch.setattr(svc, "list_member_join_rows", no_rows)
+    monkeypatch.setattr(svc, "list_member_event_rows", no_rows)
+    monkeypatch.setattr(svc, "list_member_ticket_rows", no_rows)
+    monkeypatch.setattr(svc, "find_open_ticket_for_owner", no_open)
+    monkeypatch.setattr(svc, "list_member_activity_feed_rows", feed)
+    monkeypatch.setattr(svc, "get_member_activity_ledger_row", ledger)
+    normal = asyncio.run(svc.get_member_context_snapshot(
+        guild_id=GUILD_ID, user_id=USER_ID,
+    ))
+    assert not feed_calls
+    assert normal["activity_feed_summary"]["total"] == 0
+    review = asyncio.run(svc.get_member_context_snapshot(
+        guild_id=GUILD_ID, user_id=USER_ID, include_extended_intelligence=True,
+    ))
+    assert feed_calls[0]["strict"] is True
+    assert feed_calls[0]["guild_id"] == str(GUILD_ID)
+    assert feed_calls[0]["user_id"] == str(USER_ID)
+    assert review["activity_feed_summary"] == {"total": 2, "moderation_count": 1}
+    assert review["event_summary"]["total"] == 0
+    assert review["activity_ledger"]["last_activity_type"] == "message"
+    assert review["sample_limits"]["activity_feed"] == 30
+
+
+def test_extended_feed_outage_shows_unavailable_not_zero_as_safe(monkeypatch):
+    async def profile(**kwargs):
+        return {"joined_at": NEW}
+    async def empty(**kwargs):
+        return []
+    async def broken(**kwargs):
+        raise RuntimeError("Activity feed unavailable")
+    async def no_open(**kwargs):
+        return None
+    monkeypatch.setattr(svc, "get_guild_member_row", profile)
+    monkeypatch.setattr(svc, "list_member_join_rows", empty)
+    monkeypatch.setattr(svc, "list_member_event_rows", empty)
+    monkeypatch.setattr(svc, "list_member_ticket_rows", empty)
+    monkeypatch.setattr(svc, "list_member_activity_feed_rows", broken)
+    monkeypatch.setattr(svc, "get_member_activity_ledger_row", broken)
+    monkeypatch.setattr(svc, "find_open_ticket_for_owner", no_open)
+    review = asyncio.run(svc.get_member_context_snapshot(
+        guild_id=GUILD_ID, user_id=USER_ID, include_extended_intelligence=True,
+    ))
+    assert review["ok"] is True
+    assert review["source_status"]["activity_feed"] == "unavailable"
+    assert review["source_status"]["activity_ledger"] == "unavailable"
+    embed = center._historical_member_embed(USER_ID, review, [], presence="unavailable")
+    fields = {field.name: field.value for field in embed.fields}
+    assert "activity_feed" in fields["Evidence coverage & freshness"]
+    assert "activity_ledger" in fields["Evidence coverage & freshness"]
+
+
+def test_compact_history_renders_separately_labeled_feed_and_member_events():
+    snapshot = {
+        "member": {"username": "Target"},
+        "join_summary": {"times_joined": 1, "times_left": 0},
+        "relationships": {"entry_method": "invite_unresolved"},
+        "event_summary": {"total": 1, "moderation_count": 0,
+                          "latest_event_type": "member_joined"},
+        "activity_feed_summary": {"total": 2, "moderation_count": 1},
+        "recent_feed_events": [
+            {"event_family": "moderation", "event_type": "ban",
+             "created_at": NEW, "title": "Documented moderation"},
+        ],
+        "activity_ledger": {"last_activity_at": NEW, "last_activity_type": "message"},
+        "sample_limits": {"events": 30, "activity_feed": 30,
+                          "joins": 15, "tickets": 15},
+        "source_status": {"profile": "available", "events": "sampled",
+                          "activity_feed": "sampled",
+                          "activity_ledger": "sampled"},
+        "ticket_summary": {"total": 0},
+    }
+    embed = center._historical_member_embed(USER_ID, snapshot, [], presence="unavailable")
+    fields = {f.name: f.value for f in embed.fields}
+    assert len(embed.fields) <= 6
+    assert "Tracked activity" in fields["Membership History"]
+    assert "message" in fields["Membership History"]
+    activity = fields["Activity & Moderation Evidence"]
+    assert "Member events" in activity
+    assert "Activity feed" in activity
+    assert "Documented moderation" in activity
+    assert "2" in activity and "1" in activity
