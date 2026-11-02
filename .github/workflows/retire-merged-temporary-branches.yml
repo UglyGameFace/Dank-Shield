@@ -622,9 +622,9 @@ jobs:
                     const graph = (await github.rest.repos.compareCommits({
                       owner, repo, base: 'main', head: name
                     })).data;
-                    // Never delete a branch containing even one unique commit.
-                    if (graph.ahead_by !== 0 ||
-                        !['behind', 'identical'].includes(graph.status)) continue;
+                    // An ahead-by count can represent a squash/rebase merge.
+                    // Do not retire it unless the immutable merged tree proves
+                    // that every changed path was integrated exactly.
                     const prs = await github.paginate(github.rest.pulls.list, {
                       owner, repo, head: owner + ':' + name, state: 'all', per_page: 100
                     });
@@ -635,7 +635,18 @@ jobs:
                         pr.base?.ref !== 'main' ||
                         pr.base?.repo?.full_name !== fullName ||
                         pr.head?.repo?.full_name !== fullName ||
-                        pr.head?.sha !== sha) continue;
+                        pr.head?.sha !== sha || !pr.merge_commit_sha) continue;
+                    if (graph.ahead_by !== 0 ||
+                        !['behind', 'identical'].includes(graph.status)) {
+                      if (!await equivalentAtMerge(item, pr, graph)) continue;
+                    }
+                    // A merged PR label is insufficient: prove the actual
+                    // merge commit is still an ancestor of the pinned main.
+                    const mergeGraph = (await github.rest.repos.compareCommits({
+                      owner, repo, base: pr.merge_commit_sha, head: startMain
+                    })).data;
+                    if (mergeGraph.behind_by !== 0 ||
+                        !['ahead', 'identical'].includes(mergeGraph.status)) continue;
                     const currentMain = (await github.rest.repos.getBranch({
                       owner, repo, branch: 'main'
                     })).data.commit.sha;
@@ -674,7 +685,7 @@ jobs:
                     if (!canRetire) {
                       archivedOnly++;
                       rows.push([name, archiveCreated ? 'archived' : 'archive-verified',
-                        'Merged PR #' + pr.number + '; zero unique commits; awaiting verified deployment ref']);
+                        'Merged PR #' + pr.number + '; verified integrated tree; awaiting verified deployment ref']);
                       continue;
                     }
                     const latestOpen = await github.paginate(github.rest.pulls.list, {
@@ -696,7 +707,7 @@ jobs:
                     await github.rest.git.deleteRef({owner, repo, ref: 'heads/' + name});
                     integratedRemoved++;
                     rows.push([name, 'deleted', 'Merged PR #' + pr.number +
-                      '; no unique commits; archived exact SHA']);
+                      '; verified integrated tree; archived exact SHA']);
                   } catch (error) {
                     rows.push([name, 'held', String(error.message || error)]);
                   }
