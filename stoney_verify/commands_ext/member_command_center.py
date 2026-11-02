@@ -823,7 +823,7 @@ def _historical_member_embed(
         )
         join_text += f"\\nRetained names: {past_names}"
     embed.add_field(name="Live membership", value=_intelligence_presence_text(presence), inline=False)
-    embed.add_field(name="Membership History", value=join_text.replace("\\\\n", "\\n")[:1024], inline=False)
+    embed.add_field(name="Membership History", value=join_text.replace("\\n", "\n")[:1024], inline=False)
     recent = snapshot.get("recent_joins") or []
     latest = recent[0] if recent and isinstance(recent[0], dict) else {}
     relations = snapshot.get("relationships") or {}
@@ -937,7 +937,7 @@ def _historical_member_embed(
     synced = str(member.get("synced_at") or member.get("updated_at") or "unknown")
     embed.add_field(
         name="Evidence coverage & freshness",
-        value=(f"{note}\\n{samples}\\nStored profile updated: `{synced[:45]}`").replace("\\\\n", "\\n")[:1024],
+        value=(f"{note}\\n{samples}\\nStored profile updated: `{synced[:45]}`").replace("\\n", "\n")[:1024],
         inline=False,
     )
     embed.set_footer(text="Server-local recorded evidence only • live membership checked separately")
@@ -987,7 +987,7 @@ async def _show_stored_member_history(
                 f"Account: `{user_id}`\\n"
                 "Stored evidence timed out. This is NOT a clean history. "
                 "Your account review actions remain available."
-            ).replace("\\\\n", "\\n"),
+            ).replace("\\n", "\n"),
             color=discord.Color.orange(),
         )
         timeout_embed.add_field(name="Live membership", value=_intelligence_presence_text(presence), inline=False)
@@ -1006,7 +1006,7 @@ async def _show_stored_member_history(
                 f"Account: `{user_id}`\\n"
                 "Historical database read failed. This is not a clean-history "
                 "result; the investigation buttons remain available."
-            ).replace("\\\\n", "\\n"),
+            ).replace("\\n", "\n"),
             color=discord.Color.orange(),
         )
         embed.add_field(name="Live membership", value=_intelligence_presence_text(presence), inline=False)
@@ -1031,7 +1031,7 @@ async def _show_stored_member_history(
                 f"Current server join: `{joined}`\\n"
                 f"Current roles ({len(role_names)}): "
                 + (", ".join(role_names[:5]) or "none")
-            ).replace("\\\\n", "\\n")[:1024],
+            ).replace("\\n", "\n")[:1024],
             inline=False,
         )
     if view is not None:
@@ -1340,7 +1340,7 @@ async def _show_external_sources(interaction: discord.Interaction, target_id: in
             "On-demand independent provider claims, **not Dank Shield verified incidents**. "
             "A missing report is not proof of safety. No automatic moderation, "
             "third-party bot installation or other-server membership profiling."
-        ).replace("\\\\n", "\\n"),
+        ).replace("\\n", "\n"),
         color=discord.Color.blurple(),
     )
     for finding in findings:
