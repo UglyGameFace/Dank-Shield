@@ -560,6 +560,7 @@ async def list_member_ticket_rows(
             guild_id=gid,
             owner_id=uid,
             limit=limit,
+            strict=strict,
         )
         out: List[Dict[str, Any]] = []
         for row in rows:
