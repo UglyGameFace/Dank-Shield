@@ -603,6 +603,7 @@ class IntelligenceMemberSelect(discord.ui.UserSelect):
         )
         await _show_stored_member_history(
             interaction, user_id, presence=status, view=view,
+            live_member=member,
         )
 
 
@@ -681,7 +682,12 @@ class IntelligenceTargetView(OwnedView):
     @discord.ui.button(label="Stored History", emoji="🧾", style=discord.ButtonStyle.secondary, row=0)
     async def history(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
-        await _show_stored_member_history(interaction, self.member_id)
+        # Keep the buttons on the same ephemeral review instead of opening
+        # a second history-only message.
+        member, status = await _resolve_intelligence_member(interaction.guild, self.member_id)
+        await _show_stored_member_history(
+            interaction, self.member_id, presence=status, view=self, live_member=member,
+        )
 
     @discord.ui.button(label="Moderation Panel", emoji="🛡️", style=discord.ButtonStyle.secondary, row=0)
     async def moderation(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -938,6 +944,7 @@ def _historical_member_embed(
 async def _show_stored_member_history(
     interaction: discord.Interaction, user_id: int, *, presence: Optional[str] = None,
     view: Optional[discord.ui.View] = None,
+    live_member: Optional[discord.Member] = None,
 ) -> None:
     """Read historical guild records without fetch_user() or a live member."""
     if not interaction.response.is_done():
@@ -967,10 +974,21 @@ async def _show_stored_member_history(
             timeout=20,
         )
     except asyncio.TimeoutError:
-        return await interaction.followup.send(
-            "⚠️ Historical records timed out. Nothing was modified; try again shortly.",
-            ephemeral=True,
+        if view is None:
+            return await reply_ephemeral(
+                interaction, "⚠️ Historical records timed out; no safety conclusion.",
+            )
+        timeout_embed = discord.Embed(
+            title="🧠 Member Intelligence • History unavailable",
+            description=(
+                f"Account: `{user_id}`\\n"
+                "Stored evidence timed out. This is NOT a clean history. "
+                "Your account review actions remain available."
+            ).replace("\\\\n", "\\n"),
+            color=discord.Color.orange(),
         )
+        timeout_embed.add_field(name="Live membership", value=_intelligence_presence_text(presence), inline=False)
+        return await _replace_panel(interaction, embed=timeout_embed, view=view)
     snapshot = context_result if isinstance(context_result, dict) and context_result.get("ok") else {}
     verdicts = feedback_result if isinstance(feedback_result, list) else []
     if not snapshot and not verdicts:
@@ -991,6 +1009,28 @@ async def _show_stored_member_history(
         embed.add_field(name="Live membership", value=_intelligence_presence_text(presence), inline=False)
     else:
         embed = _historical_member_embed(user_id, snapshot, verdicts, presence=presence)
+    if live_member is not None and presence == "verified":
+        joined = str(getattr(live_member, "joined_at", None) or "unknown")[:32]
+        created = str(getattr(live_member, "created_at", None) or "unknown")[:32]
+        display = discord.utils.escape_mentions(
+            discord.utils.escape_markdown(str(getattr(live_member, "display_name", "unknown"))[:80])
+        )
+        role_names = [
+            discord.utils.escape_mentions(discord.utils.escape_markdown(str(role.name)[:34]))
+            for role in getattr(live_member, "roles", [])[1:]
+        ]
+        embed.insert_field_at(
+            1,
+            name="Live Discord facts (checked now)",
+            value=(
+                f"Display: **{display}**\\n"
+                f"Account created: `{created}`\\n"
+                f"Current server join: `{joined}`\\n"
+                f"Current roles ({len(role_names)}): "
+                + (", ".join(role_names[:5]) or "none")
+            ).replace("\\\\n", "\\n")[:1024],
+            inline=False,
+        )
     if view is not None:
         await _replace_panel(interaction, embed=embed, view=view)
     else:
@@ -1120,7 +1160,7 @@ class ConnectionReportView(OwnedView):
         _ = button
         if not await require_review(interaction):
             return
-        await _show_stored_member_history(interaction, self.target_id)
+        await _show_stored_member_history(interaction, self.target_id, view=self)
 
     async def _navigate(self, interaction: discord.Interaction, page: int) -> None:
         if not await require_review(interaction):
