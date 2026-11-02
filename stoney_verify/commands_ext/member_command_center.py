@@ -815,8 +815,15 @@ def _historical_member_embed(
         f"Last recorded departure: `{str(joins.get('left_at') or 'not recorded')[:50]}`\\n"
         f"Stored last seen: `{str(joins.get('last_seen_at') or 'unknown')[:50]}`"
     ).replace("\\n", "\n")
+    all_names = names.get("all_names") or []
+    if all_names:
+        past_names = ", ".join(
+            discord.utils.escape_mentions(discord.utils.escape_markdown(str(n)[:32]))
+            for n in all_names[:5]
+        )
+        join_text += f"\\nRetained names: {past_names}"
     embed.add_field(name="Live membership", value=_intelligence_presence_text(presence), inline=False)
-    embed.add_field(name="Membership History", value=join_text[:1024], inline=False)
+    embed.add_field(name="Membership History", value=join_text.replace("\\\\n", "\\n")[:1024], inline=False)
     recent = snapshot.get("recent_joins") or []
     latest = recent[0] if recent and isinstance(recent[0], dict) else {}
     relations = snapshot.get("relationships") or {}
@@ -868,6 +875,13 @@ def _historical_member_embed(
     type_text = ", ".join(
         f"{str(k)[:36]}: {v}" for k, v in list(types.items())[:8]
     ) or "No retained event types"
+    event_detail_lines = []
+    for event in (snapshot.get("recent_events") or [])[:3]:
+        when = str(event.get("created_at") or "unknown")[:16]
+        kind = _plain(str(event.get("event_type") or "unknown"), 32)
+        title = _plain(str(event.get("title") or event.get("reason") or ""), 65)
+        event_detail_lines.append(f"• `{when}` {kind}" + (f": {title}" if title else ""))
+    event_details = "\\n".join(event_detail_lines)
     embed.add_field(
         name="Activity & Moderation Evidence",
         value=(
@@ -875,84 +889,57 @@ def _historical_member_embed(
             f"Moderation: **{events.get('moderation_count', 0)}**\\n"
             f"Last event: `{str(events.get('latest_event_type') or 'unknown')[:65]}`\\n"
             f"Types: {type_text}"
+            + (f"\\nRecent examples:\\n{event_details}" if event_details else "")
         ).replace("\\n", "\n")[:1024],
         inline=False,
+    )
+    ticket_samples = []
+    for ticket in (snapshot.get("recent_tickets") or [])[:3]:
+        category = _plain(str(ticket.get("category") or "uncategorized"), 28)
+        ticket_state = _plain(str(ticket.get("status") or "unknown"), 20)
+        title = _plain(str(ticket.get("title") or ""), 62)
+        ticket_samples.append(f"• {category} [{ticket_state}]" + (f": {title}" if title else ""))
+    ticket_details = "\\n".join(ticket_samples)
+    verdict_details = "\\n".join(
+        f"• {str((row.get('metadata') or {}).get('verdict_label') or (row.get('metadata') or {}).get('verdict') or 'Decision')[:42]}"
+        for row in verdicts[:5]
     )
     embed.add_field(
         name="Tickets & Staff Decisions",
         value=(
             f"Recent retained tickets (up to {sample_limits.get('tickets', 15)}): **{tickets.get('total', 0)}** • "
-            f"Staff verdicts: **{len(verdicts)}** (last 10 queried)\\n"
-            + "\\n".join(
-                f"• {str((row.get('metadata') or {}).get('verdict_label') or (row.get('metadata') or {}).get('verdict') or 'Decision')[:42]}"
-                for row in verdicts[:5]
-            )
+            f"Staff verdicts (last 10 queried): **{len(verdicts)}**"
+            + (f"\\nVerdicts:\\n{verdict_details}" if verdict_details else "")
+            + (f"\\nRecent tickets:\\n{ticket_details}" if ticket_details else "")
         ).replace("\\n", "\n")[:1024],
         inline=False,
     )
-    recent_tickets = snapshot.get("recent_tickets") or []
-    if recent_tickets:
-        lines = []
-        for ticket in recent_tickets[:3]:
-            category = _plain(str(ticket.get("category") or "uncategorized"), 32)
-            ticket_state = _plain(str(ticket.get("status") or "unknown"), 24)
-            title = _plain(str(ticket.get("title") or ""), 70)
-            lines.append(f"• **{category}** [{ticket_state}]" + (f" {title}" if title else ""))
-        embed.add_field(
-            name="Recent ticket records (sample)",
-            value="\\n".join(lines).replace("\\\\n", "\\n")[:1024],
-            inline=False,
+    unavailable = [label for label, state in status.items() if state == "unavailable"]
+    if unavailable:
+        note = (
+            "⚠️ Could not read: **" + ", ".join(unavailable) + "**. "
+            "Unknown data is not a clean result."
         )
-    if not (snapshot.get("recent_joins") or snapshot.get("recent_events") or snapshot.get("recent_tickets") or verdicts
-            or member.get("username") or member.get("joined_at")):
-        embed.add_field(
-            name="Evidence Availability",
-            value="No records returned from the available sources. This does not prove a clean or complete history, and Discord cannot restore deleted records.",
-            inline=False,
-        )
-    if status:
-        unavailable = [label for label, state in status.items() if state == "unavailable"]
-        if unavailable:
-            note = (
-                "⚠️ Could not read: **" + ", ".join(unavailable) + "**. "
-                "Missing data is NOT a clean-history result."
-            )
-        else:
-            note = "Readbacks completed. Counts are retained minimums, not lifetime totals."
-        samples = (
-            f"Recent windows: up to {sample_limits.get('joins', 8)} joins, "
-            f"{sample_limits.get('events', 12)} events and "
-            f"{sample_limits.get('tickets', 10)} tickets."
-        )
-        synced = str(member.get("synced_at") or member.get("updated_at") or "unknown")
-        embed.add_field(
-            name="Evidence coverage & freshness",
-            value=(f"{note}\\n{samples}\\nStored profile updated: `{synced[:45]}`").replace("\\\\n", "\\n")[:1024],
-            inline=False,
-        )
-    all_names = names.get("all_names") or []
-    if all_names:
-        render_names = ", ".join(
-            discord.utils.escape_mentions(discord.utils.escape_markdown(str(n)[:32]))
-            for n in all_names[:6]
-        )
-        embed.add_field(
-            name="Known retained names (not identity links)",
-            value=render_names[:1024], inline=False,
-        )
-    recent_events = snapshot.get("recent_events") or []
-    if recent_events:
-        activity_lines = []
-        for event in recent_events[:4]:
-            kind = _plain(str(event.get("event_type") or "unknown"), 32)
-            title = _plain(str(event.get("title") or event.get("reason") or ""), 78)
-            when = str(event.get("created_at") or "unknown")[:16]
-            activity_lines.append(f"• `{when}` **{kind}**" + (f": {title}" if title else ""))
-        embed.add_field(
-            name="Most recent retained activity (sample)",
-            value="\\n".join(activity_lines).replace("\\\\n", "\\n")[:1024],
-            inline=False,
-        )
+    else:
+        note = "Available readbacks are retained minimums, not lifetime totals."
+    no_records = not (
+        snapshot.get("recent_joins") or snapshot.get("recent_events")
+        or snapshot.get("recent_tickets") or verdicts
+        or member.get("username") or member.get("joined_at")
+    )
+    if no_records:
+        note += " No records returned; Discord cannot restore uncollected or deleted history."
+    samples = (
+        f"Readback limits: {sample_limits.get('joins', 15)} joins, "
+        f"{sample_limits.get('events', 30)} events, "
+        f"{sample_limits.get('tickets', 15)} tickets."
+    )
+    synced = str(member.get("synced_at") or member.get("updated_at") or "unknown")
+    embed.add_field(
+        name="Evidence coverage & freshness",
+        value=(f"{note}\\n{samples}\\nStored profile updated: `{synced[:45]}`").replace("\\\\n", "\\n")[:1024],
+        inline=False,
+    )
     embed.set_footer(text="Server-local recorded evidence only • live membership checked separately")
     return embed
 
