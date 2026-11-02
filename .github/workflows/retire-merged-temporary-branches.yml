@@ -145,7 +145,7 @@ jobs:
                 core.warning('Discloud deployment branch cannot be resolved; deletion disabled');
               }
             }
-            if (!['preview', 'delete', 'preview-reviewed-merged', 'delete-reviewed-merged'].includes(mode)) {
+            if (!['preview', 'delete', 'preview-reviewed-merged', 'delete-reviewed-merged', 'preview-rejected', 'delete-rejected'].includes(mode)) {
               throw new Error('Unsupported branch hygiene mode');
             }
             if (isManual && mode === 'delete' && context.actor !== 'UglyGameFace') {
@@ -224,6 +224,103 @@ jobs:
                   (segment === 'release' && feature);
                 return held.has(segment) && !functional;
               });
+            // Explicit owner rejection: these exact historical feature heads have
+            // no requested runtime integration. Preserve their entire commits in
+            // immutable-SHA archive refs before deleting their branch pointers.
+            // No wildcard names, no automatic/scheduled invocation.
+            if (mode === 'preview-rejected' || mode === 'delete-rejected') {
+              if (!isManual || !ownerCommentRelay || context.actor !== 'UglyGameFace' ||
+                  !deploymentBranchConfigured) {
+                throw new Error('Rejected-work retirement requires owner relay and verified deployment branch');
+              }
+              const deleting = mode === 'delete-rejected';
+              const rejectedHeads = [
+                {name:'feat/cinema-rolling-supervised-worker-20261014',
+                 sha:'8bccd1ee9a5203cebc7862eec8addd48ba9706a6'},
+                {name:'fix/517-permanent-optout-20261013',
+                 sha:'96117053c1b4c24a9d3e7cf6e914e334c9398a85'}
+              ];
+              const mainSha = (await github.rest.repos.getBranch({owner,repo,branch:'main'})).data.commit.sha;
+              const openPRs = await github.paginate(github.rest.pulls.list,
+                {owner,repo,state:'open',per_page:100});
+              const batch = [];
+              for (const target of rejectedHeads) {
+                let current;
+                try {
+                  current = (await github.rest.repos.getBranch({
+                    owner,repo,branch:target.name
+                  })).data;
+                } catch (error) {
+                  if (error.status === 404) continue;
+                  throw error;
+                }
+                if (current.protected || current.commit.sha !== target.sha ||
+                    protectedHeads.has(target.name) ||
+                    openPRs.some(pr => pr.head.ref === target.name ||
+                      pr.base.ref === target.name)) continue;
+                batch.push(target);
+              }
+              const fingerprint = require('crypto').createHash('sha256')
+                .update(JSON.stringify({mainSha,batch,effectiveDeployBranch,mode:'rejected'}))
+                .digest('hex').slice(0,16).toUpperCase();
+              const token = 'DELETE_REJECTED_' + fingerprint;
+              core.info('Owner-rejected retirement preview: ' +
+                JSON.stringify({mainSha,batch,effectiveDeployBranch}));
+              core.info('Owner-rejected retirement confirmation token: ' + token);
+              if (deleting && process.env.CLEANUP_CONFIRMATION !== token) {
+                throw new Error('Rejected-work delete requires exact preview token');
+              }
+              const retired = [], held = [];
+              for (const item of batch) {
+                if (!deleting) continue;
+                const currentMain = (await github.rest.repos.getBranch({
+                  owner,repo,branch:'main'
+                })).data.commit.sha;
+                const current = (await github.rest.repos.getBranch({
+                  owner,repo,branch:item.name
+                })).data;
+                const nowOpen = await github.paginate(github.rest.pulls.list,
+                  {owner,repo,state:'open',per_page:100});
+                if (currentMain !== mainSha || current.protected ||
+                    current.commit.sha !== item.sha ||
+                    nowOpen.some(pr => pr.head.ref === item.name ||
+                      pr.base.ref === item.name)) {
+                  held.push(item.name + ': changed ref, main, or open PR');
+                  continue;
+                }
+                const tag = 'tags/branch-retirement-rejected-20261102/' + item.name;
+                let archive;
+                try {
+                  archive = (await github.rest.git.getRef({owner,repo,ref:tag})).data;
+                } catch (error) {
+                  if (error.status !== 404) throw error;
+                  await github.rest.git.createRef({
+                    owner,repo,ref:'refs/' + tag,sha:item.sha
+                  });
+                  archive = (await github.rest.git.getRef({owner,repo,ref:tag})).data;
+                }
+                if (archive.object.type !== 'commit' || archive.object.sha !== item.sha) {
+                  held.push(item.name + ': archive mismatch');
+                  continue;
+                }
+                const lease = (await github.rest.git.getRef({
+                  owner,repo,ref:'heads/' + item.name
+                })).data;
+                if (lease.object.sha !== item.sha) {
+                  held.push(item.name + ': changed SHA lease');
+                  continue;
+                }
+                await github.rest.git.deleteRef({owner,repo,ref:'heads/' + item.name});
+                retired.push(item.name);
+              }
+              core.info('Owner-rejected retirement result: ' +
+                JSON.stringify({retired,held}));
+              await core.summary.addHeading('Owner-rejected archived branch retirement')
+                .addRaw('Retired: ' + retired.length + '; held: ' + held.length +
+                  '; preview candidates: ' + batch.length).write();
+              if (held.length) core.setFailed('Some rejected-work refs held');
+              return;
+            }
             const reviewed = mode === 'preview-reviewed-merged' || mode === 'delete-reviewed-merged';
             if (reviewed) {
               if (!isManual || context.actor !== 'UglyGameFace') {
