@@ -8,6 +8,10 @@ from typing import Any, Dict, List, Optional, Sequence
 
 from ..globals import get_supabase, now_utc, reset_supabase
 from .repository import find_open_ticket_for_owner, list_tickets_for_owner
+from .member_intelligence_cache import (
+    STAFF_MEMBER_INTELLIGENCE_CACHE,
+    invalidate_member_intelligence,
+)
 
 
 # ============================================================
@@ -27,6 +31,8 @@ from .repository import find_open_ticket_for_owner, list_tickets_for_owner
 GUILD_MEMBERS_TABLE = "guild_members"
 MEMBER_JOINS_TABLE = "member_joins"
 MEMBER_EVENTS_TABLE = "member_events"
+ACTIVITY_FEED_TABLE = "activity_feed_events"
+ACTIVITY_LEDGER_TABLE = "member_activity_ledger"
 
 
 # ============================================================
@@ -270,7 +276,7 @@ def _normalize_guild_member_row(row: Dict[str, Any]) -> Dict[str, Any]:
         "highest_role_id": _clean_text(row.get("highest_role_id")),
         "highest_role_name": _clean_text(row.get("highest_role_name")),
         "top_role": _clean_text(row.get("top_role")),
-        "in_guild": _boolish(row.get("in_guild"), True),
+        "in_guild": _boolish(row.get("in_guild")) if row.get("in_guild") is not None else None,
         "has_any_role": _boolish(row.get("has_any_role"), False),
         "has_unverified": _boolish(row.get("has_unverified"), False),
         "has_verified_role": _boolish(row.get("has_verified_role"), False),
@@ -406,6 +412,7 @@ async def get_guild_member_row(
     *,
     guild_id: int | str,
     user_id: int | str,
+    strict: bool = False,
 ) -> Optional[Dict[str, Any]]:
     gid = _as_str_id(guild_id)
     uid = _as_str_id(user_id)
@@ -414,6 +421,8 @@ async def get_guild_member_row(
 
     sb = _sb()
     if sb is None:
+        if strict:
+            raise RuntimeError("Member profile database unavailable")
         return None
 
     try:
@@ -433,6 +442,8 @@ async def get_guild_member_row(
             return _normalize_guild_member_row(rows[0])
     except Exception as e:
         print(f"⚠️ member_context_service.get_guild_member_row failed: {repr(e)}")
+        if strict:
+            raise
 
     return None
 
@@ -442,6 +453,8 @@ async def list_member_join_rows(
     guild_id: int | str,
     user_id: int | str,
     limit: int = 10,
+    descending: bool = True,
+    strict: bool = False,
 ) -> List[Dict[str, Any]]:
     gid = _as_str_id(guild_id)
     uid = _as_str_id(user_id)
@@ -450,6 +463,8 @@ async def list_member_join_rows(
 
     sb = _sb()
     if sb is None:
+        if strict:
+            raise RuntimeError("Member join history database unavailable")
         return []
 
     max_limit = max(1, min(int(limit or 10), 100))
@@ -461,7 +476,7 @@ async def list_member_join_rows(
                 .select("*")
                 .eq("guild_id", gid)
                 .eq("user_id", uid)
-                .order("joined_at", desc=True)
+                .order("joined_at", desc=descending)
                 .limit(max_limit)
                 .execute()
             )
@@ -475,6 +490,8 @@ async def list_member_join_rows(
         return out
     except Exception as e:
         print(f"⚠️ member_context_service.list_member_join_rows failed: {repr(e)}")
+        if strict:
+            raise
         return []
 
 
@@ -484,6 +501,7 @@ async def list_member_event_rows(
     user_id: int | str,
     limit: int = 20,
     event_types: Optional[Sequence[str]] = None,
+    strict: bool = False,
 ) -> List[Dict[str, Any]]:
     gid = _as_str_id(guild_id)
     uid = _as_str_id(user_id)
@@ -492,6 +510,8 @@ async def list_member_event_rows(
 
     sb = _sb()
     if sb is None:
+        if strict:
+            raise RuntimeError("Member event history database unavailable")
         return []
 
     max_limit = max(1, min(int(limit or 20), 200))
@@ -522,6 +542,8 @@ async def list_member_event_rows(
         return out
     except Exception as e:
         print(f"⚠️ member_context_service.list_member_event_rows failed: {repr(e)}")
+        if strict:
+            raise
         return []
 
 
@@ -530,17 +552,21 @@ async def list_member_ticket_rows(
     guild_id: int | str,
     user_id: int | str,
     limit: int = 25,
+    strict: bool = False,
 ) -> List[Dict[str, Any]]:
     gid = _as_str_id(guild_id)
     uid = _as_str_id(user_id)
     if not gid or not uid:
         return []
+    if strict and _sb() is None:
+        raise RuntimeError("Member ticket history database unavailable")
 
     try:
         rows = await list_tickets_for_owner(
             guild_id=gid,
             owner_id=uid,
             limit=limit,
+            strict=strict,
         )
         out: List[Dict[str, Any]] = []
         for row in rows:
@@ -549,7 +575,91 @@ async def list_member_ticket_rows(
         return out
     except Exception as e:
         print(f"⚠️ member_context_service.list_member_ticket_rows failed: {repr(e)}")
+        if strict:
+            raise
         return []
+
+
+
+
+async def list_member_activity_feed_rows(
+    *, guild_id: int | str, user_id: int | str, limit: int = 30,
+    strict: bool = False,
+) -> List[Dict[str, Any]]:
+    """Read targeted activity-feed evidence without duplicating the member ledger.
+
+    Only the exact Discord target AND source guild are considered. Never query
+    by staff actor or display name: these are not proof of target identity.
+    """
+    gid, uid = _as_str_id(guild_id), _as_str_id(user_id)
+    if not gid or not uid:
+        return []
+    sb = _sb()
+    if sb is None:
+        if strict:
+            raise RuntimeError("Member activity feed database unavailable")
+        return []
+    capped = max(1, min(int(limit or 30), 100))
+    try:
+        def _select():
+            return (sb.table(ACTIVITY_FEED_TABLE)
+                    .select("id,event_family,event_type,title,reason,created_at,source")
+                    .eq("guild_id", gid).eq("target_user_id", uid)
+                    .order("created_at", desc=True).limit(capped).execute())
+        result = await _run_db_op("list targeted activity feed", _select)
+        return [
+            {
+                "id": _clean_text(row.get("id")),
+                "event_family": _clean_text(row.get("event_family")) or "unknown",
+                "event_type": _clean_text(row.get("event_type")) or "unknown",
+                "title": _clean_text(row.get("title")),
+                "reason": _clean_text(row.get("reason")),
+                "created_at": _normalize_ts(row.get("created_at")),
+                "source": _clean_text(row.get("source")),
+            }
+            for row in (getattr(result, "data", None) or [])
+            if isinstance(row, dict)
+        ]
+    except Exception as exc:
+        _ctx_debug(f"activity feed read failed: {type(exc).__name__}")
+        if strict:
+            raise
+        return []
+
+
+async def get_member_activity_ledger_row(
+    *, guild_id: int | str, user_id: int | str, strict: bool = False,
+) -> Optional[Dict[str, Any]]:
+    """Read one target's tracked activity; absence is not evidence of inactivity."""
+    gid, uid = _as_str_id(guild_id), _as_str_id(user_id)
+    if not gid or not uid:
+        return None
+    sb = _sb()
+    if sb is None:
+        if strict:
+            raise RuntimeError("Member activity ledger database unavailable")
+        return None
+    try:
+        def _select():
+            return (sb.table(ACTIVITY_LEDGER_TABLE)
+                    .select("last_activity_at,last_activity_type,first_observed_at,updated_at")
+                    .eq("guild_id", gid).eq("user_id", uid).limit(1).execute())
+        result = await _run_db_op("get member activity ledger", _select)
+        rows = getattr(result, "data", None) or []
+        if not rows or not isinstance(rows[0], dict):
+            return None
+        row = rows[0]
+        return {
+            "last_activity_at": _normalize_ts(row.get("last_activity_at")),
+            "last_activity_type": _clean_text(row.get("last_activity_type")),
+            "first_observed_at": _normalize_ts(row.get("first_observed_at")),
+            "updated_at": _normalize_ts(row.get("updated_at")),
+        }
+    except Exception as exc:
+        _ctx_debug(f"activity ledger read failed: {type(exc).__name__}")
+        if strict:
+            raise
+        return None
 
 
 # ============================================================
@@ -671,6 +781,20 @@ def _matching_join_event(
     return matches[0] if len(sources) == 1 else {}
 
 
+def _same_join_timestamp(first: Any, second: Any) -> bool:
+    """Only exact same-visit timestamps authorize profile invite attribution."""
+    try:
+        left = datetime.fromisoformat(str(first).replace("Z", "+00:00"))
+        right = datetime.fromisoformat(str(second).replace("Z", "+00:00"))
+        if left.tzinfo is None:
+            left = left.replace(tzinfo=timezone.utc)
+        if right.tzinfo is None:
+            right = right.replace(tzinfo=timezone.utc)
+        return abs((left - right).total_seconds()) <= 5
+    except (TypeError, ValueError, OverflowError):
+        return False
+
+
 def _build_relationships(
     member_row: Optional[Dict[str, Any]],
     join_rows: Sequence[Dict[str, Any]],
@@ -682,23 +806,12 @@ def _build_relationships(
     # A stored profile may describe the previous visit while member_joins
     # already records a newer one. Never combine an old inviter/code with a
     # different join and then present that mixture as confirmed attribution.
-    if latest_join and member:
-        try:
-            join_at = datetime.fromisoformat(
-                str(latest_join["joined_at"]).replace("Z", "+00:00")
-            )
-            profile_at = datetime.fromisoformat(
-                str(member["joined_at"]).replace("Z", "+00:00")
-            )
-            if join_at.tzinfo is None:
-                join_at = join_at.replace(tzinfo=timezone.utc)
-            if profile_at.tzinfo is None:
-                profile_at = profile_at.replace(tzinfo=timezone.utc)
-            if abs((join_at - profile_at).total_seconds()) > 5:
-                member = {}
-        except (KeyError, TypeError, ValueError, OverflowError):
-            # An unverified timestamp cannot authorize cross-visit attribution.
-            member = {}
+    if latest_join and member and not _same_join_timestamp(
+        latest_join.get("joined_at"), member.get("joined_at")
+    ):
+        # Missing or different timestamps cannot authorize a profile's older
+        # inviter, code or confidence being attached to the latest join.
+        member = {}
     event = _matching_join_event(member, join_rows, event_rows)
 
     def _pick(*values: Any) -> Optional[str]:
@@ -826,8 +939,15 @@ def _build_join_summary(
         if event_type in {"leave", "left", "left_guild", "member_left", "departed"}:
             leave_events += 1
 
-    times_joined = member_times_joined or len(join_rows) or (1 if isinstance(member_row, dict) else 0)
-    times_left = member_times_left or leave_events
+    # Profile counters may lag behind the rows we can actually read. Treat
+    # the maximum as a lower bound, never a verified lifetime count.
+    joined_events = sum(
+        str(event.get("event_type") or "").strip().lower() == "member_joined"
+        for event in event_rows
+    )
+    has_profile_join = bool(member_row.get("joined_at")) if isinstance(member_row, dict) else False
+    times_joined = max(member_times_joined, len(join_rows), joined_events, int(has_profile_join))
+    times_left = max(member_times_left, leave_events)
 
     # first_seen_at can predate membership, whereas _latest_ts picks the
     # newest timestamp. Neither is a reliable first-join calculation.
@@ -852,7 +972,7 @@ def _build_join_summary(
         "rejoined_at": member_row.get("rejoined_at") if isinstance(member_row, dict) else None,
         "times_joined": int(times_joined),
         "times_left": int(times_left),
-        "in_guild": _boolish(member_row.get("in_guild"), True) if isinstance(member_row, dict) else None,
+        "in_guild": member_row.get("in_guild") if isinstance(member_row, dict) else None,
         "latest_entry_method": relationships.get("entry_method"),
         "latest_verification_source": relationships.get("verification_source"),
         "latest_invite_code": relationships.get("invite_code"),
@@ -1099,7 +1219,7 @@ async def get_member_ticket_history_summary(
     return _build_ticket_history_summary(tickets, open_ticket)
 
 
-async def get_member_context_snapshot(
+async def _get_member_context_snapshot_uncached(
     *,
     guild_id: int | str,
     user_id: int | str,
@@ -1109,6 +1229,7 @@ async def get_member_context_snapshot(
     include_recent_tickets: bool = True,
     include_recent_events: bool = True,
     include_recent_joins: bool = True,
+    include_extended_intelligence: bool = False,
 ) -> Dict[str, Any]:
     gid = _as_str_id(guild_id)
     uid = _as_str_id(user_id)
@@ -1121,31 +1242,51 @@ async def get_member_context_snapshot(
             "user_id": uid,
         }
 
-    member_row = await get_guild_member_row(guild_id=gid, user_id=uid)
+    # The normal readers deliberately fail soft for onboarding/tickets. For a
+    # *staff intelligence* report, do not silently convert a failed read into
+    # zero events or a clean member record. Existing callers remain unchanged.
+    source_status: Dict[str, str] = {}
+    async def _read(label: str, reader, fallback: Any, **kwargs):
+        try:
+            value = await reader(**kwargs, strict=True)
+        except Exception as exc:
+            source_status[label] = "unavailable"
+            _ctx_debug(f"{label} read unavailable: {type(exc).__name__}")
+            return fallback
+        source_status[label] = "sampled" if label != "profile" else "available"
+        return value
 
+    member_row = await _read(
+        "profile", get_guild_member_row, None, guild_id=gid, user_id=uid,
+    )
     join_rows: List[Dict[str, Any]] = []
     event_rows: List[Dict[str, Any]] = []
     ticket_rows: List[Dict[str, Any]] = []
-
+    feed_rows: List[Dict[str, Any]] = []
+    activity_ledger: Optional[Dict[str, Any]] = None
     if include_recent_joins or member_row is None:
-        join_rows = await list_member_join_rows(
-            guild_id=gid,
-            user_id=uid,
-            limit=join_limit,
+        join_rows = await _read(
+            "joins", list_member_join_rows, [],
+            guild_id=gid, user_id=uid, limit=join_limit,
         )
-
     if include_recent_events:
-        event_rows = await list_member_event_rows(
-            guild_id=gid,
-            user_id=uid,
-            limit=event_limit,
+        event_rows = await _read(
+            "events", list_member_event_rows, [],
+            guild_id=gid, user_id=uid, limit=event_limit,
         )
-
     if include_recent_tickets:
-        ticket_rows = await list_member_ticket_rows(
-            guild_id=gid,
-            user_id=uid,
-            limit=ticket_limit,
+        ticket_rows = await _read(
+            "tickets", list_member_ticket_rows, [],
+            guild_id=gid, user_id=uid, limit=ticket_limit,
+        )
+    if include_extended_intelligence:
+        feed_rows = await _read(
+            "activity_feed", list_member_activity_feed_rows, [],
+            guild_id=gid, user_id=uid, limit=30,
+        )
+        activity_ledger = await _read(
+            "activity_ledger", get_member_activity_ledger_row, None,
+            guild_id=gid, user_id=uid,
         )
 
     try:
@@ -1157,6 +1298,7 @@ async def get_member_context_snapshot(
         open_ticket = _normalize_ticket_row_light(open_ticket_raw) if isinstance(open_ticket_raw, dict) else None
     except Exception as e:
         print(f"⚠️ member_context_service.get_member_context_snapshot open-ticket lookup failed: {repr(e)}")
+        source_status["open_ticket"] = "unavailable"
         open_ticket = None
 
     # A busy member's join event may be older than the recent activity window.
@@ -1164,7 +1306,13 @@ async def get_member_context_snapshot(
     # records have no invite code to show and the join has a known timestamp.
     latest_join = join_rows[0] if join_rows else {}
     expected_join = latest_join.get("joined_at") or (member_row or {}).get("joined_at")
-    has_invite = bool(latest_join.get("invite_code") or (member_row or {}).get("invite_code"))
+    profile_same_visit = not latest_join or _same_join_timestamp(
+        latest_join.get("joined_at"), (member_row or {}).get("joined_at")
+    )
+    has_invite = bool(
+        latest_join.get("invite_code")
+        or ((member_row or {}).get("invite_code") if profile_same_visit else None)
+    )
     attribution_events = event_rows
     if (include_recent_events and expected_join and not has_invite
             and not _matching_join_event(member_row, join_rows, event_rows)):
@@ -1179,12 +1327,42 @@ async def get_member_context_snapshot(
     relationships = _build_relationships(member_row, join_rows, attribution_events)
     name_history = _build_name_history(member_row, join_rows, ticket_rows)
     join_summary = _build_join_summary(member_row, join_rows, event_rows, relationships)
+    # The newest bounded joins cannot establish a first-ever join. If the
+    # sample reaches its cap, ask for the oldest retained row separately.
+    # This is still the earliest *retained*, not necessarily first-ever.
+    if (join_rows and len(join_rows) >= max(1, min(int(join_limit or 10), 100))
+            and source_status.get("joins") == "sampled"):
+        oldest_rows = await _read(
+            "earliest_join", list_member_join_rows, [],
+            guild_id=gid, user_id=uid, limit=1, descending=False,
+        )
+        if oldest_rows and oldest_rows[0].get("joined_at"):
+            join_summary["first_joined_at"] = oldest_rows[0]["joined_at"]
+        else:
+            # The oldest read was unavailable/inconsistent. Do not mislabel
+            # the last row in a truncated recent sample as the earliest.
+            join_summary["first_joined_at"] = None
+            source_status["earliest_join"] = "unavailable"
     ticket_summary = _build_ticket_history_summary(ticket_rows, open_ticket)
     event_summary = _build_event_summary(event_rows)
+    feed_summary = {
+        "total": len(feed_rows),
+        "moderation_count": sum(
+            str(row.get("event_family") or "").lower() == "moderation"
+            for row in feed_rows
+        ),
+    }
     dashboard = _build_dashboard_block(member_row, relationships, ticket_summary, join_summary)
 
     snapshot: Dict[str, Any] = {
-        "ok": True,
+        "ok": not all(value == "unavailable" for value in source_status.values()),
+        "source_status": source_status,
+        "sample_limits": {
+            **({"activity_feed": 30} if include_extended_intelligence else {}),
+            "joins": max(1, min(int(join_limit or 10), 100)),
+            "events": max(1, min(int(event_limit or 15), 200)),
+            "tickets": max(1, min(int(ticket_limit or 25), 200)),
+        },
         "guild_id": gid,
         "user_id": uid,
         "generated_at": _now_iso(),
@@ -1220,6 +1398,9 @@ async def get_member_context_snapshot(
         "join_summary": join_summary,
         "ticket_summary": ticket_summary,
         "event_summary": event_summary,
+        "activity_feed_summary": feed_summary,
+        "activity_ledger": activity_ledger,
+        "recent_feed_events": feed_rows,
         "open_ticket": open_ticket,
         "recent_joins": join_rows if include_recent_joins else [],
         "recent_events": event_rows if include_recent_events else [],
@@ -1234,6 +1415,48 @@ async def get_member_context_snapshot(
     )
 
     return snapshot
+
+
+async def get_member_context_snapshot(
+    *,
+    guild_id: int | str,
+    user_id: int | str,
+    ticket_limit: int = 25,
+    event_limit: int = 15,
+    join_limit: int = 10,
+    include_recent_tickets: bool = True,
+    include_recent_events: bool = True,
+    include_recent_joins: bool = True,
+    include_extended_intelligence: bool = False,
+    use_intelligence_cache: bool = False,
+    force_refresh: bool = False,
+) -> Dict[str, Any]:
+    """Cached only by explicit staff-view opt-in; other callers read normally.
+
+    No moderation decision, live role/membership, or staff review verdict is
+    cached. All key dimensions are included to prevent mixing partial samples.
+    """
+    gid, uid = _as_str_id(guild_id), _as_str_id(user_id)
+    params = dict(
+        guild_id=gid, user_id=uid,
+        ticket_limit=ticket_limit, event_limit=event_limit, join_limit=join_limit,
+        include_recent_tickets=include_recent_tickets,
+        include_recent_events=include_recent_events,
+        include_recent_joins=include_recent_joins,
+        include_extended_intelligence=include_extended_intelligence,
+    )
+    if not use_intelligence_cache or not gid or not uid:
+        return await _get_member_context_snapshot_uncached(**params)
+    key = (
+        gid, uid, int(ticket_limit), int(event_limit), int(join_limit),
+        bool(include_recent_tickets), bool(include_recent_events),
+        bool(include_recent_joins), bool(include_extended_intelligence),
+    )
+    return await STAFF_MEMBER_INTELLIGENCE_CACHE.get_or_load(
+        key,
+        lambda: _get_member_context_snapshot_uncached(**params),
+        force_refresh=force_refresh,
+    )
 
 
 # ============================================================

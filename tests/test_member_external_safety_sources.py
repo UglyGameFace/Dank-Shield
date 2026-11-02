@@ -174,3 +174,40 @@ def test_documented_key_registration_links_and_disabled_paid_default():
     assert "DANK_CHEATERSTATS_PAID_LOOKUPS=0" in doc
     assert "DANK_CHEATERSTATS_PAID_LOOKUPS=1" in doc
     assert "Do not" in doc
+
+
+def test_provider_cache_eviction_preserves_recent_results_and_marks_age(monkeypatch):
+    external._account_cache.clear()
+    clock = [100.0]
+    monkeypatch.setattr(external.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(external, "_CACHE_LIMIT", 2)
+    a = external.SourceFinding("Protector", "reported", "Reported by owner")
+    b = external.SourceFinding("Protector", "none_reported", "No blacklist flag")
+    external._cache_set("Protector", "a", "", a)
+    clock[0] += 5
+    external._cache_set("Protector", "b", "", b)
+    clock[0] += 8
+    cached = external._cache_get("Protector", "a")
+    assert cached.status == "reported"
+    assert "Cached 13s ago" in cached.detail
+    assert "not a fresh provider check" in cached.detail
+    assert "Cached" not in external._account_cache[("Protector", "a", "")][1].detail
+
+    external._cache_set("Protector", "c", "", b)
+    assert ("Protector", "b", "") not in external._account_cache
+    assert ("Protector", "a", "") in external._account_cache
+    assert ("Protector", "c", "") in external._account_cache
+    external._account_cache.clear()
+
+
+def test_provider_cache_expiry_is_not_a_clearance(monkeypatch):
+    external._account_cache.clear()
+    clock = [30.0]
+    monkeypatch.setattr(external.time, "monotonic", lambda: clock[0])
+    external._cache_set(
+        "Protector", USER, "",
+        external.SourceFinding("Protector", "none_reported", "No blacklist flag; not a clearance."),
+    )
+    clock[0] += external._ACCOUNT_TTL_SECONDS
+    assert external._cache_get("Protector", USER) is None
+    assert ("Protector", USER, "") not in external._account_cache

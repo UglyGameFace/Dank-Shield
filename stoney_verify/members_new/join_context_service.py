@@ -718,6 +718,10 @@ async def persist_member_join_context(
             )
         except Exception as e:
             _warn(f"member_events insert failed guild={guild_id} user={user_id}: {e!r}")
+        # Clear any snapshot populated while the three join writes were
+        # finishing. This does not block or re-fetch any Discord APIs.
+        from ..tickets_new.member_intelligence_cache import invalidate_member_intelligence
+        invalidate_member_intelligence(guild_id, user_id)
     except Exception as e:
         _warn(f"persist_member_join_context error: {e!r}")
         try:

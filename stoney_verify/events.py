@@ -15,6 +15,7 @@ import discord
 
 from .globals import *
 from . import role_truth
+from .tickets_new.member_intelligence_cache import invalidate_member_intelligence
 
 # Split-out admin slash commands
 from . import verify_admin_commands  # noqa: F401
@@ -1205,6 +1206,9 @@ async def on_member_join(member: discord.Member):
     try:
         guild = member.guild
         gid = int(guild.id)
+        # Live member changes invalidate cached *stored* evidence. This is
+        # cheap, non-I/O, and never replaces the Discord REST status lookup.
+        invalidate_member_intelligence(gid, int(member.id))
 
         _ensure_gid_join_deque(JOIN_TIMES, gid)
         _ensure_gid_dict(RAID_RECENT_JOINERS, gid)
@@ -1562,6 +1566,9 @@ async def on_member_remove(member: discord.Member):
     try:
         guild = member.guild
         gid = int(guild.id)
+        # Live member changes invalidate cached *stored* evidence. This is
+        # cheap, non-I/O, and never replaces the Discord REST status lookup.
+        invalidate_member_intelligence(gid, int(member.id))
 
         try:
             _ensure_gid_dict(RAID_RECENT_JOINERS, gid)
@@ -1680,6 +1687,7 @@ async def on_member_remove(member: discord.Member):
 @bot.event
 async def on_member_ban(guild: discord.Guild, user: discord.User):
     try:
+        invalidate_member_intelligence(int(guild.id), int(user.id))
         try:
             RUNTIME_STATS["member_bans_detected"] += 1
         except Exception:
@@ -1778,6 +1786,9 @@ async def on_member_update(before: discord.Member, after: discord.Member):
     try:
         guild = after.guild
         gid = int(guild.id)
+        # Live member changes invalidate cached *stored* evidence. This is
+        # cheap, non-I/O, and never replaces the Discord REST status lookup.
+        invalidate_member_intelligence(gid, int(after.id))
 
         b_roles = set([r.id for r in (before.roles or [])])
         a_roles = set([r.id for r in (after.roles or [])])

@@ -1,10 +1,23 @@
 # Dank Shield: external safety-source setup
 
 This feature belongs to **Dank Shield itself**. No third-party Discord bot
-needs to be invited. The server owner opens
-`/dank members` -> `Intelligence` -> select a member ->
-**External Sources**, or **Connections** -> **External Sources**.
-The account ID and source states are displayed privately.
+needs to be invited. The current visible path on Discord is:
+
+**`/mod` → Member Command Center → Intelligence → select a member →
+External Sources.** Alternative: **`/dank home` → Members & Moderation →
+Member Command Center → Intelligence**.
+
+The old `/dank members` alias is a *hidden legacy command* and may not appear
+in Discord slash-command suggestions. It is not the advertised entry point.
+For departed or banned accounts, use **Stored History by ID** from the
+Intelligence menu to reach a review with the same Safety Reports and
+External Sources buttons. **Connections → External Sources** also works.
+The account ID and external review status are shown privately to the owner.
+
+GitHub `main` does not automatically deploy to Discloud. After merging,
+follow the existing manual production deployment/backup checks in
+`docs/DISCLOUD_MAIN_QUICK_RELEASE.md`. Until the exact running SHA is
+verified, a merged feature might still be missing from the live bot.
 
 ## Create the API keys
 

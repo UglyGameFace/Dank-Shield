@@ -8,6 +8,7 @@ Discord API data must not be used to construct social relationship profiles.
 """
 
 import asyncio
+from collections import OrderedDict
 import os
 import re
 import time
@@ -26,7 +27,7 @@ _SNOWFLAKE = re.compile(r"^[0-9]{15,22}$")
 _ACCOUNT_TTL_SECONDS = 900
 _DOMAIN_TTL_SECONDS = 12 * 3600
 _CACHE_LIMIT = 256
-_account_cache: dict[tuple[str, str, str], tuple[float, "SourceFinding"]] = {}
+_account_cache: OrderedDict[tuple[str, str, str], tuple[float, "SourceFinding"]] = OrderedDict()
 _domain_cache: tuple[float, frozenset[str]] | None = None
 _domain_lock = asyncio.Lock()
 
@@ -48,14 +49,37 @@ def _key(name: str) -> str:
 
 
 def _cache_get(source: str, uid: str, identity: str = "") -> SourceFinding | None:
-    saved = _account_cache.get((source, uid, identity))
-    return saved[1] if saved and time.monotonic() - saved[0] < _ACCOUNT_TTL_SECONDS else None
+    cache_key = (source, uid, identity)
+    saved = _account_cache.get(cache_key)
+    if not saved:
+        return None
+    age = max(0.0, time.monotonic() - saved[0])
+    if age >= _ACCOUNT_TTL_SECONDS:
+        _account_cache.pop(cache_key, None)
+        return None
+    _account_cache.move_to_end(cache_key)
+    finding = saved[1]
+    # Preserve the provider's actual result in storage. Only the returned
+    # copy discloses its age. Never call cached negative evidence a clearance.
+    return SourceFinding(
+        finding.source, finding.status,
+        finding.detail + f" Cached {int(age)}s ago; not a fresh provider check.",
+        finding.url,
+    )
 
 
 def _cache_set(source: str, uid: str, identity: str, result: SourceFinding) -> SourceFinding:
-    if len(_account_cache) >= _CACHE_LIMIT:
-        _account_cache.clear()
-    _account_cache[(source, uid, identity)] = (time.monotonic(), result)
+    now = time.monotonic()
+    for cache_key, (stored_at, _) in list(_account_cache.items()):
+        if now - stored_at >= _ACCOUNT_TTL_SECONDS:
+            _account_cache.pop(cache_key, None)
+    cache_key = (source, uid, identity)
+    _account_cache[cache_key] = (now, result)
+    _account_cache.move_to_end(cache_key)
+    # Evict only the oldest unused entries, not all previously cached
+    # provider results (which could cause a burst of repeated API calls).
+    while len(_account_cache) > _CACHE_LIMIT:
+        _account_cache.popitem(last=False)
     return result
 
 

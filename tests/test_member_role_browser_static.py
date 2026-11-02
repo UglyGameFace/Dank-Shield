@@ -113,8 +113,8 @@ def test_internal_member_tools_are_reused_behind_ui() -> None:
     assert "async def _show_stored_member_history" in source
     assert "get_member_context_snapshot(" in source
     assert "from stoney_verify.member_review_feedback import get_member_review_history" in source
-    assert "await _show_stored_member_history(interaction, self.member_id)" in source
-    assert "await _show_stored_member_history(interaction, int(raw))" in source
+    assert "self.member_id, presence=status, view=self" in source
+    assert "HistoricalIntelligenceTargetView(int(interaction.user.id), target_id)" in source
     assert "from .public_member_review_feedback import review_history" not in source
     assert "open_review_panel" in source
 

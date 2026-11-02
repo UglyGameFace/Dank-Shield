@@ -124,9 +124,10 @@ def _intelligence_embed() -> discord.Embed:
     return discord.Embed(
         title="🧠 Member Intelligence",
         description=(
-            "Select a member, review recent bans, or inspect a historical account. "
-            "Connection evidence, join history and three simple server controls share this screen. "
-            "Links do not prove leaked information, friendship, or ban evasion."
+            "Select a member to see one evidence report with buttons for history, "
+            "connections, Safety Reports and External Sources. Historical accounts can "
+            "be reviewed by ID. Missing records are not proof of a clean history, "
+            "and reported connections are not proof of wrongdoing."
         ),
         color=discord.Color.blurple(),
         timestamp=discord.utils.utcnow(),
@@ -592,19 +593,18 @@ class IntelligenceMemberSelect(discord.ui.UserSelect):
         if not await require_review(interaction):
             return
         member, status = await _resolve_intelligence_member(interaction.guild, user_id)
-        if member is None:
-            # Historical evidence is useful even when Discord returns 404 or fails.
-            await _show_stored_member_history(interaction, user_id, presence=status)
-            return
-        view = IntelligenceTargetView(
-            owner_id=self.parent_view.owner_id,
-            member=member,
+        # Exactly ONE account review panel: history and all investigation
+        # actions stay together. A follow-up history message used to visually
+        # bury the buttons shown by the first response on Discord mobile.
+        view = (
+            IntelligenceTargetView(owner_id=self.parent_view.owner_id, member=member)
+            if member is not None else
+            HistoricalIntelligenceTargetView(self.parent_view.owner_id, user_id)
         )
-        embed = member_detail_embed(member, None)
-        embed.add_field(name="Live membership", value=_intelligence_presence_text(status), inline=False)
-        await _replace_panel(interaction, embed=embed, view=view)
-        # Show the retained join/source report on selection, not behind another menu.
-        await _show_stored_member_history(interaction, user_id, presence=status)
+        await _show_stored_member_history(
+            interaction, user_id, presence=status, view=view,
+            live_member=member,
+        )
 
 
 class IntelligenceMenuView(OwnedView):
@@ -682,7 +682,16 @@ class IntelligenceTargetView(OwnedView):
     @discord.ui.button(label="Stored History", emoji="🧾", style=discord.ButtonStyle.secondary, row=0)
     async def history(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
-        await _show_stored_member_history(interaction, self.member_id)
+        # Discord's fetch_member may exceed the 3-second interaction window.
+        if not interaction.response.is_done():
+            await interaction.response.defer(ephemeral=True)
+        # Keep the buttons on the same ephemeral review instead of opening
+        # a second history-only message.
+        member, status = await _resolve_intelligence_member(interaction.guild, self.member_id)
+        await _show_stored_member_history(
+            interaction, self.member_id, presence=status, view=self,
+            live_member=member, force_refresh=True,
+        )
 
     @discord.ui.button(label="Moderation Panel", emoji="🛡️", style=discord.ButtonStyle.secondary, row=0)
     async def moderation(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -730,6 +739,46 @@ class IntelligenceTargetView(OwnedView):
 
 
 
+class HistoricalIntelligenceTargetView(OwnedView):
+    """Keep the same investigation actions available for departed/banned IDs."""
+
+    def __init__(self, owner_id: int, target_id: int) -> None:
+        self.target_id = int(target_id)
+        super().__init__(owner_id)
+
+    @discord.ui.button(label="Stored History", emoji="🧾", style=discord.ButtonStyle.secondary, row=0)
+    async def history(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _show_stored_member_history(
+            interaction, self.target_id,
+            view=HistoricalIntelligenceTargetView(self.owner_id, self.target_id),
+            force_refresh=True,
+        )
+
+    @discord.ui.button(label="Connections", emoji="🔗", style=discord.ButtonStyle.secondary, row=0)
+    async def connections(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        if not await require_review(interaction):
+            return
+        await interaction.response.defer(ephemeral=True)
+        await _show_connection_report(interaction, self.owner_id, self.target_id)
+
+    @discord.ui.button(label="Safety Reports", emoji="🛡️", style=discord.ButtonStyle.secondary, row=1)
+    async def safety_reports(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _show_native_safety_reports(interaction, self.target_id)
+
+    @discord.ui.button(label="External Sources", emoji="🔎", style=discord.ButtonStyle.secondary, row=1)
+    async def external_sources(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _show_external_sources(interaction, self.target_id)
+
+    @discord.ui.button(label="Intelligence Menu", emoji="↩️", style=discord.ButtonStyle.secondary, row=2)
+    async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _replace_panel(interaction, embed=_intelligence_embed(), view=IntelligenceMenuView(self.owner_id))
+
+
 def _historical_member_embed(
     user_id: int, snapshot: dict[str, Any], verdicts: list[dict[str, Any]],
     *, presence: str = "unchecked",
@@ -740,6 +789,9 @@ def _historical_member_embed(
     events = snapshot.get("event_summary") or {}
     tickets = snapshot.get("ticket_summary") or {}
     names = snapshot.get("name_history") or {}
+    feed = snapshot.get("activity_feed_summary") or {}
+    feed_rows = snapshot.get("recent_feed_events") or []
+    activity_ledger = snapshot.get("activity_ledger") or {}
     label = (
         member.get("display_name") or member.get("username")
         or next(iter(names.get("all_names") or []), None)
@@ -756,19 +808,52 @@ def _historical_member_embed(
         color=discord.Color.blurple(),
         timestamp=discord.utils.utcnow(),
     )
+    def _plain(value: str, limit: int = 80) -> str:
+        return discord.utils.escape_markdown(value[:limit]).replace("@", "@\u200b")
+    status = snapshot.get("source_status") or {}
+    sample_limits = snapshot.get("sample_limits") or {}
+    event_count = (
+        str(events.get("total", 0)) if status.get("events") != "unavailable"
+        else "unavailable"
+    )
+    event_moderation = (
+        str(events.get("moderation_count", 0)) if status.get("events") != "unavailable"
+        else "unavailable"
+    )
+    ticket_count = (
+        str(tickets.get("total", 0)) if status.get("tickets") != "unavailable"
+        else "unavailable"
+    )
+    joins_available = status.get("joins") != "unavailable" and status.get("profile") != "unavailable"
+    join_count = str(joins.get("times_joined", 0)) if joins_available else "unavailable"
+    leave_count = str(joins.get("times_left", 0)) if joins_available else "unavailable"
     join_text = (
-        f"Recorded joins (at least): **{joins.get('times_joined', 0)}** • "
-        f"Recorded departures (at least): **{joins.get('times_left', 0)}**\\n"
-        f"Last joined: `{str(joins.get('latest_joined_at') or 'unknown')[:50]}`\\n"
-        f"Left: `{str(joins.get('left_at') or 'not recorded')[:50]}`\\n"
-        f"Last seen: `{str(joins.get('last_seen_at') or 'unknown')[:50]}`"
+        f"Recorded joins (minimum): **{join_count}** • "
+        f"Recorded departures (minimum): **{leave_count}**\\n"
+        f"Latest recorded join: `{str(joins.get('latest_joined_at') or 'unknown')[:50]}`\\n"
+        f"Earliest retained join: `{str(joins.get('first_joined_at') or 'unknown')[:50]}`\\n"
+        f"Last recorded departure: `{str(joins.get('left_at') or 'not recorded')[:50]}`\\n"
+        f"Last seen (stored): `{str(joins.get('last_seen_at') or 'unknown')[:50]}`"
     ).replace("\\n", "\n")
+    all_names = names.get("all_names") or []
+    if all_names:
+        past_names = ", ".join(
+            discord.utils.escape_mentions(discord.utils.escape_markdown(str(n)[:32]))
+            for n in all_names[:5]
+        )
+        join_text += f"\\nRetained names: {past_names}"
+    last_tracked = activity_ledger.get("last_activity_at")
+    if last_tracked:
+        tracked_type = _plain(str(activity_ledger.get("last_activity_type") or "unknown"), 32)
+        join_text += (
+            f"\\nTracked activity: `{str(last_tracked)[:32]}` ({tracked_type})"
+        )
     embed.add_field(name="Live membership", value=_intelligence_presence_text(presence), inline=False)
-    embed.add_field(name="Membership History", value=join_text[:1024], inline=False)
+    embed.add_field(name="Membership History", value=join_text.replace("\\n", "\n")[:1024], inline=False)
     recent = snapshot.get("recent_joins") or []
     latest = recent[0] if recent and isinstance(recent[0], dict) else {}
     relations = snapshot.get("relationships") or {}
-    method = str(latest.get("entry_method") or joins.get("latest_entry_method") or "").strip()
+    method = str(relations.get("entry_method") or latest.get("entry_method") or "").strip()
     method_names = {
         "invite": "Server invite",
         "vanity_invite": "Vanity invitation",
@@ -780,18 +865,18 @@ def _historical_member_embed(
         "invite_unresolved": "Invite usage could not be matched",
     }
     source = method_names.get(method, "Unknown")
-    code = str(latest.get("invite_code") or relations.get("invite_code") or "").strip()
-    inviter = str(latest.get("invited_by_name") or relations.get("invited_by_name") or "").strip()
-    quality = str(latest.get("entry_truth_quality") or relations.get("entry_truth_quality") or member.get("entry_truth_quality") or "").strip().lower()
-    conflicted = bool(latest.get("entry_conflict") or relations.get("entry_conflict") or member.get("entry_conflict"))
+    # The relationship service already enforces same-visit timestamp matching.
+    # Re-prioritizing raw profile/join fields here would undo that safeguard.
+    code = str(relations.get("invite_code") or "").strip()
+    inviter = str(relations.get("invited_by_name") or "").strip()
+    quality = str(relations.get("entry_truth_quality") or "").strip().lower()
+    conflicted = bool(relations.get("entry_conflict"))
     if conflicted:
         confidence = "Conflicting records; attribution not verified"
     elif quality in {"confirmed", "partial", "unknown"}:
         confidence = {"confirmed": "Confirmed in retained join record", "partial": "Partial / uncertain", "unknown": "Unknown"}[quality]
     else:
         confidence = "Not recorded"
-    def _plain(value: str, limit: int = 80) -> str:
-        return discord.utils.escape_markdown(value[:limit]).replace("@", "@\u200b")
     source_lines = [f"Source: **{_plain(source)}**", f"Confidence: **{confidence}**"]
     if code:
         source_lines.append(f"Invite code (retained): `{_plain(code, 32)}`")
@@ -803,10 +888,7 @@ def _historical_member_embed(
             confidence = "Confirmed in retained join event"
             source_lines[1] = f"Confidence: **{confidence}**"
     reason = str(
-        latest.get("entry_quality_reason")
-        or relations.get("entry_quality_reason")
-        or member.get("entry_quality_reason")
-        or ""
+        relations.get("entry_quality_reason") or ""
     ).strip()
     if reason:
         source_lines.append(f"Tracking details: {_plain(reason, 220)}")
@@ -817,41 +899,130 @@ def _historical_member_embed(
     type_text = ", ".join(
         f"{str(k)[:36]}: {v}" for k, v in list(types.items())[:8]
     ) or "No retained event types"
+    event_detail_lines = []
+    for event in (snapshot.get("recent_events") or [])[:3]:
+        when = str(event.get("created_at") or "unknown")[:16]
+        kind = _plain(str(event.get("event_type") or "unknown"), 32)
+        title = _plain(str(event.get("title") or event.get("reason") or ""), 65)
+        event_detail_lines.append(f"• `{when}` {kind}" + (f": {title}" if title else ""))
+    event_details = "\\n".join(event_detail_lines)
+    feed_detail_lines = []
+    for record in feed_rows[:3]:
+        when = str(record.get("created_at") or "unknown")[:16]
+        family = _plain(str(record.get("event_family") or "unknown"), 26)
+        kind = _plain(str(record.get("event_type") or "unknown"), 28)
+        reason = _plain(str(record.get("title") or record.get("reason") or ""), 55)
+        feed_detail_lines.append(
+            f"• `{when}` [{family}] {kind}" + (f": {reason}" if reason else "")
+        )
+    feed_details = "\\n".join(feed_detail_lines)
+    feed_line = ""
+    if sample_limits.get("activity_feed"):
+        feed_count = (
+            str(feed.get("total", 0))
+            if status.get("activity_feed") != "unavailable"
+            else "unavailable"
+        )
+        feed_moderation = (
+            str(feed.get("moderation_count", 0))
+            if status.get("activity_feed") != "unavailable"
+            else "unavailable"
+        )
+        feed_line = (
+            f"\\nActivity feed (up to {sample_limits['activity_feed']}): "
+            f"**{feed_count}** records, **{feed_moderation}** moderation."
+        )
     embed.add_field(
         name="Activity & Moderation Evidence",
         value=(
-            f"Recent retained events (up to 12): **{events.get('total', 0)}** • "
-            f"Moderation: **{events.get('moderation_count', 0)}**\\n"
-            f"Last event: `{str(events.get('latest_event_type') or 'unknown')[:65]}`\\n"
-            f"Types: {type_text}"
+            f"Member events (up to {sample_limits.get('events', 30)}): **{event_count}** • "
+            f"Moderation: **{event_moderation}**\\n"
+            f"Last member event: `{str(events.get('latest_event_type') or 'unknown')[:65]}`"
+            + feed_line
+            + (f"\\nRecent feed records:\\n{feed_details}" if feed_details else "")
+            + (f"\\nMember-event sample:\\n{event_details}" if event_details and not feed_details else "")
+            + (f"\\nTypes: {type_text}" if not feed_details else "")
         ).replace("\\n", "\n")[:1024],
         inline=False,
+    )
+    ticket_samples = []
+    for ticket in (snapshot.get("recent_tickets") or [])[:3]:
+        category = _plain(str(ticket.get("category") or "uncategorized"), 28)
+        ticket_state = _plain(str(ticket.get("status") or "unknown"), 20)
+        title = _plain(str(ticket.get("title") or ""), 62)
+        ticket_samples.append(f"• {category} [{ticket_state}]" + (f": {title}" if title else ""))
+    ticket_details = "\\n".join(ticket_samples)
+    verdict_details = "\\n".join(
+        f"• {str((row.get('metadata') or {}).get('verdict_label') or (row.get('metadata') or {}).get('verdict') or 'Decision')[:42]}"
+        for row in verdicts[:5]
     )
     embed.add_field(
         name="Tickets & Staff Decisions",
         value=(
-            f"Recent retained tickets (up to 10): **{tickets.get('total', 0)}** • "
-            f"Staff verdicts: **{len(verdicts)}** (last 10 queried)\\n"
-            + "\\n".join(
-                f"• {str((row.get('metadata') or {}).get('verdict_label') or (row.get('metadata') or {}).get('verdict') or 'Decision')[:42]}"
-                for row in verdicts[:5]
-            )
+            f"Recent retained tickets (up to {sample_limits.get('tickets', 15)}): **{ticket_count}** • "
+            f"Staff verdicts (last 10 queried): **{len(verdicts)}**"
+            + (f"\\nVerdicts:\\n{verdict_details}" if verdict_details else "")
+            + (f"\\nRecent tickets:\\n{ticket_details}" if ticket_details else "")
         ).replace("\\n", "\n")[:1024],
         inline=False,
     )
-    if not (snapshot.get("recent_joins") or snapshot.get("recent_events") or snapshot.get("recent_tickets") or verdicts
-            or member.get("username") or member.get("joined_at")):
-        embed.add_field(
-            name="Evidence Availability",
-            value="No retained records found for this ID in this server. Discord does not supply deleted history retroactively.",
-            inline=False,
+    unavailable = [label for label, state in status.items() if state == "unavailable"]
+    if unavailable:
+        note = (
+            "⚠️ Could not read: **" + ", ".join(unavailable) + "**. "
+            "Unknown data is not a clean result."
         )
-    embed.set_footer(text="Staff-only historical lookup • activity and join data can be incomplete")
+    else:
+        note = "Available readbacks are retained minimums, not lifetime totals."
+    no_records = not (
+        snapshot.get("recent_joins") or snapshot.get("recent_events")
+        or snapshot.get("recent_tickets") or snapshot.get("recent_feed_events")
+        or activity_ledger or verdicts
+        or member.get("username") or member.get("joined_at")
+    )
+    if no_records:
+        note += " No records returned; Discord cannot restore uncollected or deleted history."
+    cache_state = str(snapshot.get("cache_state") or "")
+    if cache_state == "hit":
+        note = (
+            f"Cached evidence ({snapshot.get('cache_age_seconds', 0):.0f}s old). "
+            + note
+        )
+    elif cache_state == "fresh":
+        note = "Fresh database read. " + note
+    elif cache_state == "stale":
+        refreshed = ", ".join(snapshot.get("cache_refresh_unavailable") or [])
+        note = (
+            "⚠️ STALE cached evidence; refresh failed"
+            + (f" ({refreshed})" if refreshed else "")
+            + ". Do not treat these records as current. "
+            + note
+        )
+    elif cache_state == "partial":
+        note = "Some sources failed; partial live read. " + note
+    elif cache_state == "superseded":
+        note = "Member records changed during this lookup. Tap Stored History to refresh. " + note
+    samples = (
+        f"Readback limits: {sample_limits.get('joins', 15)} joins, "
+        f"{sample_limits.get('events', 30)} member events, "
+        f"{sample_limits.get('activity_feed', 0)} feed records, "
+        f"{sample_limits.get('tickets', 15)} tickets."
+    )
+    synced = str(member.get("synced_at") or member.get("updated_at") or "unknown")
+    embed.add_field(
+        name="Evidence coverage & freshness",
+        value=(f"{note}\\n{samples}\\nStored profile updated: `{synced[:45]}`").replace("\\n", "\n")[:1024],
+        inline=False,
+    )
+    embed.set_footer(text="Server-local recorded evidence only • live membership checked separately")
     return embed
 
 
 async def _show_stored_member_history(
     interaction: discord.Interaction, user_id: int, *, presence: Optional[str] = None,
+    view: Optional[discord.ui.View] = None,
+    live_member: Optional[discord.Member] = None,
+    force_refresh: bool = False,
 ) -> None:
     """Read historical guild records without fetch_user() or a live member."""
     if not interaction.response.is_done():
@@ -870,7 +1041,10 @@ async def _show_stored_member_history(
             asyncio.gather(
                 get_member_context_snapshot(
                     guild_id=guild_id, user_id=user_id,
-                    ticket_limit=10, event_limit=12, join_limit=8,
+                    ticket_limit=15, event_limit=30, join_limit=15,
+                    include_extended_intelligence=True,
+                    use_intelligence_cache=True,
+                    force_refresh=force_refresh,
                 ),
                 asyncio.to_thread(
                     get_member_review_history,
@@ -881,22 +1055,86 @@ async def _show_stored_member_history(
             timeout=20,
         )
     except asyncio.TimeoutError:
-        return await interaction.followup.send(
-            "⚠️ Historical records timed out. Nothing was modified; try again shortly.",
-            ephemeral=True,
+        if view is None:
+            return await reply_ephemeral(
+                interaction, "⚠️ Historical records timed out; no safety conclusion.",
+            )
+        timeout_embed = discord.Embed(
+            title="🧠 Member Intelligence • History unavailable",
+            description=(
+                f"Account: `{user_id}`\\n"
+                "Stored evidence timed out. This is NOT a clean history. "
+                "Your account review actions remain available."
+            ).replace("\\n", "\n"),
+            color=discord.Color.orange(),
         )
-    snapshot = context_result if isinstance(context_result, dict) and context_result.get("ok") else {}
-    verdicts = feedback_result if isinstance(feedback_result, list) else []
-    if not snapshot and not verdicts:
-        return await interaction.followup.send(
-            "⚠️ Stored member records could not be read. This does not mean the user's history was deleted.",
-            ephemeral=True,
-        )
-    await interaction.followup.send(
-        embed=_historical_member_embed(user_id, snapshot, verdicts, presence=presence),
-        ephemeral=True,
-        allowed_mentions=discord.AllowedMentions.none(),
+        timeout_embed.add_field(name="Live membership", value=_intelligence_presence_text(presence), inline=False)
+        return await _replace_panel(interaction, embed=timeout_embed, view=view)
+    # Even a fully failed snapshot carries per-source outage diagnostics.
+    # Keep its evidence status rather than rendering an apparent empty history
+    # when unrelated staff-verdict records were recovered.
+    snapshot = (
+        context_result if isinstance(context_result, dict)
+        and context_result.get("source_status") is not None else {}
     )
+    verdicts = feedback_result if isinstance(feedback_result, list) else []
+    if snapshot and not isinstance(feedback_result, list):
+        snapshot = dict(snapshot)
+        snapshot["source_status"] = {
+            **(snapshot.get("source_status") or {}),
+            "staff_verdicts": "unavailable",
+        }
+    if not snapshot and not verdicts:
+        if view is None:
+            return await reply_ephemeral(
+                interaction,
+                "⚠️ Stored member records could not be read. This does not mean their history was deleted.",
+            )
+        embed = discord.Embed(
+            title="🧠 Member Intelligence • Data unavailable",
+            description=(
+                f"Account: `{user_id}`\\n"
+                "Historical database read failed. This is not a clean-history "
+                "result; the investigation buttons remain available."
+            ).replace("\\n", "\n"),
+            color=discord.Color.orange(),
+        )
+        embed.add_field(name="Live membership", value=_intelligence_presence_text(presence), inline=False)
+    else:
+        embed = _historical_member_embed(user_id, snapshot, verdicts, presence=presence)
+    if live_member is not None and presence == "verified":
+        joined = str(getattr(live_member, "joined_at", None) or "unknown")[:32]
+        created = str(getattr(live_member, "created_at", None) or "unknown")[:32]
+        display = discord.utils.escape_mentions(
+            discord.utils.escape_markdown(str(getattr(live_member, "display_name", "unknown"))[:80])
+        )
+        role_names = [
+            discord.utils.escape_mentions(discord.utils.escape_markdown(str(role.name)[:34]))
+            for role in getattr(live_member, "roles", [])[1:]
+        ]
+        # Reuse the existing membership section instead of adding another
+        # tall field to the phone screen.
+        embed.set_field_at(
+            0,
+            name="Live Discord facts (checked now)",
+            value=(
+                _intelligence_presence_text(presence)
+                + "\\n"
+                + f"Display: **{display}**\\n"
+                + f"Account created: `{created}`\\n"
+                + f"Current server join: `{joined}`\\n"
+                + f"Current roles ({len(role_names)}): "
+                + (", ".join(role_names[:5]) or "none")
+            ).replace("\\n", "\n")[:1024],
+            inline=False,
+        )
+    if view is not None:
+        await _replace_panel(interaction, embed=embed, view=view)
+    else:
+        await interaction.followup.send(
+            embed=embed, ephemeral=True,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
 
 
 
@@ -1019,7 +1257,7 @@ class ConnectionReportView(OwnedView):
         _ = button
         if not await require_review(interaction):
             return
-        await _show_stored_member_history(interaction, self.target_id)
+        await _show_stored_member_history(interaction, self.target_id, view=self)
 
     async def _navigate(self, interaction: discord.Interaction, page: int) -> None:
         if not await require_review(interaction):
@@ -1196,7 +1434,7 @@ async def _show_external_sources(interaction: discord.Interaction, target_id: in
             "On-demand independent provider claims, **not Dank Shield verified incidents**. "
             "A missing report is not proof of safety. No automatic moderation, "
             "third-party bot installation or other-server membership profiling."
-        ).replace("\\\\n", "\\n"),
+        ).replace("\\n", "\n"),
         color=discord.Color.blurple(),
     )
     for finding in findings:
@@ -1472,7 +1710,11 @@ class MemberHistoryByIdModal(discord.ui.Modal, title="Stored Member Intelligence
         raw = str(self.user_id.value or "").strip()
         if not raw.isascii() or not raw.isdecimal() or not 15 <= len(raw) <= 22:
             return await reply_ephemeral(interaction, "❌ Enter a valid Discord user ID (15–22 digits).")
-        await _show_stored_member_history(interaction, int(raw))
+        target_id = int(raw)
+        await _show_stored_member_history(
+            interaction, target_id,
+            view=HistoricalIntelligenceTargetView(int(interaction.user.id), target_id),
+        )
 
 
 class OperationsSafetyMenuView(OwnedView):
