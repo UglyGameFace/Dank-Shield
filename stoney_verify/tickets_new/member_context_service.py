@@ -27,6 +27,8 @@ from .repository import find_open_ticket_for_owner, list_tickets_for_owner
 GUILD_MEMBERS_TABLE = "guild_members"
 MEMBER_JOINS_TABLE = "member_joins"
 MEMBER_EVENTS_TABLE = "member_events"
+ACTIVITY_FEED_TABLE = "activity_feed_events"
+ACTIVITY_LEDGER_TABLE = "member_activity_ledger"
 
 
 # ============================================================
@@ -572,6 +574,88 @@ async def list_member_ticket_rows(
         if strict:
             raise
         return []
+
+
+
+
+async def list_member_activity_feed_rows(
+    *, guild_id: int | str, user_id: int | str, limit: int = 30,
+    strict: bool = False,
+) -> List[Dict[str, Any]]:
+    """Read targeted activity-feed evidence without duplicating the member ledger.
+
+    Only the exact Discord target AND source guild are considered. Never query
+    by staff actor or display name: these are not proof of target identity.
+    """
+    gid, uid = _as_str_id(guild_id), _as_str_id(user_id)
+    if not gid or not uid:
+        return []
+    sb = _sb()
+    if sb is None:
+        if strict:
+            raise RuntimeError("Member activity feed database unavailable")
+        return []
+    capped = max(1, min(int(limit or 30), 100))
+    try:
+        def _select():
+            return (sb.table(ACTIVITY_FEED_TABLE)
+                    .select("id,event_family,event_type,title,reason,created_at,source")
+                    .eq("guild_id", gid).eq("target_user_id", uid)
+                    .order("created_at", desc=True).limit(capped).execute())
+        result = await _run_db_op("list targeted activity feed", _select)
+        return [
+            {
+                "id": _clean_text(row.get("id")),
+                "event_family": _clean_text(row.get("event_family")) or "unknown",
+                "event_type": _clean_text(row.get("event_type")) or "unknown",
+                "title": _clean_text(row.get("title")),
+                "reason": _clean_text(row.get("reason")),
+                "created_at": _normalize_ts(row.get("created_at")),
+                "source": _clean_text(row.get("source")),
+            }
+            for row in (getattr(result, "data", None) or [])
+            if isinstance(row, dict)
+        ]
+    except Exception as exc:
+        _ctx_debug(f"activity feed read failed: {type(exc).__name__}")
+        if strict:
+            raise
+        return []
+
+
+async def get_member_activity_ledger_row(
+    *, guild_id: int | str, user_id: int | str, strict: bool = False,
+) -> Optional[Dict[str, Any]]:
+    """Read one target's tracked activity; absence is not evidence of inactivity."""
+    gid, uid = _as_str_id(guild_id), _as_str_id(user_id)
+    if not gid or not uid:
+        return None
+    sb = _sb()
+    if sb is None:
+        if strict:
+            raise RuntimeError("Member activity ledger database unavailable")
+        return None
+    try:
+        def _select():
+            return (sb.table(ACTIVITY_LEDGER_TABLE)
+                    .select("last_activity_at,last_activity_type,first_observed_at,updated_at")
+                    .eq("guild_id", gid).eq("user_id", uid).limit(1).execute())
+        result = await _run_db_op("get member activity ledger", _select)
+        rows = getattr(result, "data", None) or []
+        if not rows or not isinstance(rows[0], dict):
+            return None
+        row = rows[0]
+        return {
+            "last_activity_at": _normalize_ts(row.get("last_activity_at")),
+            "last_activity_type": _clean_text(row.get("last_activity_type")),
+            "first_observed_at": _normalize_ts(row.get("first_observed_at")),
+            "updated_at": _normalize_ts(row.get("updated_at")),
+        }
+    except Exception as exc:
+        _ctx_debug(f"activity ledger read failed: {type(exc).__name__}")
+        if strict:
+            raise
+        return None
 
 
 # ============================================================
@@ -1141,6 +1225,7 @@ async def get_member_context_snapshot(
     include_recent_tickets: bool = True,
     include_recent_events: bool = True,
     include_recent_joins: bool = True,
+    include_extended_intelligence: bool = False,
 ) -> Dict[str, Any]:
     gid = _as_str_id(guild_id)
     uid = _as_str_id(user_id)
@@ -1173,6 +1258,8 @@ async def get_member_context_snapshot(
     join_rows: List[Dict[str, Any]] = []
     event_rows: List[Dict[str, Any]] = []
     ticket_rows: List[Dict[str, Any]] = []
+    feed_rows: List[Dict[str, Any]] = []
+    activity_ledger: Optional[Dict[str, Any]] = None
     if include_recent_joins or member_row is None:
         join_rows = await _read(
             "joins", list_member_join_rows, [],
@@ -1187,6 +1274,15 @@ async def get_member_context_snapshot(
         ticket_rows = await _read(
             "tickets", list_member_ticket_rows, [],
             guild_id=gid, user_id=uid, limit=ticket_limit,
+        )
+    if include_extended_intelligence:
+        feed_rows = await _read(
+            "activity_feed", list_member_activity_feed_rows, [],
+            guild_id=gid, user_id=uid, limit=30,
+        )
+        activity_ledger = await _read(
+            "activity_ledger", get_member_activity_ledger_row, None,
+            guild_id=gid, user_id=uid,
         )
 
     try:
@@ -1244,12 +1340,20 @@ async def get_member_context_snapshot(
             source_status["earliest_join"] = "unavailable"
     ticket_summary = _build_ticket_history_summary(ticket_rows, open_ticket)
     event_summary = _build_event_summary(event_rows)
+    feed_summary = {
+        "total": len(feed_rows),
+        "moderation_count": sum(
+            str(row.get("event_family") or "").lower() == "moderation"
+            for row in feed_rows
+        ),
+    }
     dashboard = _build_dashboard_block(member_row, relationships, ticket_summary, join_summary)
 
     snapshot: Dict[str, Any] = {
         "ok": not all(value == "unavailable" for value in source_status.values()),
         "source_status": source_status,
         "sample_limits": {
+            "activity_feed": 30 if include_extended_intelligence else 0,
             "joins": max(1, min(int(join_limit or 10), 100)),
             "events": max(1, min(int(event_limit or 15), 200)),
             "tickets": max(1, min(int(ticket_limit or 25), 200)),
@@ -1289,6 +1393,9 @@ async def get_member_context_snapshot(
         "join_summary": join_summary,
         "ticket_summary": ticket_summary,
         "event_summary": event_summary,
+        "activity_feed_summary": feed_summary,
+        "activity_ledger": activity_ledger,
+        "recent_feed_events": feed_rows,
         "open_ticket": open_ticket,
         "recent_joins": join_rows if include_recent_joins else [],
         "recent_events": event_rows if include_recent_events else [],
