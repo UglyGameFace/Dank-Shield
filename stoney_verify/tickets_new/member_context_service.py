@@ -270,7 +270,7 @@ def _normalize_guild_member_row(row: Dict[str, Any]) -> Dict[str, Any]:
         "highest_role_id": _clean_text(row.get("highest_role_id")),
         "highest_role_name": _clean_text(row.get("highest_role_name")),
         "top_role": _clean_text(row.get("top_role")),
-        "in_guild": _boolish(row.get("in_guild"), True),
+        "in_guild": _boolish(row.get("in_guild")) if row.get("in_guild") is not None else None,
         "has_any_role": _boolish(row.get("has_any_role"), False),
         "has_unverified": _boolish(row.get("has_unverified"), False),
         "has_verified_role": _boolish(row.get("has_verified_role"), False),
@@ -852,7 +852,12 @@ def _build_join_summary(
 
     # Profile counters may lag behind the rows we can actually read. Treat
     # the maximum as a lower bound, never a verified lifetime count.
-    times_joined = max(member_times_joined, len(join_rows))
+    joined_events = sum(
+        str(event.get("event_type") or "").strip().lower() == "member_joined"
+        for event in event_rows
+    )
+    has_profile_join = bool(member_row.get("joined_at")) if isinstance(member_row, dict) else False
+    times_joined = max(member_times_joined, len(join_rows), joined_events, int(has_profile_join))
     times_left = max(member_times_left, leave_events)
 
     # first_seen_at can predate membership, whereas _latest_ts picks the
@@ -878,7 +883,7 @@ def _build_join_summary(
         "rejoined_at": member_row.get("rejoined_at") if isinstance(member_row, dict) else None,
         "times_joined": int(times_joined),
         "times_left": int(times_left),
-        "in_guild": _boolish(member_row.get("in_guild"), True) if isinstance(member_row, dict) else None,
+        "in_guild": member_row.get("in_guild") if isinstance(member_row, dict) else None,
         "latest_entry_method": relationships.get("entry_method"),
         "latest_verification_source": relationships.get("verification_source"),
         "latest_invite_code": relationships.get("invite_code"),
