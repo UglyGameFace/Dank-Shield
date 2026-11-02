@@ -87,9 +87,11 @@ matching original join-event evidence.
   the previous complete result may be shown for at most **120 seconds**,
   clearly marked **STALE**, with the failed source names and cached age.
   After that, the report is unavailable, not cleared/empty.
-- External safety providers retain their **separate** existing positive
-  account-response cache (15-minute TTL) and consent-based, on-demand
-  request flow. This new staff-history cache does not trigger paid API calls.
+- External safety providers retain their **separate** 15-minute positive
+  account-response cache and consent-based, on-demand request flow. Cache
+  eviction now drops only the oldest accounts, not every account at the cap,
+  and cached findings explicitly show their age. No disabled paid lookup is
+  enabled or triggered by the staff-history cache.
 
 Test cancellation, concurrent same-account lookup, per-guild isolation, bounded
 capacity, TTL/negative TTL, failure handling, forced refresh, mutation safety,
