@@ -805,6 +805,8 @@ def _historical_member_embed(
         color=discord.Color.blurple(),
         timestamp=discord.utils.utcnow(),
     )
+    def _plain(value: str, limit: int = 80) -> str:
+        return discord.utils.escape_markdown(value[:limit]).replace("@", "@\u200b")
     status = snapshot.get("source_status") or {}
     sample_limits = snapshot.get("sample_limits") or {}
     event_count = (
@@ -820,8 +822,8 @@ def _historical_member_embed(
         else "unavailable"
     )
     joins_available = status.get("joins") != "unavailable" and status.get("profile") != "unavailable"
-    join_count = str(joins.get("times_joined", 0)) if joins_available else "unknown"
-    leave_count = str(joins.get("times_left", 0)) if joins_available else "unknown"
+    join_count = str(joins.get("times_joined", 0)) if joins_available else "unavailable"
+    leave_count = str(joins.get("times_left", 0)) if joins_available else "unavailable"
     join_text = (
         f"Recorded joins (minimum): **{join_count}** • "
         f"Recorded departures (minimum): **{leave_count}**\\n"
@@ -872,8 +874,6 @@ def _historical_member_embed(
         confidence = {"confirmed": "Confirmed in retained join record", "partial": "Partial / uncertain", "unknown": "Unknown"}[quality]
     else:
         confidence = "Not recorded"
-    def _plain(value: str, limit: int = 80) -> str:
-        return discord.utils.escape_markdown(value[:limit]).replace("@", "@\u200b")
     source_lines = [f"Source: **{_plain(source)}**", f"Confidence: **{confidence}**"]
     if code:
         source_lines.append(f"Invite code (retained): `{_plain(code, 32)}`")
