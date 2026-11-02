@@ -1,3 +1,14 @@
+## CURRENT RECONCILIATION: MERGED OWNER-RELAY REF (2026-11-02 UTC)
+
+- **Live main at inspection:** `51d7d63931c5f85359d5cc7f4a972ee063b88f9d`; exact-main Dank Shield CI #41413333964 passed. 37 live branches, zero open PRs, before this integration branch was created. Discloud is owner-linked to `main`; actual running SHA and independent backup are not verified.
+- **Completed earlier today:** PR #800 merged; owner-authenticated cleanup #41413450154 archived and **actually deleted 2** explicitly rejected branches: `feat/cinema-rolling-supervised-worker-20261014` and `fix/517-permanent-optout-20261013`. Owner-reviewed cleanup also retired its merged integration branch, leaving 37 refs. Preserve the two immutable archive tags.
+- **Current objective:** Retire `work/dankshield-owner-cleanup-relay-20261101` safely. Its original SHA `bafe17a86225d71700f65496fb8339190418792f` exactly matches merged PR #789's head. All five changed file blob SHAs were compared against the PR merge commit `41570971946731e05be9799d7667dde8ef1ca624` and matched; that merge is an ancestor of main. Newer cleanup relay remains active in main. The obsolete branch has eight graph-unique commits but no missing content in its merged change set.
+- **Implementation:** `fix/reconcile-merged-owner-relay-20261102` adds only this exact name/SHA to owner-reviewed historical cleanup eligibility. Existing exact merged-PR head, full merge-tree equivalence, main ancestry, open-PR checks, SHA-bound preview token, archive-first deletion, and live branch exclusion remain required. No blanket `work/` deletion.
+- **State:** PR and CI not yet completed at this checkpoint; **branches deleted in this current integration: 0**. After merge and exact-main CI, issue authenticated preview/delete commands through PR #788; verify archive tag and ref absence. Do not delete `fix/legacy-use-this-channel-20261025` merely because PR #725 merged: its reported merge SHA is not an ancestor of current main and needs deeper reconciliation.
+- **Preserve:** Dedicated Supabase `viamriafkbqhquvrsnua` intended primary, original IdleGrowOp rollback source, Discloud PostgreSQL isolated backup candidate, protected and backup refs, and all unreconciled unique work. No production release, database, credentials, or host-file mutation.
+
+---
+
 ## OWNER-REJECTED FEATURE BRANCH RETIREMENT (2026-11-02 UTC)
 
 - **Objective:** Archive and retire the two old feature branches the owner explicitly rejected: `fix/517-permanent-optout-20261013` and `feat/cinema-rolling-supervised-worker-20261014`. Do not remove existing voice-consent checks or other live functionality from main.
