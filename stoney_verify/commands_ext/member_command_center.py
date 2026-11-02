@@ -1022,14 +1022,18 @@ async def _show_stored_member_history(
             discord.utils.escape_mentions(discord.utils.escape_markdown(str(role.name)[:34]))
             for role in getattr(live_member, "roles", [])[1:]
         ]
-        embed.insert_field_at(
-            1,
+        # Reuse the existing membership section instead of adding another
+        # tall field to the phone screen.
+        embed.set_field_at(
+            0,
             name="Live Discord facts (checked now)",
             value=(
-                f"Display: **{display}**\\n"
-                f"Account created: `{created}`\\n"
-                f"Current server join: `{joined}`\\n"
-                f"Current roles ({len(role_names)}): "
+                _intelligence_presence_text(presence)
+                + "\\n"
+                + f"Display: **{display}**\\n"
+                + f"Account created: `{created}`\\n"
+                + f"Current server join: `{joined}`\\n"
+                + f"Current roles ({len(role_names)}): "
                 + (", ".join(role_names[:5]) or "none")
             ).replace("\\n", "\n")[:1024],
             inline=False,
