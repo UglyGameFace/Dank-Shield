@@ -52,3 +52,34 @@ def test_destructive_member_actions_ack_before_remote_work_and_release_before_au
     lock_block = block[lock_at:reply_at]
     assert "record_member_action" not in lock_block
     assert "Discord did not confirm the {self.action} in time." in block
+
+
+def test_successful_member_action_audit_invalidates_cached_evidence(monkeypatch):
+    from stoney_verify.tickets_new.member_intelligence_cache import (
+        STAFF_MEMBER_INTELLIGENCE_CACHE as cache,
+    )
+
+    async def completed_write(*args, **kwargs):
+        _ = (args, kwargs)
+        return True
+
+    async def history():
+        return {
+            "ok": True, "source_status": {"events": "sampled"},
+            "member": {"username": "Member"},
+        }
+
+    async def steps():
+        cache.clear()
+        await cache.get_or_load(("88", "99", 30), history)
+        assert cache._entries
+        monkeypatch.setattr(common.asyncio, "to_thread", completed_write)
+        saved = await common.record_member_action(
+            guild_id=88, actor_id=11, target_id=99,
+            action="warn", reason="verified staff action",
+        )
+        assert saved is True
+        assert not cache._entries
+        cache.clear()
+
+    asyncio.run(steps())
