@@ -786,6 +786,9 @@ def _historical_member_embed(
     events = snapshot.get("event_summary") or {}
     tickets = snapshot.get("ticket_summary") or {}
     names = snapshot.get("name_history") or {}
+    feed = snapshot.get("activity_feed_summary") or {}
+    feed_rows = snapshot.get("recent_feed_events") or []
+    activity_ledger = snapshot.get("activity_ledger") or {}
     label = (
         member.get("display_name") or member.get("username")
         or next(iter(names.get("all_names") or []), None)
@@ -822,6 +825,12 @@ def _historical_member_embed(
             for n in all_names[:5]
         )
         join_text += f"\\nRetained names: {past_names}"
+    last_tracked = activity_ledger.get("last_activity_at")
+    if last_tracked:
+        tracked_type = _plain(str(activity_ledger.get("last_activity_type") or "unknown"), 32)
+        join_text += (
+            f"\\nTracked activity: `{str(last_tracked)[:32]}` ({tracked_type})"
+        )
     embed.add_field(name="Live membership", value=_intelligence_presence_text(presence), inline=False)
     embed.add_field(name="Membership History", value=join_text.replace("\\n", "\n")[:1024], inline=False)
     recent = snapshot.get("recent_joins") or []
@@ -882,14 +891,33 @@ def _historical_member_embed(
         title = _plain(str(event.get("title") or event.get("reason") or ""), 65)
         event_detail_lines.append(f"• `{when}` {kind}" + (f": {title}" if title else ""))
     event_details = "\\n".join(event_detail_lines)
+    feed_detail_lines = []
+    for record in feed_rows[:3]:
+        when = str(record.get("created_at") or "unknown")[:16]
+        family = _plain(str(record.get("event_family") or "unknown"), 26)
+        kind = _plain(str(record.get("event_type") or "unknown"), 28)
+        reason = _plain(str(record.get("title") or record.get("reason") or ""), 55)
+        feed_detail_lines.append(
+            f"• `{when}` [{family}] {kind}" + (f": {reason}" if reason else "")
+        )
+    feed_details = "\\n".join(feed_detail_lines)
+    feed_line = ""
+    if sample_limits.get("activity_feed"):
+        feed_line = (
+            f"\\nActivity feed (up to {sample_limits['activity_feed']}): "
+            f"**{feed.get('total', 0)}** records, "
+            f"**{feed.get('moderation_count', 0)}** moderation."
+        )
     embed.add_field(
         name="Activity & Moderation Evidence",
         value=(
-            f"Recent retained events (up to {sample_limits.get('events', 30)}): **{events.get('total', 0)}** • "
+            f"Member events (up to {sample_limits.get('events', 30)}): **{events.get('total', 0)}** • "
             f"Moderation: **{events.get('moderation_count', 0)}**\\n"
-            f"Last event: `{str(events.get('latest_event_type') or 'unknown')[:65]}`\\n"
-            f"Types: {type_text}"
-            + (f"\\nRecent examples:\\n{event_details}" if event_details else "")
+            f"Last member event: `{str(events.get('latest_event_type') or 'unknown')[:65]}`"
+            + feed_line
+            + (f"\\nRecent feed records:\\n{feed_details}" if feed_details else "")
+            + (f"\\nMember-event sample:\\n{event_details}" if event_details and not feed_details else "")
+            + (f"\\nTypes: {type_text}" if not feed_details else "")
         ).replace("\\n", "\n")[:1024],
         inline=False,
     )
@@ -924,14 +952,16 @@ def _historical_member_embed(
         note = "Available readbacks are retained minimums, not lifetime totals."
     no_records = not (
         snapshot.get("recent_joins") or snapshot.get("recent_events")
-        or snapshot.get("recent_tickets") or verdicts
+        or snapshot.get("recent_tickets") or snapshot.get("recent_feed_events")
+        or activity_ledger or verdicts
         or member.get("username") or member.get("joined_at")
     )
     if no_records:
         note += " No records returned; Discord cannot restore uncollected or deleted history."
     samples = (
         f"Readback limits: {sample_limits.get('joins', 15)} joins, "
-        f"{sample_limits.get('events', 30)} events, "
+        f"{sample_limits.get('events', 30)} member events, "
+        f"{sample_limits.get('activity_feed', 0)} feed records, "
         f"{sample_limits.get('tickets', 15)} tickets."
     )
     synced = str(member.get("synced_at") or member.get("updated_at") or "unknown")
@@ -967,6 +997,7 @@ async def _show_stored_member_history(
                 get_member_context_snapshot(
                     guild_id=guild_id, user_id=user_id,
                     ticket_limit=15, event_limit=30, join_limit=15,
+                    include_extended_intelligence=True,
                 ),
                 asyncio.to_thread(
                     get_member_review_history,
