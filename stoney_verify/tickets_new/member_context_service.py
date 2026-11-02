@@ -1294,6 +1294,7 @@ async def get_member_context_snapshot(
         open_ticket = _normalize_ticket_row_light(open_ticket_raw) if isinstance(open_ticket_raw, dict) else None
     except Exception as e:
         print(f"⚠️ member_context_service.get_member_context_snapshot open-ticket lookup failed: {repr(e)}")
+        source_status["open_ticket"] = "unavailable"
         open_ticket = None
 
     # A busy member's join event may be older than the recent activity window.
