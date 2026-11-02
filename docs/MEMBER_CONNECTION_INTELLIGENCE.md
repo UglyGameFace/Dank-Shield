@@ -62,6 +62,43 @@ History counts shown in **Stored History** are explicitly labeled as bounded
 recent readbacks or recorded minimums, not complete lifetimes. Live membership
 is still checked through Discord REST; unknown stored status cannot replace it.
 
+## External safety sources (no third-party bots)
+
+The owner-only **External Sources** button on the current-member and
+Connections review views performs **explicit, on-demand**, bounded lookups.
+They are never a global guild scan, automatic action, training set, relationship
+profile or proof that anyone committed misconduct. Provider errors, missing
+credentials and mismatched identities remain **unavailable**, never safe.
+
+- **Protector**: `GET /api/v1/blacklist/{user_id}`, requires
+  `DANK_PROTECTOR_API_KEY`. Free rate: 10/minute, 500/month, provider enforced.
+  Returns an account blacklist flag without underlying evidence.
+- **Discord Reviews**: user reputation endpoint by *currently verified*
+  username; requires `DANK_DISCORDREVIEWS_API_KEY`. Responses must carry
+  exactly the requested Discord ID or they are rejected. Free: 100/hour.
+  Negative public reviews are opinions, not verified incidents.
+- **CheaterStats**: only its documented game **ban-record count** endpoint,
+  not external Discord server memberships, role tracking or social affiliations.
+  Paid, 10 provider tokens per lookup. Requires both
+  `DANK_CHEATERSTATS_API_KEY` and explicit
+  `DANK_CHEATERSTATS_PAID_LOOKUPS=1` before any billable check.
+- **Trustify / Project Redacted**: direct official public search links and
+  `manual_review` only; public API routes could not be verified and must not
+  be scraped or invented. No keys, bots or page scraping.
+- **Discord AntiScam**: separate **Check Scam Domain** button. Loads a bounded,
+  cached domain TXT list from its documented fixed GitHub URL. This source was
+  archived in October 2026; findings are historical, potentially stale. The bot
+  never opens user-submitted URLs and only checks hostnames against the cached
+  list; no match is **not** proof a link is safe.
+
+Provider credentials are environment secrets on Discloud, never committed to
+GitHub or shown in the UI. Results are ephemeral, never added to the permanent
+member ledger or automatically published. A 15-minute per-process cache avoids
+repeat provider requests but is **not** a durable global quota ledger. Providers
+enforce limits; scale-out or unattended lookups would require persistent
+budget/receipt accounting before enabling them. No background sampling,
+automatic bans, paid calls by default or inferred identity/relationship links.
+
 ## Original investigation affordances
 
 Select current member → **Connections**, **Recent Ban Connections**, **Connections by ID** and **Stored History** remain available. Ban status is verified against Discord and a failed lookup is never treated as banned. Existing staff-verdict, moderated-action permissions, role hierarchy, verification and join safeguards are preserved.
