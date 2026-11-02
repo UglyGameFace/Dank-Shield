@@ -105,7 +105,7 @@ def test_optional_interaction_ingress_is_private_and_idempotent(monkeypatch, cap
     assert "on_interaction" in listeners
 
     interaction = SimpleNamespace(
-        data={"name": "test\\nprivate", "custom_id": "secret-token"},
+        data={"name": "test\nprivate", "custom_id": "secret-token"},
         type=SimpleNamespace(name="application_command"),
         user=SimpleNamespace(id=987654321),
         guild_id=123456789,
@@ -119,7 +119,7 @@ def test_optional_interaction_ingress_is_private_and_idempotent(monkeypatch, cap
     assert "secret-token" not in output
     assert "987654321" not in output
     assert "123456789" not in output
-    assert "test\\nprivate" not in output
+    assert "test\nprivate" not in output
 
 
 def test_interaction_trace_disabled_by_default(monkeypatch) -> None:
@@ -141,7 +141,7 @@ def test_interaction_trace_disabled_by_default(monkeypatch) -> None:
     assert health.attach_process_health(FakeBot()) is True
     assert listeners == ["on_ready", "on_connect", "on_disconnect", "on_resumed"]
     assert health._safe_trace_label("x" * 100) == "x" * 64
-    assert health._safe_trace_label("bad\\nname") == "bad_name"
+    assert health._safe_trace_label("bad\nname") == "bad_name"
 
 
 def test_process_health_is_explicit_startup_owner_but_not_dormant_inventory() -> None:
