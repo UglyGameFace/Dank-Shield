@@ -712,6 +712,11 @@ class IntelligenceTargetView(OwnedView):
         await interaction.response.defer(ephemeral=True)
         await _show_connection_report(interaction, self.owner_id, self.member_id)
 
+    @discord.ui.button(label="Safety Reports", emoji="🛡️", style=discord.ButtonStyle.secondary, row=1)
+    async def safety_reports(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _show_native_safety_reports(interaction, self.member_id)
+
     @discord.ui.button(label="Back to Intelligence", emoji="◀️", style=discord.ButtonStyle.secondary, row=1)
     async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
@@ -747,8 +752,8 @@ def _historical_member_embed(
         timestamp=discord.utils.utcnow(),
     )
     join_text = (
-        f"Joins: **{joins.get('times_joined', 0)}** • "
-        f"Departures: **{joins.get('times_left', 0)}**\\n"
+        f"Recorded joins (at least): **{joins.get('times_joined', 0)}** • "
+        f"Recorded departures (at least): **{joins.get('times_left', 0)}**\\n"
         f"Last joined: `{str(joins.get('latest_joined_at') or 'unknown')[:50]}`\\n"
         f"Left: `{str(joins.get('left_at') or 'not recorded')[:50]}`\\n"
         f"Last seen: `{str(joins.get('last_seen_at') or 'unknown')[:50]}`"
@@ -810,7 +815,7 @@ def _historical_member_embed(
     embed.add_field(
         name="Activity & Moderation Evidence",
         value=(
-            f"Retained events: **{events.get('total', 0)}** • "
+            f"Recent retained events (up to 12): **{events.get('total', 0)}** • "
             f"Moderation: **{events.get('moderation_count', 0)}**\\n"
             f"Last event: `{str(events.get('latest_event_type') or 'unknown')[:65]}`\\n"
             f"Types: {type_text}"
@@ -820,7 +825,7 @@ def _historical_member_embed(
     embed.add_field(
         name="Tickets & Staff Decisions",
         value=(
-            f"Retained tickets: **{tickets.get('total', 0)}** • "
+            f"Recent retained tickets (up to 10): **{tickets.get('total', 0)}** • "
             f"Staff verdicts: **{len(verdicts)}** (last 10 queried)\\n"
             + "\\n".join(
                 f"• {str((row.get('metadata') or {}).get('verdict_label') or (row.get('metadata') or {}).get('verdict') or 'Decision')[:42]}"
@@ -1051,6 +1056,11 @@ class ConnectionReportView(OwnedView):
             view=OwnerAffiliationChoiceView(self.owner_id, self.target_id),
         )
 
+    @discord.ui.button(label="Safety Reports", emoji="🛡️", style=discord.ButtonStyle.secondary, row=2)
+    async def safety_reports(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _show_native_safety_reports(interaction, self.target_id)
+
     @discord.ui.button(label="Intelligence Menu", emoji="↩️", style=discord.ButtonStyle.secondary, row=2)
     async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
@@ -1066,6 +1076,37 @@ def _is_guild_owner_for_affiliations(interaction: discord.Interaction) -> bool:
         and getattr(guild, "owner_id", None) is not None
         and int(interaction.user.id) == int(guild.owner_id)
     )
+
+
+async def _show_native_safety_reports(
+    interaction: discord.Interaction, target_id: int,
+) -> None:
+    """Owner-only read of Dank Shield's own opt-in incident network.
+
+    This intentionally does not infer friendships, server memberships or
+    alternate identities. Other guilds' reports remain explicit owner claims.
+    """
+    if not _is_guild_owner_for_affiliations(interaction):
+        await reply_ephemeral(
+            interaction, "Only the physical server owner can inspect shared safety reports."
+        )
+        return
+    if not interaction.response.is_done():
+        await interaction.response.defer(ephemeral=True)
+    from stoney_verify.network_safety import reports_for_owner
+    from .public_network_safety import NetworkReportPages
+    try:
+        reports = await asyncio.wait_for(
+            reports_for_owner(interaction.guild, target_id, interaction.client),
+            timeout=8,
+        )
+    except Exception:
+        await reply_ephemeral(
+            interaction, "Safety reports are unavailable. No negative finding is implied."
+        )
+        return
+    view = NetworkReportPages(target_id, reports)
+    await _replace_panel(interaction, embed=view.embed(), view=view)
 
 
 class OwnerAffiliationModal(discord.ui.Modal, title="Owner Affiliate Review"):
