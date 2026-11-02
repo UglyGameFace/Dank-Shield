@@ -124,9 +124,10 @@ def _intelligence_embed() -> discord.Embed:
     return discord.Embed(
         title="🧠 Member Intelligence",
         description=(
-            "Select a member, review recent bans, or inspect a historical account. "
-            "Connection evidence, join history and three simple server controls share this screen. "
-            "Links do not prove leaked information, friendship, or ban evasion."
+            "Select a member to see one evidence report with buttons for history, "
+            "connections, Safety Reports and External Sources. Historical accounts can "
+            "be reviewed by ID. Missing records are not proof of a clean history, "
+            "and reported connections are not proof of wrongdoing."
         ),
         color=discord.Color.blurple(),
         timestamp=discord.utils.utcnow(),
@@ -592,19 +593,17 @@ class IntelligenceMemberSelect(discord.ui.UserSelect):
         if not await require_review(interaction):
             return
         member, status = await _resolve_intelligence_member(interaction.guild, user_id)
-        if member is None:
-            # Historical evidence is useful even when Discord returns 404 or fails.
-            await _show_stored_member_history(interaction, user_id, presence=status)
-            return
-        view = IntelligenceTargetView(
-            owner_id=self.parent_view.owner_id,
-            member=member,
+        # Exactly ONE account review panel: history and all investigation
+        # actions stay together. A follow-up history message used to visually
+        # bury the buttons shown by the first response on Discord mobile.
+        view = (
+            IntelligenceTargetView(owner_id=self.parent_view.owner_id, member=member)
+            if member is not None else
+            HistoricalIntelligenceTargetView(self.parent_view.owner_id, user_id)
         )
-        embed = member_detail_embed(member, None)
-        embed.add_field(name="Live membership", value=_intelligence_presence_text(status), inline=False)
-        await _replace_panel(interaction, embed=embed, view=view)
-        # Show the retained join/source report on selection, not behind another menu.
-        await _show_stored_member_history(interaction, user_id, presence=status)
+        await _show_stored_member_history(
+            interaction, user_id, presence=status, view=view,
+        )
 
 
 class IntelligenceMenuView(OwnedView):
@@ -730,6 +729,44 @@ class IntelligenceTargetView(OwnedView):
 
 
 
+class HistoricalIntelligenceTargetView(OwnedView):
+    """Keep the same investigation actions available for departed/banned IDs."""
+
+    def __init__(self, owner_id: int, target_id: int) -> None:
+        self.target_id = int(target_id)
+        super().__init__(owner_id)
+
+    @discord.ui.button(label="Stored History", emoji="🧾", style=discord.ButtonStyle.secondary, row=0)
+    async def history(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _show_stored_member_history(
+            interaction, self.target_id, view=HistoricalIntelligenceTargetView(self.owner_id, self.target_id),
+        )
+
+    @discord.ui.button(label="Connections", emoji="🔗", style=discord.ButtonStyle.secondary, row=0)
+    async def connections(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        if not await require_review(interaction):
+            return
+        await interaction.response.defer(ephemeral=True)
+        await _show_connection_report(interaction, self.owner_id, self.target_id)
+
+    @discord.ui.button(label="Safety Reports", emoji="🛡️", style=discord.ButtonStyle.secondary, row=1)
+    async def safety_reports(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _show_native_safety_reports(interaction, self.target_id)
+
+    @discord.ui.button(label="External Sources", emoji="🔎", style=discord.ButtonStyle.secondary, row=1)
+    async def external_sources(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _show_external_sources(interaction, self.target_id)
+
+    @discord.ui.button(label="Intelligence Menu", emoji="↩️", style=discord.ButtonStyle.secondary, row=2)
+    async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _replace_panel(interaction, embed=_intelligence_embed(), view=IntelligenceMenuView(self.owner_id))
+
+
 def _historical_member_embed(
     user_id: int, snapshot: dict[str, Any], verdicts: list[dict[str, Any]],
     *, presence: str = "unchecked",
@@ -852,6 +889,7 @@ def _historical_member_embed(
 
 async def _show_stored_member_history(
     interaction: discord.Interaction, user_id: int, *, presence: Optional[str] = None,
+    view: Optional[discord.ui.View] = None,
 ) -> None:
     """Read historical guild records without fetch_user() or a live member."""
     if not interaction.response.is_done():
@@ -888,15 +926,30 @@ async def _show_stored_member_history(
     snapshot = context_result if isinstance(context_result, dict) and context_result.get("ok") else {}
     verdicts = feedback_result if isinstance(feedback_result, list) else []
     if not snapshot and not verdicts:
-        return await interaction.followup.send(
-            "⚠️ Stored member records could not be read. This does not mean the user's history was deleted.",
-            ephemeral=True,
+        if view is None:
+            return await reply_ephemeral(
+                interaction,
+                "⚠️ Stored member records could not be read. This does not mean their history was deleted.",
+            )
+        embed = discord.Embed(
+            title="🧠 Member Intelligence • Data unavailable",
+            description=(
+                f"Account: `{user_id}`\\n"
+                "Historical database read failed. This is not a clean-history "
+                "result; the investigation buttons remain available."
+            ).replace("\\\\n", "\\n"),
+            color=discord.Color.orange(),
         )
-    await interaction.followup.send(
-        embed=_historical_member_embed(user_id, snapshot, verdicts, presence=presence),
-        ephemeral=True,
-        allowed_mentions=discord.AllowedMentions.none(),
-    )
+        embed.add_field(name="Live membership", value=_intelligence_presence_text(presence), inline=False)
+    else:
+        embed = _historical_member_embed(user_id, snapshot, verdicts, presence=presence)
+    if view is not None:
+        await _replace_panel(interaction, embed=embed, view=view)
+    else:
+        await interaction.followup.send(
+            embed=embed, ephemeral=True,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
 
 
 
@@ -1472,7 +1525,11 @@ class MemberHistoryByIdModal(discord.ui.Modal, title="Stored Member Intelligence
         raw = str(self.user_id.value or "").strip()
         if not raw.isascii() or not raw.isdecimal() or not 15 <= len(raw) <= 22:
             return await reply_ephemeral(interaction, "❌ Enter a valid Discord user ID (15–22 digits).")
-        await _show_stored_member_history(interaction, int(raw))
+        target_id = int(raw)
+        await _show_stored_member_history(
+            interaction, target_id,
+            view=HistoricalIntelligenceTargetView(int(interaction.user.id), target_id),
+        )
 
 
 class OperationsSafetyMenuView(OwnedView):
