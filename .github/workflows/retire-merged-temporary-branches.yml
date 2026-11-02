@@ -517,6 +517,29 @@ jobs:
               }
               const reconciled = mode.endsWith('-reconciled');
               const deleting = mode.startsWith('delete-');
+              // Historical integration aliases are not ordinary merged PR heads.
+              // Pin each original commit; their exact changed-path trees must
+              // match the immutable PR merge before any owner-approved deletion.
+              const historicalIntegrationRefs = reconciled ? [
+                {name:'integration/pr-113-current-main',
+                 sha:'e55228c38e9ebcc26bc79718058d44fd31352875',
+                 pull:113, expectedAhead:3, expectedFiles:9,
+                 originalRef:'fix/member-risk-card-and-update-noise',
+                 prHead:'c3779d8fbe1b87fff99ca44d595e91324541dac3',
+                 merge:'53524b368682a33c0149a818a2e336c8640d2c86'},
+                {name:'integration/pr-113-squash-current-main',
+                 sha:'c3779d8fbe1b87fff99ca44d595e91324541dac3',
+                 pull:113, expectedAhead:1, expectedFiles:9,
+                 originalRef:'fix/member-risk-card-and-update-noise',
+                 prHead:'c3779d8fbe1b87fff99ca44d595e91324541dac3',
+                 merge:'53524b368682a33c0149a818a2e336c8640d2c86'},
+                {name:'integration/pr-126-current-main',
+                 sha:'e51fe07cd33233860aa96c35bc1a79109d73677d',
+                 pull:126, expectedAhead:1, expectedFiles:32,
+                 originalRef:'feature/live-profile-cards',
+                 prHead:'e51fe07cd33233860aa96c35bc1a79109d73677d',
+                 merge:'a3ba33007b9ef542460ab1b210f9ce8c3ec3db08'}
+              ] : [];
               // Reconciled refs require a proven merged replacement, not just
               // an owner's desire to remove an old branch.
               if (reconciled) {
@@ -837,6 +860,93 @@ jobs:
                   throw new Error('Manual reminder replacement evidence changed: ' + path);
                 }
               }
+                // Verify ALL original divergent commits are covered by the
+                // merged PR's exact changed paths, including deleted/renamed
+                // files. A squash merge or matching feature name alone is
+                // never sufficient evidence to discard an integration ref.
+                const integrationPrCache = new Map();
+                for (const item of historicalIntegrationRefs) {
+                  let record = integrationPrCache.get(item.pull);
+                  if (!record) {
+                    const pr = (await github.rest.pulls.get({
+                      owner,repo,pull_number:item.pull
+                    })).data;
+                    if (!pr.merged_at || pr.state !== 'closed' ||
+                        pr.base?.ref !== 'main' ||
+                        pr.base?.repo?.full_name !== owner + '/' + repo ||
+                        pr.head?.repo?.full_name !== owner + '/' + repo ||
+                        pr.head?.ref !== item.originalRef ||
+                        pr.head?.sha !== item.prHead ||
+                        pr.merge_commit_sha !== item.merge) {
+                      throw new Error('Integration PR provenance changed: #' + item.pull);
+                    }
+                    const ancestry = (await github.rest.repos.compareCommits({
+                      owner,repo,base:item.merge,head:currentMain
+                    })).data;
+                    if (ancestry.behind_by !== 0 ||
+                        !['ahead','identical'].includes(ancestry.status)) {
+                      throw new Error('Integration PR merge not in main: #' + item.pull);
+                    }
+                    const files = await github.paginate(github.rest.pulls.listFiles,{
+                      owner,repo,pull_number:item.pull,per_page:100
+                    });
+                    if (files.length !== item.expectedFiles ||
+                        new Set(files.map(f => f.filename)).size !== files.length ||
+                        files.some(f => !['added','modified','removed','renamed','copied','changed']
+                          .includes(f.status))) {
+                      throw new Error('Integration PR changed-path inventory differs: #' + item.pull);
+                    }
+                    const mergedTree = (await github.rest.git.getTree({
+                      owner,repo,tree_sha:item.merge,recursive:'true'
+                    })).data;
+                    if (mergedTree.truncated) {
+                      throw new Error('Integration PR merged tree truncated: #' + item.pull);
+                    }
+                    record = {files, mergedTree};
+                    integrationPrCache.set(item.pull,record);
+                  }
+                  const graph = (await github.rest.repos.compareCommits({
+                    owner,repo,base:currentMain,head:item.sha
+                  })).data;
+                  if (graph.ahead_by !== item.expectedAhead ||
+                      !graph.merge_base_commit?.sha) {
+                    throw new Error('Integration branch history changed: ' + item.name);
+                  }
+                  const uniqueDelta = (await github.rest.repos.compareCommits({
+                    owner,repo,base:graph.merge_base_commit.sha,head:item.sha
+                  })).data;
+                  if (uniqueDelta.status !== 'ahead' ||
+                      uniqueDelta.ahead_by !== item.expectedAhead ||
+                      uniqueDelta.behind_by !== 0 ||
+                      !Array.isArray(uniqueDelta.files) ||
+                      uniqueDelta.files.length !== item.expectedFiles ||
+                      uniqueDelta.files.length >= 300 ||
+                      JSON.stringify(uniqueDelta.files.map(f => f.filename).sort()) !==
+                        JSON.stringify(record.files.map(f => f.filename).sort())) {
+                    throw new Error('Unreconciled integration branch paths: ' + item.name);
+                  }
+                  const oldTree = (await github.rest.git.getTree({
+                    owner,repo,tree_sha:item.sha,recursive:'true'
+                  })).data;
+                  if (oldTree.truncated) {
+                    throw new Error('Integration branch tree truncated: ' + item.name);
+                  }
+                  const mergedPaths = new Map(record.mergedTree.tree.map(
+                    entry => [entry.path,entry.sha]
+                  ));
+                  const originalPaths = new Map(oldTree.tree.map(
+                    entry => [entry.path,entry.sha]
+                  ));
+                  for (const file of record.files) {
+                    for (const path of [file.filename,file.previous_filename].filter(Boolean)) {
+                      if ((mergedPaths.get(path) || null) !==
+                          (originalPaths.get(path) || null)) {
+                        throw new Error('Integration branch has unmerged content: ' +
+                          item.name + ' / ' + path);
+                      }
+                    }
+                  }
+                }
               }
               const rejectedHeads = reconciled ? [
                 {name:'fix/trace-application-command-ingress-20261007',
@@ -850,7 +960,8 @@ jobs:
                 {name:'fix/share-router-existing-channel-nondestructive-20261024',
                  sha:'b4a1ab8d68b2cf2e96aac9148b6cf04a400d4934'},
                 {name:'fix/verify-manual-all-pending-20261025',
-                 sha:'381dc5bab68f9a1589dac60be675ffeff162d993'}
+                 sha:'381dc5bab68f9a1589dac60be675ffeff162d993'},
+                ...historicalIntegrationRefs.map(({name,sha}) => ({name,sha}))
               ] : [
                 {name:'feat/cinema-rolling-supervised-worker-20261014',
                  sha:'8bccd1ee9a5203cebc7862eec8addd48ba9706a6'},
