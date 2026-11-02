@@ -75,7 +75,7 @@ def test_reviewed_merged_branch_requires_actual_integration() -> None:
         "branchGraph.ahead_by !== 0",
         "base: mainSha, head: branch.commit.sha",
         "graph.behind_by !== 0",
-        "Date.parse(pr.merged_at) > cutoff",
+        "Date.parse(pr.merged_at) > Date.now()",
         "currentMain !== mainSha",
         "current.commit.sha !== item.sha",
         "nowOpen.some(pr => pr.head.ref === item.name || pr.base.ref === item.name)",
@@ -139,7 +139,9 @@ def test_reviewed_inventory_uses_one_paged_pr_index_without_loosening_guards() -
     assert "head: owner + ':' + branch.name" not in reviewed
     assert "branchGraph.ahead_by !== 0" in reviewed
     assert "graph.behind_by !== 0" in reviewed
-    assert "Date.parse(pr.merged_at) > cutoff" in reviewed
+    assert "Date.parse(pr.merged_at) > cutoff" not in reviewed
+    assert "Date.parse(pr.merged_at) > Date.now()" in reviewed
+    assert "Date.parse(pr.merged_at) > cutoff" in text.split("const allBranches =", 1)[1]
     assert "deleteReviewed && process.env.CLEANUP_CONFIRMATION !== token" in reviewed
 
 
@@ -168,6 +170,7 @@ const safeName = name => name.startsWith('feat/');
 const cutoff = Date.now() - 48 * 60 * 60 * 1000;
 const branches = [
   {name:'feat/integrated',protected:false,commit:{sha:'oldsha'}},
+  {name:'feat/recent-merged',protected:false,commit:{sha:'recentsha'}},
   {name:'feat/unique',protected:false,commit:{sha:'uniquesha'}},
   {name:'feat/unique-bad',protected:false,commit:{sha:'badsha'}},
   {name:'feat/mode-bad',protected:false,commit:{sha:'modesha'}},
@@ -185,6 +188,7 @@ const mkpr = (ref, sha, n) => ({
 });
 const records = [
   mkpr('feat/integrated','oldsha',1),
+  {...mkpr('feat/recent-merged','recentsha',12), merged_at:new Date().toISOString()},
   mkpr('feat/unique','uniquesha',2),
   mkpr('feat/unique-bad','badsha',8),
   mkpr('feat/mode-bad','modesha',9),
@@ -238,6 +242,7 @@ console.log(JSON.stringify({eligible,paginated,compared}));
     assert actual["paginated"] == 1
     assert actual["eligible"] == [
         {"name": "feat/integrated", "sha": "oldsha", "pr": 1},
+        {"name": "feat/recent-merged", "sha": "recentsha", "pr": 12},
         {"name": "feat/unique", "sha": "uniquesha", "pr": 2},
         {"name": "feat/deleted", "sha": "deletedsha", "pr": 11},
     ]
