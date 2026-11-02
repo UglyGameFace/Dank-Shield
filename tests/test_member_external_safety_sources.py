@@ -146,3 +146,31 @@ def test_non_owner_cannot_fetch_external_account_data(monkeypatch):
     caller.response.defer.assert_not_awaited()
     fetched.assert_not_awaited()
     reply.assert_awaited_once()
+
+
+def test_manual_search_buttons_use_only_official_provider_pages():
+    import discord
+
+    view = center.ExternalSourcesView(123456789012345678)
+    links = {
+        child.label: child.url for child in view.children
+        if child.style == discord.ButtonStyle.link
+    }
+    assert links == {
+        "Open Trustify": "https://trustify.fun/scammers",
+        "Open Redacted": "https://project-redacted.org/",
+    }
+    assert not any("api/" in url for url in links.values())
+
+
+def test_documented_key_registration_links_and_disabled_paid_default():
+    from pathlib import Path
+
+    repo = Path(__file__).resolve().parents[1]
+    doc = (repo / "docs/EXTERNAL_SAFETY_PROVIDER_SETUP.md").read_text()
+    assert "https://protector-bot.com/developers" in doc
+    assert "https://discordreviews.com/settings" in doc
+    assert "https://cheaterstats.cc/v2/api" in doc
+    assert "DANK_CHEATERSTATS_PAID_LOOKUPS=0" in doc
+    assert "DANK_CHEATERSTATS_PAID_LOOKUPS=1" in doc
+    assert "Do not" in doc
