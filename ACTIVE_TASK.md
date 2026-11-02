@@ -1,3 +1,12 @@
+## INTEGRATE MISSING STACKED CHANNEL-PICKER WORK (2026-11-02)
+
+- **Evidence:** main `6f92f450e7b78313869c084505daad127667e05a` has 35 branches, zero open PRs, exact-main CI #41440443336 passed. PR #724 merged to main, but PR #725 was merged **into a feature branch**, not main. Current main lacked the PR #725 Guided Setup, legacy setup wizard, captions, and Roles Center Use This Channel controls, and lacked its regression test. `fix/legacy-use-this-channel-20261025` is an ancestor of `fix/shared-use-this-channel-20261025`, whose newer commit contains the stacked PR #725 merge.
+- **Implementation:** `fix/integrate-stacked-channel-picker-20261102` forward-ports PR #725's actual source changes using exact matching hunks against current main, retaining current additional workflow checks. Adds original PR #725 regression tests, workflow coverage and docs. The shortcuts reuse current text-channel resolver, existing permission/save handlers and named log-slot selection; no schema or production changes.
+- **Validation:** PR-head tests and CI pending. Before/after branch count currently 35 to 36 with this work branch; actual branches deleted this run at this checkpoint: **0**. Do not retire either historical picker branch until PR-head and exact-main CI pass and the integrated code is confirmed, then archive SHA tags and delete through the owner-authenticated workflow.
+- **Production boundaries:** Owner-designated Discloud GitHub branch is main, not proof of live commit. No deployment, credentials, host, or database changes. Dedicated Supabase `viamriafkbqhquvrsnua` remains intended primary; preserve IdleGrowOp rollback source and Discloud PostgreSQL backup candidate. Independent off-Discloud backup and live canary are unverified.
+
+---
+
 ## OWNER-REVIEWED IDLEGROW AUDIT REF RETIREMENT (2026-11-02 UTC)
 
 - **Objective:** Reduce the remaining obsolete branches without removing any independent backup or rollback source.

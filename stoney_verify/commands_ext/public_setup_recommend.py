@@ -13,6 +13,8 @@ from typing import Any, Optional
 
 import discord
 
+from ..ui.current_channel import current_text_channel
+
 from ..globals import now_utc
 from ..guild_config import get_guild_config
 from ..setup_service_state import (
@@ -3038,6 +3040,29 @@ class GuidedExistingChannelSelect(
         )
 
 
+class GuidedUseCurrentChannelButton(discord.ui.Button):
+    def __init__(self, *, requirement_key: str) -> None:
+        super().__init__(
+            label="Use This Channel", emoji="📍",
+            style=discord.ButtonStyle.secondary,
+            custom_id=f"dank_setup_guided_use_current:{requirement_key}"[:100],
+            row=1,
+        )
+        self.requirement_key = requirement_key
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        if not await solid._require_setup_permission(interaction):
+            return
+        channel = current_text_channel(interaction, require_bot_send=False)
+        if channel is None:
+            return await interaction.response.send_message(
+                "❌ Open this setup step in the target text channel, or "
+                "choose another channel from the picker.",
+                ephemeral=True,
+            )
+        await _guided_save_existing_item(interaction, self.requirement_key, channel)
+
+
 class GuidedCreateItemButton(discord.ui.Button):
     def __init__(self, *, requirement_key: str) -> None:
         self.requirement_key = str(requirement_key)
@@ -3118,6 +3143,13 @@ class GuidedOneItemView(discord.ui.View):
                         channel_type=channel_type,
                     )
                 )
+
+        if kind == "text":
+            self.add_item(
+                GuidedUseCurrentChannelButton(
+                    requirement_key=self.requirement_key,
+                )
+            )
 
         self.add_item(
             GuidedCreateItemButton(

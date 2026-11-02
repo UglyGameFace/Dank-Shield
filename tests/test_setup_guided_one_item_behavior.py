@@ -121,7 +121,10 @@ def test_each_requirement_builds_one_combined_screen(
     assert "Create this for me" in labels
     assert "Back to Guided Setup" in labels
     assert "Choose one I already have" in labels
-    assert len(view.children) == 3
+    # Only text-channel steps get the fourth Use This Channel shortcut.
+    kind = str(recommend._guided_item_spec(requirement_key).get("kind", ""))
+    assert len(view.children) == (4 if kind == "text" else 3)
+    assert ("Use This Channel" in labels) == (kind == "text")
 
 
 def test_existing_selection_saves_then_advances(

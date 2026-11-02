@@ -59,6 +59,7 @@ on:
 permissions:
   contents: write
   pull-requests: read
+  actions: read
 
 concurrency:
   group: guarded-merged-branch-cleanup
@@ -308,6 +309,18 @@ jobs:
               const allPRs = await github.paginate(github.rest.pulls.list, {
                 owner, repo, state: 'all', per_page: 100
               });
+              // Two stacked feature heads: #724 reached main, but #725 merged
+              // into the feature branch. PR #803 explicitly ports #725 into
+              // main. Retire only these exact SHAs, after that integration
+              // merges, exact-main CI passes, and current main still contains
+              // its executable tests and UI hooks. This is NOT a blanket
+              // exception for old feature branches or backup refs.
+              const stackedPickerHeads = new Map([
+                ['fix/legacy-use-this-channel-20261025',
+                 '65992a7c414ea09a9557c47ac2065636d01faa34'],
+                ['fix/shared-use-this-channel-20261025',
+                 '2416f81a002b3a57da678c6bab1e3c1b84ba3eed']
+              ]);
               const prsByHead = new Map();
               for (const pr of allPRs) {
                 if (pr.head?.repo?.full_name !== fullName || !pr.head.ref) continue;
@@ -335,6 +348,54 @@ jobs:
                     ['behind', 'identical'].includes(branchGraph.status)) {
                   eligible.push({name: branch.name, sha: branch.commit.sha,
                     pr: null, proof: 'ancestor-of-main'});
+                  continue;
+                }
+                if (stackedPickerHeads.has(branch.name)) {
+                  if (stackedPickerHeads.get(branch.name) !== branch.commit.sha) continue;
+                  const port = allPRs.find(pr => pr.number === 803);
+                  if (!port || port.state !== 'closed' || !port.merged_at ||
+                      port.base?.ref !== 'main' ||
+                      port.base?.repo?.full_name !== fullName ||
+                      port.head?.repo?.full_name !== fullName ||
+                      !port.merge_commit_sha) continue;
+                  const portAncestry = (await github.rest.repos.compareCommits({
+                    owner, repo, base: port.merge_commit_sha, head: mainSha
+                  })).data;
+                  if (portAncestry.behind_by !== 0 ||
+                      !['ahead','identical'].includes(portAncestry.status)) continue;
+                  const runs = (await github.rest.actions.listWorkflowRunsForRepo({
+                    owner,repo,head_sha:mainSha,per_page:100
+                  })).data.workflow_runs || [];
+                  if (!runs.some(run => run.name === 'Dank Shield CI' &&
+                      run.status === 'completed' && run.conclusion === 'success')) continue;
+                  const requirements = [
+                    ['tests/test_use_this_channel_legacy.py', null,
+                     'e3b842b66709667651229cd5e4717a81fedc1f60'],
+                    ['stoney_verify/commands_ext/public_setup_picker.py',
+                     '_CurrentLogTargetMenu'],
+                    ['stoney_verify/commands_ext/public_setup_recommend.py',
+                     'GuidedUseCurrentChannelButton'],
+                    ['stoney_verify/commands_ext/public_live_captions.py',
+                     '_save_output_channel'],
+                    ['stoney_verify/roles_center_services.py',
+                     'Use This Channel: Pronouns']
+                  ];
+                  let verified = true;
+                  for (const [path, marker, expectedSha] of requirements) {
+                    const file = (await github.rest.repos.getContent({
+                      owner,repo,path,ref:mainSha
+                    })).data;
+                    if (Array.isArray(file) || !file.sha ||
+                        (expectedSha && file.sha !== expectedSha) ||
+                        (marker && !Buffer.from(file.content || '', 'base64')
+                          .toString('utf8').includes(marker))) {
+                      verified = false;
+                      break;
+                    }
+                  }
+                  if (!verified) continue;
+                  eligible.push({name:branch.name,sha:branch.commit.sha,
+                    pr:803,proof:'stacked-picker-ported-to-main-and-tested'});
                   continue;
                 }
                 if (prs.length !== 1) continue;
