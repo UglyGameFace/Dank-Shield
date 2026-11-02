@@ -1354,7 +1354,7 @@ async def get_member_context_snapshot(
         "ok": not all(value == "unavailable" for value in source_status.values()),
         "source_status": source_status,
         "sample_limits": {
-            "activity_feed": 30 if include_extended_intelligence else 0,
+            **({"activity_feed": 30} if include_extended_intelligence else {}),
             "joins": max(1, min(int(join_limit or 10), 100)),
             "events": max(1, min(int(event_limit or 15), 200)),
             "tickets": max(1, min(int(ticket_limit or 25), 200)),
