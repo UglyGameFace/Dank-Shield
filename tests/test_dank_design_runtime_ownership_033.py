@@ -62,7 +62,7 @@ def test_server_designer_owns_separator_selection_and_preview() -> None:
     server = V2[server_start:server_end]
 
     assert "class DesignServerSeparatorSelect" in server
-    assert 'label="Preview Separator"' in server
+    assert 'label="Preview Separator Only"' in server
     assert 'legacy._build_channel_separator_style_change_plan' in server
     assert 'view=LegacyStyleChangePreviewView(' in server
     assert "legacy.StyleChangeView(" not in server
@@ -119,11 +119,11 @@ def test_server_font_picker_is_native_and_theme_reset_is_predictable() -> None:
 
 
 def test_clean_redesign_is_native_confirmed_and_protection_preserving() -> None:
-    server_start = V2.index("class DesignServerView")
-    server_end = V2.index("def _edit_one_embed", server_start)
-    server = V2[server_start:server_end]
+    history = V2[V2.index("class DesignHistoryView"):V2.index("class DesignHomeView")]
+    server = V2[V2.index("class DesignServerView"):V2.index("def _edit_one_embed")]
 
-    assert 'label="Clean Redesign"' in server
+    assert 'label="Clean Redesign"' in history
+    assert 'label="Clean Redesign"' not in server
     assert "class CleanRedesignConfirmView" in V2
     assert "rule_service.reset_layout_overrides(options)" in V2
     assert "Clear Saved Design Overrides" in V2
@@ -131,14 +131,17 @@ def test_clean_redesign_is_native_confirmed_and_protection_preserving() -> None:
 
 
 def test_design_navigation_acknowledges_before_config_reads() -> None:
-    home_start = V2.index("class DesignHomeView")
-    home_end = V2.index("def _snapshot_matches", home_start)
-    home = V2[home_start:home_end]
+    home = V2[V2.index("class DesignHomeView"):V2.index("def _snapshot_matches")]
+    advanced = V2[V2.index("class DesignAdvancedView"):V2.index("class DesignHomeView")]
 
-    for method_name in ("async def design_server", "async def rules"):
-        start = home.index(method_name)
-        next_method = home.find("\n    @discord.ui.button", start + 1)
-        block = home[start:] if next_method < 0 else home[start:next_method]
+    for owner, method_name in (
+        (home, "async def design_server"),
+        (advanced, "async def rules"),
+        (advanced, "async def history"),
+    ):
+        start = owner.index(method_name)
+        next_method = owner.find("\n    @discord.ui.button", start + 1)
+        block = owner[start:] if next_method < 0 else owner[start:next_method]
         assert "await interaction.response.defer" in block
         assert block.index("await interaction.response.defer") < block.index("await _load_design_options")
 

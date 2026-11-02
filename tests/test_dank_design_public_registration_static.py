@@ -33,17 +33,15 @@ def test_design_group_is_the_only_native_public_registration_owner():
     assert "register_public_design_studio_command" not in STUDIO
 
 
-def test_design_studio_home_is_a_five_plain_language_workflow_hub():
-    assert "🎨 Dank Design Studio" in STUDIO
+def test_design_studio_home_is_four_owner_tasks_not_a_feature_directory():
+    assert "🎨 Server Appearance" in STUDIO
     assert "class DesignHomeView" in STUDIO
-    for label in (
-        "Design Entire Server",
-        "Edit One Category / Channel",
-        "Fix Inconsistent Names",
-        "Saved Rules & Protection",
-        "Undo Last Apply",
-    ):
-        assert f'label="{label}"' in STUDIO
-    home = STUDIO[STUDIO.index("class DesignHomeView"):STUDIO.index("def _undo_preview_embed")]
+    home = STUDIO[STUDIO.index("class DesignHomeView"):STUDIO.index("def _snapshot_matches")]
+    for label in ("Style All Names", "Edit One Item", "Check & Fix", "Advanced"):
+        assert f'label="{label}"' in home
+    assert home.count("@discord.ui.button") == 4
     assert "DesignServerThemeSelect" not in home
     assert "DesignServerStrengthSelect" not in home
+    advanced = STUDIO[STUDIO.index("class DesignAdvancedView"):STUDIO.index("class DesignHomeView")]
+    for label in ("Saved Style Exceptions", "Searchable Names", "History & Reset"):
+        assert f'label="{label}"' in advanced

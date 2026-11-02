@@ -366,7 +366,7 @@ def test_all_primary_server_design_customizations_remain_canonical() -> None:
         "Frame / Icons",
         "Icon behavior",
         "Clean Redesign",
-        "Saved Rules & Protection",
+        "Saved Style Exceptions",
         "Undo Last Apply",
     ):
         assert marker in V2_SOURCE

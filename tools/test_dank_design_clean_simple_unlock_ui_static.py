@@ -8,20 +8,17 @@ V2 = (ROOT / "stoney_verify/commands_ext/public_design_studio_v2.py").read_text(
 
 
 def test_home_has_clear_current_workflow() -> None:
-    assert "**Choose a design task below.**" in V2
-    assert "Batch changes use Preview" in V2
-    assert "Renaming one selected item applies immediately" in V2
-    assert "Design Entire Server" in V2
-    assert "Edit One Category / Channel" in V2
-    assert "Fix Inconsistent Names" in V2
-    assert "Saved Rules & Protection" in V2
-    assert "Undo Last Apply" in V2
-    assert "Fix Mismatched Names" not in V2
-    assert "Find & Fix Inconsistencies" not in V2
+    home = V2[V2.index("class DesignHomeView"):V2.index("def _snapshot_matches")]
+    assert "Choose what to do." in V2
+    assert "Every batch is previewed" in V2
+    assert "An individual Rename action takes effect immediately." in V2
+    for label in ("Style All Names", "Edit One Item", "Check & Fix", "Advanced"):
+        assert f'label="{label}"' in home
+    assert home.count("@discord.ui.button") == 4
 
 
 def test_rules_and_unlocks_is_reachable() -> None:
-    assert 'label="Saved Rules & Protection"' in V2
+    assert 'label="Saved Style Exceptions"' in V2
     assert 'label="Layout Rules"' in V2
     assert 'label="Remove One Rule"' in V2
     assert 'label="Protection"' in V2

@@ -60,13 +60,13 @@ def test_home_navigation_uses_registry_instead_of_flat_feature_buttons() -> None
         "Verification",
         "Welcome, Join & Exit",
         "Members & Moderation",
-        "Server Design",
+        "Server Appearance",
         "Roles & Profiles",
         "Logs & Activity",
         "My Profile",
         "Status",
         "Diagnostics",
-        "Card Assets",
+        "Welcome Card Assets",
         "Help",
     ):
         assert f'"{label}"' in registry

@@ -183,12 +183,12 @@ HELP_GUIDES: dict[str, HelpGuide] = {
         "Saved Designs and Edit Existing Post can be used without starting over.",
         "Previewing does not publish a message; confirm its channel and mention settings before posting."),
     "server_design": HelpGuide(
-        "Edit channel naming and the server's visual appearance.",
-        ("Open Server Design and choose the channel or naming area you want to update.",
-         "Use the shared Search-Safe picker to choose the exact role or channel.",
-         "Preview the name or style and confirm the change."),
-        "Only the selected server objects are changed.",
-        "A decorated channel name should remain searchable and readable to members."),
+        "Style category/channel names and repair their appearance without changing channel permissions.",
+        ("Open Server Appearance and choose Style All Names, Edit One Item, or Check & Fix.",
+         "Choose your theme or the exact category/channel, then inspect the reviewed preview. Individual Rename applies immediately.",
+         "Find saved style exceptions, Searchable Names, and Undo under Advanced."),
+        "Only reviewed name changes are applied; permissions, channel order, roles, tickets and setup are not modified.",
+        "If Discord's native search cannot find decorated role/channel names, use Advanced → Searchable Names."),
     "card_assets": HelpGuide(
         "Upload artwork or a licensed font for welcome and exit cards.",
         ("Open Card Assets to review the supported choices.",

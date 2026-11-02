@@ -19,6 +19,7 @@ on:
       - 'tests/test_design_studio_consolidation_032.py'
       - 'tests/test_dank_design_*.py'
       - 'tests/test_server_design_*.py'
+      - 'tests/test_server_appearance_*.py'
       - 'tests/test_public_design_*.py'
       - 'tests/test_setup_design_bridge_behavior.py'
       - 'tools/audit_dank_design_*.py'
@@ -81,6 +82,7 @@ jobs:
           tests/test_dank_design_consistency_030.py
           tests/test_dank_design_editor_state_authority.py
           tests/test_server_design_category_aware_auto_detect.py
+          tests/test_server_appearance_navigation.py
         env:
           DANK_STARTUP_LOG_STYLE: quiet
           DANK_COMMAND_LOG_STYLE: quiet

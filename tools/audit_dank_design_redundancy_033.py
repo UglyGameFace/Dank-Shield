@@ -108,15 +108,20 @@ def main() -> int:
     if "majority.build_category_aware_options" not in PLAN or "majority.annotate_category_aware_plan_items" not in PLAN:
         failures.append("native category-aware planning ownership is missing")
 
-    for label in (
-        "Design Entire Server",
-        "Edit One Category / Channel",
-        "Fix Inconsistent Names",
-        "Saved Rules & Protection",
-        "Undo Last Apply",
-    ):
+    home = V2[V2.index("class DesignHomeView"):V2.index("def _snapshot_matches")]
+    for label in ("Style All Names", "Edit One Item", "Check & Fix", "Advanced"):
+        if f'label="{label}"' not in home:
+            failures.append(f"four-task appearance home is missing: {label}")
+    if home.count("@discord.ui.button") != 4:
+        failures.append("appearance home contains redundant or missing action buttons")
+    for label in ("Saved Style Exceptions", "Searchable Names", "History & Reset"):
         if f'label="{label}"' not in V2:
-            failures.append(f"consolidated six-workflow home is missing: {label}")
+            failures.append(f"advanced appearance tool is missing: {label}")
+    server = V2[V2.index("class DesignServerView"):V2.index("def _edit_one_embed")]
+    if 'label="Clean Redesign"' in server or 'label="Preview Separator Only"' in server:
+        failures.append("whole-server preview has redundant reset/targeted-operation buttons")
+    if V2.count('label="Preview Separator Only"') != 1:
+        failures.append("separator-only preview must have one detailed styling entry")
 
     if "class ReviewedPreviewView" not in V2 or "Apply Reviewed Changes" not in V2:
         failures.append("consolidated reviewed-apply owner is missing")

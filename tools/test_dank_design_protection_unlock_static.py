@@ -9,7 +9,7 @@ SERVICE = (ROOT / "stoney_verify/services/server_design_studio.py").read_text(en
 
 
 def test_protection_manager_has_obvious_unlock_controls() -> None:
-    assert 'label="Saved Rules & Protection"' in V2
+    assert 'label="Saved Style Exceptions"' in V2
     assert 'label="Protection"' in V2
     assert "Allow Font + Layout on Defaults" in LEGACY
     assert "Restore Default Protection" in LEGACY

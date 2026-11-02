@@ -336,7 +336,7 @@ class SearchSafeHomeView(discord.ui.View):
         )
 
     @discord.ui.button(
-        label="Back to Server Design",
+        label="Back to Advanced",
         emoji="⬅️",
         style=discord.ButtonStyle.secondary,
         custom_id="dank_design_search_safe:back",
@@ -346,7 +346,7 @@ class SearchSafeHomeView(discord.ui.View):
         _ = button
         from . import public_design_studio_v2 as design_v2
 
-        await design_v2._go_home(interaction)  # type: ignore[attr-defined]
+        await design_v2._open_advanced(interaction)  # type: ignore[attr-defined]
 
 
 class SearchSafePreviewView(discord.ui.View):
