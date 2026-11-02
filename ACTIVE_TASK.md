@@ -1,3 +1,13 @@
+## SHARE ROUTER HISTORICAL BRANCH RECONCILIATION (2026-11-02 UTC)
+
+- **Before:** 29 branches including main, zero open PRs, main `2ec9d93b`; exact-main Dank Shield CI #41513060452 passed. Historical `fix/share-router-existing-channel-nondestructive-20261024` remains at `b4a1ab8d68b2cf2e96aac9148b6cf04a400d4934`, five commits after merged PR #709's exact head `414b9188`.
+- **Evidence:** Main and historical branch have byte-identical media resolver and media regression test files. Current Share Router existing-channel route/save/repair function bodies match the historical implementation. The only historical requirement missing from main is `libtorrent==2.1.1`, deliberately removed with the old Cinema coupling; main's native runtime regression tests require ordinary proxy messages to avoid the torrent engine.
+- **Implementation:** Extend the existing owner-only `preview-reconciled` / `delete-reconciled` path for this exact branch SHA. Runtime evidence checks PR #709 merge ancestry, five later commits, media source/test equality, dependency containment, exact existing-channel function bodies, and Cinema separation. Existing owner confirmation, branch SHA/main/PR leases, archive tag SHA readback and protected-ref exclusions remain mandatory. Add regression tests.
+- **Next:** Validate PR-head CI, merge if safe, verify exact-main CI, then use owner-reviewed preview and SHA-bound archive-and-delete. No deletion is claimed until GitHub confirms the branch ref is absent.
+- **Production boundary:** No production deployment, database, credentials or host changes. Dedicated Supabase `viamriafkbqhquvrsnua` intended primary, original IdleGrowOp Supabase rollback source preserved, Discloud PostgreSQL isolated backup candidate. Live running Discloud SHA, independent off-Discloud backup, canary and tested rollback remain unverified.
+
+---
+
 ## OWNER-REVIEWED ROLE NAVIGATION WORKTREE RETIREMENT (2026-11-02 UTC)
 
 - **Starting state:** 31 branches, zero open PRs, main `1e168e45381328f0326e12a45153b638e04b00b8`. PR #809 is merged, and its PR-head CI passed; exact-main CI #41506656152 was still running when this work began. No production release is authorized.
