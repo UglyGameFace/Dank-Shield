@@ -59,6 +59,7 @@ on:
 permissions:
   contents: write
   pull-requests: read
+  actions: read
 
 concurrency:
   group: guarded-merged-branch-cleanup
