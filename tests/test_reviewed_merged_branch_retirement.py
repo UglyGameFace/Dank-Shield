@@ -169,6 +169,8 @@ const fullName = owner + '/' + repo, mainSha = 'mainsha';
 const inUse = new Set(['feat/open']);
 const safeName = name => name.startsWith('feat/');
 const integratedCleanupRefs = new Set();
+// This isolated inventory harness has no owner-specific historical work heads.
+const reconciledWorkHeads = new Map();
 const cutoff = Date.now() - 48 * 60 * 60 * 1000;
 const branches = [
   {name:'feat/integrated',protected:false,commit:{sha:'oldsha'}},
