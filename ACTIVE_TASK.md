@@ -1,3 +1,13 @@
+## RECONCILE SUPERSEDED HISTORICAL TICKET PANEL (2026-11-02 UTC)
+
+- **Before:** 32 Git branch refs (31 non-main), zero open PRs, main `4ef7cd06e32296dfbf6761008bf3dad71c3dc15c`. Exact-main Dank Shield CI #41476225330 passed. Eight branch heads are ancestors of main but are explicit backup/known-good refs; 23 non-main heads have unique commits. Discloud owner-linked branch is main, but live running commit is not verified.
+- **Source:** Historical `fix/ticket-panel-legacy-interaction-recovery-20260924` at `51d28415d13ba5b08b6632d04ea4f48e7ab29e6e` has six commits unique by graph. Its PR #310 was closed unmerged **explicitly superseded by #311**, which merged to main on 2026-09-24; its merge commit `a67d94bc91e8380bb2b7758af52c0fcab0c376c9` is an ancestor of current main. The replacement owns canonical ticket creation, legacy `v6` and `ticket_create` aliases, fallback category selection, persistent view registration and restart reconciliation. Current tests cover aliases, registrar idempotency and legacy v6 upgrade; original tests are largely superseded by more comprehensive tests. Do not restore PR #310's competing registrar.
+- **Implementation:** `fix/retire-superseded-ticket-panel-20261102` extends only the authenticated `preview-reconciled` / `delete-reconciled` workflow for that exact historical branch SHA. It requires closed unmerged #310 with exact head and explicit supersession, merged #311 with verified main ancestry, current source/test evidence, unchanged branch/main/open PR leases, owner-only SHA-bound preview/delete, archive-tag SHA readback before branch deletion. Regression tests added.
+- **Validation:** Embedded workflow JavaScript syntax parsed successfully. PR-head CI and exact-main CI required before executing the owner-reviewed retirement. No actual branch deletions yet at this checkpoint; the work branch temporarily raises refs from 32 to 33. Keep all backup/recovery/known-good branches and unreconciled unique work. Do not claim production change.
+- **Production boundary:** Dedicated Supabase `viamriafkbqhquvrsnua` intended primary, original IdleGrowOp Supabase rollback source preserved, Discloud PostgreSQL isolated backup candidate. No database/host/credentials/deployment change; independent off-Discloud backup, canary and tested rollback unverified.
+
+---
+
 ## INTERACTION INGRESS TRACE RECONCILIATION (2026-11-02 UTC)
 
 - **Starting state:** main `68db8ac7ee76518f3f8c6264695647e729b0c080`; 34 branch refs (33 non-main). Existing PR #805 is actively changing member-intelligence code and its long-running CI is in progress. This work does not touch its files.
