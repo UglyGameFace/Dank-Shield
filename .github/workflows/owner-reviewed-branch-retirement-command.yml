@@ -113,6 +113,7 @@ jobs:
     permissions:
       contents: write
       pull-requests: read
+      actions: read
     uses: ./.github/workflows/retire-merged-temporary-branches.yml
     with:
       mode: ${{ needs.validate-owner-command.outputs.mode }}
