@@ -203,8 +203,10 @@ def test_server_design_exposes_reviewed_search_safe_workflow() -> None:
     design_v2 = (ROOT / "stoney_verify/commands_ext/public_design_studio_v2.py").read_text(encoding="utf-8")
     ui = (ROOT / "stoney_verify/commands_ext/public_search_safe_naming.py").read_text(encoding="utf-8")
 
-    assert 'label="Search-Safe Naming"' in design_v2
-    assert 'custom_id="dank_design_v2:search_safe"' in design_v2
+    # The reviewed Search-Safe workflow now lives under Advanced Appearance.
+    assert 'label="Searchable Names"' in design_v2
+    assert 'custom_id="dank_design_v2:advanced_search"' in design_v2
+    assert 'from .public_search_safe_naming import open_search_safe_naming' in design_v2
     assert "Preview Search-Safe Repair" in ui
     assert "Enable + Repair Next 25" in ui
     assert "Preview Next 25" in ui
