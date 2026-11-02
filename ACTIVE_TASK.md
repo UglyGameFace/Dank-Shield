@@ -1,3 +1,12 @@
+## OWNER-REVIEWED IDLEGROW AUDIT REF RETIREMENT (2026-11-02 UTC)
+
+- **Objective:** Reduce the remaining obsolete branches without removing any independent backup or rollback source.
+- **Verified starting state:** `main` `4a82db2a7ec670685eca5da47cd36aa2da1aaa42`, 36 branch refs, zero open PRs, exact-main Dank Shield CI #41421661580 passed. Owner-verified Discloud branch is `main`, but actual deployed SHA and independent off-Discloud backup remain unverified.
+- **Integration:** The historical `audit/idle-grow-discloud-backup-retire-aiven-20261026` ref `e39a31cfc2989941e5ebda778e921b4cf1d4c8a6` is 0 commits ahead of main. Its sole PR #745 merged as `52bd0587e52bbbb9b02bc856f1ffc793d1b1a10f`, itself an ancestor of main. Add only that exact audit ref to the owner-reviewed retirement allowlist, retaining all SHA-bound main/branch/PR verification, archived tag readback, open-PR leases and owner confirmation.
+- **Boundaries:** Do not touch dedicated Supabase `viamriafkbqhquvrsnua`, the original IdleGrowOp Supabase rollback source, Discloud PostgreSQL backup candidate, backup/recovery/known-good branches, or live Discloud. This is GitHub ref hygiene only. Require PR-head CI, safe merge, exact-main CI, owner preview and confirmed archival before deletion. At this checkpoint: **0 branches deleted**.
+
+---
+
 ## CURRENT RECONCILIATION: MERGED OWNER-RELAY REF (2026-11-02 UTC)
 
 - **Live main at inspection:** `51d7d63931c5f85359d5cc7f4a972ee063b88f9d`; exact-main Dank Shield CI #41413333964 passed. 37 live branches, zero open PRs, before this integration branch was created. Discloud is owner-linked to `main`; actual running SHA and independent backup are not verified.

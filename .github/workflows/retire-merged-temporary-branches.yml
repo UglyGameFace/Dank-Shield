@@ -265,7 +265,13 @@ jobs:
               // before retirement. This exception is never valid for a
               // divergent ref, a backup/archive/recovery namespace, or a
               // protected/active branch; the deletion leases remain mandatory.
+              // PR #745 merged this read-only audit into main. Its exact branch
+              // tip is an ancestor of main; archiving the commit preserves the
+              // historical rollback/backup documentation without retaining a
+              // redundant audit branch. Do not broaden to backup/* or other
+              // production checkpoint refs.
               const integratedCleanupRefs = new Set([
+                'audit/idle-grow-discloud-backup-retire-aiven-20261026',
                 'extract/discloud-packaging-gate-20261025',
                 'fix/dankshield-live-migration-history-20261031',
                 'fix/dankshield-live-migration-target-20261022',
