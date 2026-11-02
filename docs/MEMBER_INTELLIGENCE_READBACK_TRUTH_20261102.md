@@ -29,7 +29,25 @@ matching original join-event evidence.
   roles. Stored records remain clearly separate.
 - The retained evidence readback now requests up to **15 joins, 30 events,
   15 tickets**, shows up to four recent events and three recent tickets,
-  and lists up to six retained display names. These are recent samples.
+  and lists up to five retained names. These are recent samples.
+- The connected dedicated DankShield Supabase database also has a separate
+  `activity_feed_events` table and a per-member `member_activity_ledger`.
+  The owner-requested Member Intelligence report now reads the **30 newest**
+  activity-feed records by exact `guild_id` plus `target_user_id`, plus the
+  member's own tracked last activity date/type. The feed's moderation count
+  is shown separately from `member_events` and **never summed together**
+  as independent incidents: the feed may already represent staff actions
+  present in other databases.
+- On 2026-11-02, a read-only inspection of the *connected* DankShield
+  Supabase project found **4,841** activity-feed rows, **3,369** moderation
+  feed entries with exact target Discord IDs, **672** member-event rows,
+  **3,369** staff-action log rows (potential mirrors of feed records) and
+  **341** activity ledger records. These are project-wide row counts,
+  **not** evidence that a particular member has any record, nor proof that
+  the live Discloud app is currently connected to this project.
+- Feed/ledger outages are explicitly labeled `activity_feed` and
+  `activity_ledger` unavailable; no query is made for unrelated guilds
+  or a staff actor when inspecting a target user.
 - A join count is a **minimum of available recorded evidence**. A missing
   `in_guild` value never defaults to true; live Discord REST is the
   authoritative current-membership check.
@@ -56,7 +74,8 @@ matching original join-event evidence.
 4. Use **Stored History by ID** with a departed/banned member: the
    historical evidence panel must also have buttons.
 5. Verify live roles/join date against Discord, and retained event/ticket
-   samples against the actual connected database, not a test fixture.
+   samples and the separately labeled activity feed/ledger rows against the
+   actual connected database, not a test fixture.
 6. Block the database or remove read access in a disposable environment:
    report source(s) as unavailable; no false clean history.
 7. Check a stale invite profile vs a newer join: no old invite, and
