@@ -290,3 +290,14 @@ def test_historical_audit_branch_retirement_is_sha_pinned_and_requires_merged_re
     assert "764ec309aa777b7fe74764b94e1d594ed64e50fb" in workflow
     assert "DELETE_RECONCILED_" in workflow
     assert workflow.index("github.rest.git.createRef") < workflow.index("github.rest.git.deleteRef")
+
+
+def test_hidden_live_stats_counters_are_not_repair_targets() -> None:
+    cfg = _full_cfg()
+    only_visible = next(iter(repair.STAT_CHANNEL_PREFIXES))
+    cfg["security_stats_visible_keys"] = [only_visible]
+    specs = repair._target_specs(cfg)
+    assert len(specs) == 2
+    assert specs[0].label == "Live Stats category"
+    assert specs[1].channel_id == int(cfg[repair.SECURITY_STATS_CHANNEL_IDS_KEY][only_visible])
+    assert repair._visible_stat_keys(cfg) == (only_visible,)
