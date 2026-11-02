@@ -258,11 +258,21 @@ jobs:
                 'database','postgres','production','rollback','revert',
                 'snapshot','stable','known','good'
               ]);
+              // Explicitly reviewed cleanup implementation refs, not deployment
+              // or database checkpoints. They may retire ONLY as exact
+              // ancestors of main, never by squash/tree equivalence.
+              const integratedCleanupRefs = new Set([
+                'fix/branch-retirement-and-migration-approval-20261031',
+                'fix/dankshield-archive-first-retirement-20261031',
+                'fix/owner-attested-discloud-branch-retirement-20261101',
+                'fix/squash-merged-retirement-archive-20261101'
+              ]);
               const safeName = name =>
                 prefixes.some(p => name.startsWith(p)) &&
                 !heldPrefixes.some(p => name.startsWith(p)) &&
                 !protectedHeads.has(name) &&
-                !hasHeldHistoricalSegment(name, sensitive);
+                (!hasHeldHistoricalSegment(name, sensitive) ||
+                 integratedCleanupRefs.has(name));
               // Owner-reviewed cleanup has an exact-SHA preview token and
               // fresh main/PR/ref leases. The 48-hour cooldown remains on
               // unattended cleanup, not on explicitly approved owner batches.
@@ -291,6 +301,9 @@ jobs:
                 const branchGraph = (await github.rest.repos.compareCommits({
                   owner, repo, base: mainSha, head: branch.commit.sha
                 })).data;
+                if (integratedCleanupRefs.has(branch.name) &&
+                    (branchGraph.ahead_by !== 0 ||
+                     !['behind', 'identical'].includes(branchGraph.status))) continue;
                 if (branchGraph.ahead_by === 0 &&
                     ['behind', 'identical'].includes(branchGraph.status)) {
                   eligible.push({name: branch.name, sha: branch.commit.sha,
