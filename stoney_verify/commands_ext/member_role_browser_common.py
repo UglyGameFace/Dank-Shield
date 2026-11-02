@@ -364,12 +364,18 @@ async def record_member_action(
             return False
 
     try:
-        return bool(
+        saved = bool(
             await asyncio.wait_for(
                 asyncio.to_thread(_insert),
                 timeout=_MEMBER_ACTION_AUDIT_TIMEOUT_SECONDS,
             )
         )
+        if saved:
+            # The activity-feed writer completed: invalidate this target's
+            # staff evidence cache so the next review reads the new record.
+            from stoney_verify.tickets_new.member_intelligence_cache import invalidate_member_intelligence
+            invalidate_member_intelligence(guild_id, target_id)
+        return saved
     except asyncio.TimeoutError:
         print(
             "⚠️ member_browser audit write timed out "
