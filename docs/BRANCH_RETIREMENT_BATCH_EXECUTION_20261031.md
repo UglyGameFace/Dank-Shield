@@ -1,3 +1,13 @@
+# 2026-11-02: scheduled squash-merge archival proof
+
+The historical scheduled cleanup previously skipped branches whose commit IDs remained unique after a squash/rebase merge. The owner-reviewed path already has a strict immutable merged-tree equivalence check; this integration reuses that same check for scheduled historical candidates **only after** exact merged PR head, base, age (48 hours), and merge-commit ancestry are verified. Changed-path blob SHA, type, and mode must match at the immutable PR merge commit; truncated/oversized or ambiguous deltas are held. Archive tags must match the original SHA before any retirement.
+
+The deletion gate is unchanged: scheduled cleanup cannot delete while `DANK_DISCLOUD_DEPLOY_BRANCH` is unknown. It may create preservation tags after proving integration, and must not delete backups, rollback refs, production/deployment refs, active PR heads or unproven changes. Exact-main CI, independent off-Discloud backup, canary, rollback and explicit release approval remain required for production.
+
+At inspection: main `be029a1d617f551f91457b47ae5eb29d59929843`; 52 live branches before the new working branch; 0 actual deletions in this integration run. A dedicated executable regression tests scheduled decision logic; CI/merge and live tag creation remain separately verifiable.
+
+---
+
 # Branch-retirement execution checkpoint (2026-10-31)
 
 ## Action results
