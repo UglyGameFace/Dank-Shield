@@ -1666,6 +1666,7 @@ async def list_tickets_for_owner(
     guild_id: int | str,
     owner_id: int | str,
     limit: int = 25,
+    strict: bool = False,
 ) -> List[Dict[str, Any]]:
     gid = _as_str_id(guild_id)
     oid = _as_str_id(owner_id)
@@ -1685,6 +1686,8 @@ async def list_tickets_for_owner(
         return out
     except Exception as e:
         print(f"⚠️ repository.list_tickets_for_owner failed: {repr(e)}")
+        if strict:
+            raise
         return []
 
 
