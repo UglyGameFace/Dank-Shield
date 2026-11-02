@@ -793,19 +793,25 @@ def _historical_member_embed(
         color=discord.Color.blurple(),
         timestamp=discord.utils.utcnow(),
     )
+    status = snapshot.get("source_status") or {}
+    sample_limits = snapshot.get("sample_limits") or {}
+    joins_available = status.get("joins") != "unavailable" and status.get("profile") != "unavailable"
+    join_count = str(joins.get("times_joined", 0)) if joins_available else "unknown"
+    leave_count = str(joins.get("times_left", 0)) if joins_available else "unknown"
     join_text = (
-        f"Recorded joins (at least): **{joins.get('times_joined', 0)}** • "
-        f"Recorded departures (at least): **{joins.get('times_left', 0)}**\\n"
-        f"Last joined: `{str(joins.get('latest_joined_at') or 'unknown')[:50]}`\\n"
-        f"Left: `{str(joins.get('left_at') or 'not recorded')[:50]}`\\n"
-        f"Last seen: `{str(joins.get('last_seen_at') or 'unknown')[:50]}`"
+        f"Recorded joins (minimum): **{join_count}** • "
+        f"Recorded departures (minimum): **{leave_count}**\\n"
+        f"Latest recorded join: `{str(joins.get('latest_joined_at') or 'unknown')[:50]}`\\n"
+        f"Earliest retained join: `{str(joins.get('first_joined_at') or 'unknown')[:50]}`\\n"
+        f"Last recorded departure: `{str(joins.get('left_at') or 'not recorded')[:50]}`\\n"
+        f"Stored last seen: `{str(joins.get('last_seen_at') or 'unknown')[:50]}`"
     ).replace("\\n", "\n")
     embed.add_field(name="Live membership", value=_intelligence_presence_text(presence), inline=False)
     embed.add_field(name="Membership History", value=join_text[:1024], inline=False)
     recent = snapshot.get("recent_joins") or []
     latest = recent[0] if recent and isinstance(recent[0], dict) else {}
     relations = snapshot.get("relationships") or {}
-    method = str(latest.get("entry_method") or joins.get("latest_entry_method") or "").strip()
+    method = str(relations.get("entry_method") or latest.get("entry_method") or "").strip()
     method_names = {
         "invite": "Server invite",
         "vanity_invite": "Vanity invitation",
@@ -817,10 +823,12 @@ def _historical_member_embed(
         "invite_unresolved": "Invite usage could not be matched",
     }
     source = method_names.get(method, "Unknown")
-    code = str(latest.get("invite_code") or relations.get("invite_code") or "").strip()
-    inviter = str(latest.get("invited_by_name") or relations.get("invited_by_name") or "").strip()
-    quality = str(latest.get("entry_truth_quality") or relations.get("entry_truth_quality") or member.get("entry_truth_quality") or "").strip().lower()
-    conflicted = bool(latest.get("entry_conflict") or relations.get("entry_conflict") or member.get("entry_conflict"))
+    # The relationship service already enforces same-visit timestamp matching.
+    # Re-prioritizing raw profile/join fields here would undo that safeguard.
+    code = str(relations.get("invite_code") or "").strip()
+    inviter = str(relations.get("invited_by_name") or "").strip()
+    quality = str(relations.get("entry_truth_quality") or "").strip().lower()
+    conflicted = bool(relations.get("entry_conflict"))
     if conflicted:
         confidence = "Conflicting records; attribution not verified"
     elif quality in {"confirmed", "partial", "unknown"}:
@@ -840,10 +848,7 @@ def _historical_member_embed(
             confidence = "Confirmed in retained join event"
             source_lines[1] = f"Confidence: **{confidence}**"
     reason = str(
-        latest.get("entry_quality_reason")
-        or relations.get("entry_quality_reason")
-        or member.get("entry_quality_reason")
-        or ""
+        relations.get("entry_quality_reason") or ""
     ).strip()
     if reason:
         source_lines.append(f"Tracking details: {_plain(reason, 220)}")
@@ -880,10 +885,53 @@ def _historical_member_embed(
             or member.get("username") or member.get("joined_at")):
         embed.add_field(
             name="Evidence Availability",
-            value="No retained records found for this ID in this server. Discord does not supply deleted history retroactively.",
+            value="No records returned from the available sources. This does not prove a clean or complete history, and Discord cannot restore deleted records.",
             inline=False,
         )
-    embed.set_footer(text="Staff-only historical lookup • activity and join data can be incomplete")
+    if status:
+        unavailable = [label for label, state in status.items() if state == "unavailable"]
+        if unavailable:
+            note = (
+                "⚠️ Could not read: **" + ", ".join(unavailable) + "**. "
+                "Missing data is NOT a clean-history result."
+            )
+        else:
+            note = "Readbacks completed. Counts are retained minimums, not lifetime totals."
+        samples = (
+            f"Recent windows: up to {sample_limits.get('joins', 8)} joins, "
+            f"{sample_limits.get('events', 12)} events and "
+            f"{sample_limits.get('tickets', 10)} tickets."
+        )
+        synced = str(member.get("synced_at") or member.get("updated_at") or "unknown")
+        embed.add_field(
+            name="Evidence coverage & freshness",
+            value=(f"{note}\\n{samples}\\nStored profile updated: `{synced[:45]}`").replace("\\\\n", "\\n")[:1024],
+            inline=False,
+        )
+    all_names = names.get("all_names") or []
+    if all_names:
+        render_names = ", ".join(
+            discord.utils.escape_mentions(discord.utils.escape_markdown(str(n)[:32]))
+            for n in all_names[:6]
+        )
+        embed.add_field(
+            name="Known retained names (not identity links)",
+            value=render_names[:1024], inline=False,
+        )
+    recent_events = snapshot.get("recent_events") or []
+    if recent_events:
+        activity_lines = []
+        for event in recent_events[:4]:
+            kind = _plain(str(event.get("event_type") or "unknown"), 32)
+            title = _plain(str(event.get("title") or event.get("reason") or ""), 78)
+            when = str(event.get("created_at") or "unknown")[:16]
+            activity_lines.append(f"• `{when}` **{kind}**" + (f": {title}" if title else ""))
+        embed.add_field(
+            name="Most recent retained activity (sample)",
+            value="\\n".join(activity_lines).replace("\\\\n", "\\n")[:1024],
+            inline=False,
+        )
+    embed.set_footer(text="Server-local recorded evidence only • live membership checked separately")
     return embed
 
 
