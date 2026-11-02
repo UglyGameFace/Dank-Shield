@@ -226,3 +226,23 @@ def test_production_cache_integration_is_staff_only_and_cannot_cache_live_status
     assert "_resolve_intelligence_member(interaction.guild, user_id)" in ui
     assert "invalidate_member_intelligence" in events
     assert "invalidate_member_intelligence(guild_id, user_id)" in join
+
+
+def test_unexpected_loader_error_is_not_misreported_as_known_db_outage():
+    cache, clock = _clock_cache()
+    async def good():
+        return _snapshot()
+    async def bad():
+        raise ValueError("programmer bug")
+    async def steps():
+        await cache.get_or_load(("g", "u"), good)
+        clock[0] += 26
+        try:
+            await cache.get_or_load(("g", "u"), bad)
+        except ValueError as exc:
+            assert str(exc) == "programmer bug"
+        else:
+            raise AssertionError("Unexpected reader failure must propagate")
+        # A failed load does not overwrite the last known validated snapshot.
+        assert ("g", "u") in cache._entries
+    asyncio.run(steps())
