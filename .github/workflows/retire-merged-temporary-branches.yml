@@ -624,6 +624,56 @@ jobs:
                     throw new Error('Integrated Protection contract changed: ' + path);
                   }
                 }
+                // The 2026-09-29 Roles Center branch used an obsolete
+                // pre-section UI. PR #809 forward-ports its reusable private
+                // panel close/back behavior without reverting newer sections,
+                // staff permissions, or the canonical Community & Pings owner.
+                const roleReplacement = (await github.rest.pulls.get({
+                  owner,repo,pull_number:809
+                })).data;
+                if (!roleReplacement.merged_at || roleReplacement.base?.ref !== 'main' ||
+                    roleReplacement.head?.ref !== 'work/dankshield-role-navigation-20261102' ||
+                    !roleReplacement.merge_commit_sha) {
+                  throw new Error('PR #809 role navigation replacement is not merged into main');
+                }
+                const roleAncestry = (await github.rest.repos.compareCommits({
+                  owner,repo,base:roleReplacement.merge_commit_sha,head:currentMain
+                })).data;
+                if (roleAncestry.behind_by !== 0 ||
+                    !['ahead','identical'].includes(roleAncestry.status)) {
+                  throw new Error('PR #809 replacement is not an ancestor of main');
+                }
+                const roleEvidence = [
+                  ['stoney_verify/commands_ext/role_center_navigation.py',
+                   ['async def close_panel(', 'delete_original_response()',
+                    'class BackToRoleCenterButton', 'class CloseRolePanelButton']],
+                  ['stoney_verify/commands_ext/public_role_center.py',
+                   ['CloseRolePanelButton(row=4)', '"Dank Shield Home", "Close"',
+                    'class RolesProfilesSectionSelect']],
+                  ['stoney_verify/commands_ext/public_self_roles_group.py',
+                   ['BackToRoleCenterButton(row=2)', 'CloseRolePanelButton(row=2)']],
+                  ['stoney_verify/commands_ext/public_member_setup.py',
+                   ['class MemberSetupAdminView', 'label="Close"']],
+                  ['stoney_verify/commands_ext/public_community_pings.py',
+                   ['label="Close"', 'open_member_community_pings']],
+                  ['stoney_verify/commands_ext/public_toke.py',
+                   ['from .public_community_pings import open_member_community_pings as open_generic_member']],
+                  ['tests/test_role_center_navigation_reconciliation.py',
+                   ['test_role_center_close_is_available_once_for_each_authorized_section',
+                    'test_close_panel_falls_back_to_disabling_controls_when_delete_is_forbidden']]
+                ];
+                for (const [path, needles] of roleEvidence) {
+                  const blob = (await github.rest.repos.getContent({
+                    owner,repo,path,ref:currentMain
+                  })).data;
+                  if (Array.isArray(blob) || blob.encoding !== 'base64' || !blob.content) {
+                    throw new Error('Missing integrated role navigation evidence: ' + path);
+                  }
+                  const source = Buffer.from(blob.content,'base64').toString('utf8');
+                  if (!needles.every(needle => source.includes(needle))) {
+                    throw new Error('Integrated role navigation contract changed: ' + path);
+                  }
+                }
               }
               const rejectedHeads = reconciled ? [
                 {name:'fix/trace-application-command-ingress-20261007',
@@ -631,7 +681,9 @@ jobs:
                 {name:'fix/ticket-panel-legacy-interaction-recovery-20260924',
                  sha:'51d28415d13ba5b08b6632d04ea4f48e7ab29e6e'},
                 {name:'audit/protection-contextual-repair',
-                 sha:'764ec309aa777b7fe74764b94e1d594ed64e50fb'}
+                 sha:'764ec309aa777b7fe74764b94e1d594ed64e50fb'},
+                {name:'fix/role-center-navigation-audit-20260929',
+                 sha:'a9553b9a7cddfb34086970fb98bbf2d675601d2e'}
               ] : [
                 {name:'feat/cinema-rolling-supervised-worker-20261014',
                  sha:'8bccd1ee9a5203cebc7862eec8addd48ba9706a6'},

@@ -1,3 +1,13 @@
+## ROLE CENTER HISTORICAL NAVIGATION RECONCILIATION (2026-11-02 UTC)
+
+- **Before:** 30 branch refs, no open PRs, main `490045a5250bc733ca2d2c09adc3bd56a52f94fa`; exact-main Dank Shield CI #41491850754 passed. Owner-attested Discloud branch is `main`, not a verified running SHA.
+- **Source:** `fix/role-center-navigation-audit-20260929` retains five divergent commits. Main already replaced its older Role Center section UI and has a Member Setup Manager Close control; however, the old shared close/back lifecycle and cosmetics navigation were absent from current Role Center and Profile Builder.
+- **Implementation:** This branch restores the shared private-panel navigation helper, adds an owner-scoped Close control to current Roles & Profiles and role editor child views, restores Back/Close on Profile Builder manager and cosmetics picker, and adds regression tests for component acknowledgement, close/delete fallback, and UI controls. It does not revert newer section navigation or role permissions.
+- **Safety:** Do not retire the historical branch until PR validation, merge, exact-main CI, and explicit proof that remaining historical Member Setup and Community & Pings navigation has been superseded by current implementations. Preserve backups and all other divergent branches.
+- **Production boundary:** No deployment, database, credentials, or host change. Dedicated Supabase `viamriafkbqhquvrsnua` remains intended primary; original IdleGrowOp Supabase is rollback; Discloud PostgreSQL remains isolated backup candidate. Independent off-Discloud backup, live canary, and tested rollback are unverified.
+
+---
+
 ## PROTECTION LIVE STATS ACCESS RECONCILIATION (2026-11-02 UTC)
 
 - **Objective:** Integrate valuable unmerged Live Stats permission-repair behavior from `audit/protection-contextual-repair` without restoring its outdated pre-section Protection Center UI; safely archive and retire that historical branch only after verified integration.

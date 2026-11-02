@@ -24,6 +24,7 @@ from stoney_verify.panel_lifecycle import PRIVATE_MENU_TTL_SECONDS
 from stoney_verify.services import role_mutation_authority
 from stoney_verify.services import search_safe_naming
 from stoney_verify.ui.picker import DankRoleSelect
+from .role_center_navigation import CloseRolePanelButton
 
 _ROLE_EDITOR_PREFIX = "dank:roles:v1:"
 _ROLE_ACTION_LOCKS: weakref.WeakValueDictionary[str, asyncio.Lock] = weakref.WeakValueDictionary()
@@ -562,6 +563,7 @@ class _OwnedView(discord.ui.View):
     def __init__(self, owner_id: int) -> None:
         super().__init__(timeout=PRIVATE_MENU_TTL_SECONDS)
         self.owner_id = int(owner_id)
+        self.add_item(CloseRolePanelButton(row=4))
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if int(getattr(interaction.user, "id", 0) or 0) == self.owner_id:
@@ -665,11 +667,11 @@ class RolesProfilesView(_OwnedView):
             staff=self.staff, role_manager=self.role_manager,
             setup_manager=self.setup_manager,
         ))
-        for index, name in enumerate((*_ROLES_PROFILES_SECTIONS[self.section], "Dank Shield Home")):
+        for index, name in enumerate((*_ROLES_PROFILES_SECTIONS[self.section], "Dank Shield Home", "Close")):
             if name not in eligible:
                 continue
             item = eligible[name]
-            item.row = 1 + index // 4
+            item.row = 4 if name in {"Dank Shield Home", "Close"} else 1 + index // 4
             self.add_item(item)
 
     @discord.ui.button(label="Member Setup", emoji="🪪", style=discord.ButtonStyle.primary, row=0)

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from .role_center_navigation import BackToRoleCenterButton, CloseRolePanelButton
+
 import asyncio
 import re
 from time import monotonic
@@ -726,6 +728,7 @@ class ProfileRoleAddPickerView(DankMultiPickerView):
         self.add_item(ProfileRolePickerPageButton(delta=-1, disabled=self.page <= 0, row=1))
         self.add_item(ProfileRolePickerPageButton(delta=1, disabled=self.page >= self.pages - 1, row=1))
         self.add_item(ProfileRolePickerBackButton(row=2))
+        self.add_item(CloseRolePanelButton(row=2))
 
 
 class ProfileRolePickerPageButton(discord.ui.Button):
@@ -840,6 +843,8 @@ async def _open_profile_cosmetics(
         max_values=len(roles),
         allow_anyone=False,
     )
+    view.add_item(BackToRoleCenterButton(row=2))
+    view.add_item(CloseRolePanelButton(row=2))
     if replace_message and interaction.message is not None:
         if interaction.response.is_done():
             await interaction.edit_original_response(
@@ -1732,6 +1737,8 @@ class ProfileCosmeticRoleManagerView(discord.ui.View):
     def __init__(self, *, author_id: int) -> None:
         super().__init__(timeout=300)
         self.author_id = int(author_id)
+        self.add_item(BackToRoleCenterButton(row=2))
+        self.add_item(CloseRolePanelButton(row=2))
 
     @discord.ui.button(label="Browse / Add Profile Tags", emoji="🧩", style=discord.ButtonStyle.primary, custom_id="dank:profile:v1:builder:cosmetics_add_browser", row=0)
     async def browse_add_roles(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
