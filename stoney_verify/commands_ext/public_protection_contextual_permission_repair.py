@@ -19,6 +19,7 @@ from ..security_stats import (
     SECURITY_STATS_CHANNEL_IDS_KEY,
     SECURITY_STATS_ENABLED_KEY,
     STAT_CHANNEL_PREFIXES,
+    security_stats_preferences,
 )
 from . import public_protection_center as center
 
@@ -119,6 +120,11 @@ def _stats_enabled(cfg: Any) -> bool:
     return _safe_bool(_cfg_value(cfg, SECURITY_STATS_ENABLED_KEY, False), False)
 
 
+def _visible_stat_keys(cfg: Any) -> tuple[str, ...]:
+    """Use the current Server Stats preference owner, not all possible metrics."""
+    return tuple(security_stats_preferences(cfg)["visible_keys"])
+
+
 def _target_specs(cfg: Any) -> tuple[ProtectionStatsTarget, ...]:
     if not _stats_enabled(cfg):
         return ()
@@ -138,7 +144,7 @@ def _target_specs(cfg: Any) -> tuple[ProtectionStatsTarget, ...]:
         seen.add(category_id)
 
     saved = _mapping(_cfg_value(cfg, SECURITY_STATS_CHANNEL_IDS_KEY, {}))
-    for key in STAT_CHANNEL_PREFIXES:
+    for key in _visible_stat_keys(cfg):
         channel_id = _safe_int(saved.get(key), 0)
         if channel_id <= 0 or channel_id in seen:
             continue
@@ -182,7 +188,7 @@ def _manual_prerequisites(guild: discord.Guild, cfg: Any) -> list[str]:
         out.append("Live Stats: the saved stats category mapping is missing. Use Live Stats setup to rebuild it.")
 
     saved = _mapping(_cfg_value(cfg, SECURITY_STATS_CHANNEL_IDS_KEY, {}))
-    if any(_safe_int(saved.get(key), 0) <= 0 for key in STAT_CHANNEL_PREFIXES):
+    if any(_safe_int(saved.get(key), 0) <= 0 for key in _visible_stat_keys(cfg)):
         out.append(
             "Live Stats: one or more saved counter mappings are missing. Use Live Stats setup to rebuild the owned display."
         )
