@@ -8,6 +8,10 @@ from typing import Any, Dict, List, Optional, Sequence
 
 from ..globals import get_supabase, now_utc, reset_supabase
 from .repository import find_open_ticket_for_owner, list_tickets_for_owner
+from .member_intelligence_cache import (
+    STAFF_MEMBER_INTELLIGENCE_CACHE,
+    invalidate_member_intelligence,
+)
 
 
 # ============================================================
@@ -1215,7 +1219,7 @@ async def get_member_ticket_history_summary(
     return _build_ticket_history_summary(tickets, open_ticket)
 
 
-async def get_member_context_snapshot(
+async def _get_member_context_snapshot_uncached(
     *,
     guild_id: int | str,
     user_id: int | str,
@@ -1411,6 +1415,48 @@ async def get_member_context_snapshot(
     )
 
     return snapshot
+
+
+async def get_member_context_snapshot(
+    *,
+    guild_id: int | str,
+    user_id: int | str,
+    ticket_limit: int = 25,
+    event_limit: int = 15,
+    join_limit: int = 10,
+    include_recent_tickets: bool = True,
+    include_recent_events: bool = True,
+    include_recent_joins: bool = True,
+    include_extended_intelligence: bool = False,
+    use_intelligence_cache: bool = False,
+    force_refresh: bool = False,
+) -> Dict[str, Any]:
+    """Cached only by explicit staff-view opt-in; other callers read normally.
+
+    No moderation decision, live role/membership, or staff review verdict is
+    cached. All key dimensions are included to prevent mixing partial samples.
+    """
+    gid, uid = _as_str_id(guild_id), _as_str_id(user_id)
+    params = dict(
+        guild_id=gid, user_id=uid,
+        ticket_limit=ticket_limit, event_limit=event_limit, join_limit=join_limit,
+        include_recent_tickets=include_recent_tickets,
+        include_recent_events=include_recent_events,
+        include_recent_joins=include_recent_joins,
+        include_extended_intelligence=include_extended_intelligence,
+    )
+    if not use_intelligence_cache or not gid or not uid:
+        return await _get_member_context_snapshot_uncached(**params)
+    key = (
+        gid, uid, int(ticket_limit), int(event_limit), int(join_limit),
+        bool(include_recent_tickets), bool(include_recent_events),
+        bool(include_recent_joins), bool(include_extended_intelligence),
+    )
+    return await STAFF_MEMBER_INTELLIGENCE_CACHE.get_or_load(
+        key,
+        lambda: _get_member_context_snapshot_uncached(**params),
+        force_refresh=force_refresh,
+    )
 
 
 # ============================================================
