@@ -1146,6 +1146,17 @@ class ExternalLinkCheckModal(discord.ui.Modal, title="Check historical scam-doma
 class ExternalSourcesView(OwnedView):
     def __init__(self, owner_id: int):
         super().__init__(owner_id)
+        # The providers publish searchable pages but no confirmed read-only
+        # account API. Open the official site so the owner can enter the ID;
+        # do not scrape HTML or invent a user-ID endpoint.
+        self.add_item(discord.ui.Button(
+            label="Open Trustify", style=discord.ButtonStyle.link,
+            url="https://trustify.fun/scammers", row=1,
+        ))
+        self.add_item(discord.ui.Button(
+            label="Open Redacted", style=discord.ButtonStyle.link,
+            url="https://project-redacted.org/", row=1,
+        ))
 
     @discord.ui.button(label="Check Scam Domain", emoji="🔗", style=discord.ButtonStyle.secondary)
     async def check_link(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
