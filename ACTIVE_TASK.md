@@ -1,3 +1,13 @@
+## PR #113/#126 HISTORICAL INTEGRATION ALIAS RETIREMENT (2026-11-02 UTC)
+
+- **Starting state:** 27 branch refs including `main`, zero open PRs, main `a05492a96016f6f8ac8cc983720556d568108ae5`; exact-main Dank Shield CI #41534767691 passed. Discloud is owner-attested linked to `main`, but its live running commit remains unverified.
+- **Original work:** `integration/pr-113-current-main` (3 divergent commits), `integration/pr-113-squash-current-main` (1), and `integration/pr-126-current-main` (1) retain different commit graphs. The exact changed-path blob SHAs of both PR #113 aliases match merged #113 at `53524b36` for all 9 changed paths; the PR #126 alias matches merged #126 at `a3ba3300` for all 32 paths, including removed/renamed paths. These are integrated artifacts, not feature branches with missing functionality.
+- **Implementation:** The existing owner-only `preview-reconciled`/`delete-reconciled` workflow now pins all three original heads, verifies original merged PR provenance and main ancestry, rechecks the complete divergent path inventory and immutable merge-tree blob equality, and preserves the existing main/branch/PR leases, deployment-ref guard, SHA-bound owner confirmation, archive-tag readback and deletion. No generic `integration/` wildcard deletion.
+- **Gates:** Validate PR-head CI, merge safely, verify exact-main CI, then owner-reviewed preview and archive-before-delete. Do not claim deletion until all three original refs are absent and archive tags point to the exact heads. Backups, recovery, protected refs and unrelated work remain untouched.
+- **Production boundary:** Dedicated Supabase `viamriafkbqhquvrsnua` intended primary; IdleGrowOp Supabase rollback source preserved; Discloud PostgreSQL isolated backup candidate. No database, credentials, deployment or host changes. Independent off-Discloud backup, live Discloud SHA, canary and tested rollback remain unverified.
+
+---
+
 ## VERIFICATION REMINDER HISTORICAL RECONCILIATION (2026-11-02 UTC)
 
 - **Before:** 28 branches including main; no open PRs; main `d1741b70` with exact-main Dank Shield CI #41529930489 passed. All 27 non-main refs inspected by category; backups/recovery refs held. Reviewed-merged preview #41532456456 found zero eligible merged branches, so no unsupported deletion was attempted.
