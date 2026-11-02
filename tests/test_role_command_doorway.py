@@ -112,7 +112,7 @@ def test_normal_members_only_receive_existing_self_service_roles() -> None:
 
 def test_direct_self_role_card_is_small_and_routes_back_to_canonical_center() -> None:
     labels = _labels(SelfServiceRoleView(1, 123))
-    assert labels == {"Add / Remove Role", "Roles & Profiles"}
+    assert labels == {"Add / Remove Role", "Roles & Profiles", "Close"}
 
 
 def test_role_center_separates_member_and_staff_community_pings_surfaces() -> None:
