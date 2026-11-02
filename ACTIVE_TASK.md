@@ -1,3 +1,13 @@
+## INTERACTION INGRESS TRACE RECONCILIATION (2026-11-02 UTC)
+
+- **Starting state:** main `68db8ac7ee76518f3f8c6264695647e729b0c080`; 34 branch refs (33 non-main). Existing PR #805 is actively changing member-intelligence code and its long-running CI is in progress. This work does not touch its files.
+- **Historical work:** `fix/trace-application-command-ingress-20261007` is four commits ahead of main; it adds raw Gateway, parsed interaction and supported command-tree ingress markers, but also unconditionally logs user IDs, guild IDs and component custom IDs. Current main lacks those three diagnostics.
+- **Integration:** `fix/reconcile-private-interaction-ingress-tracing-20261102` restores the useful three-stage diagnostics behind `DANK_INTERACTION_INGRESS_TRACE` (off by default), with bounded sanitized labels, no personal IDs or custom IDs, supported Discord hooks, tests and operational documentation. This is a **replacement**, not a cherry-pick of the historical branch.
+- **Release/cleanup gates:** PR-head CI, merge, exact-main CI, and confirmation that the replacement preserves needed behavior before any archive-first retirement of the original branch. Original branch must remain until a separate owner-reviewed, exact-SHA cleanup path authorizes its retirement. **Actually deleted this checkpoint: 0**. Production release, database/credentials/host changes: none.
+- **Preserve:** Dedicated Supabase `viamriafkbqhquvrsnua` intended primary, original IdleGrowOp Supabase rollback source, isolated Discloud PostgreSQL backup candidate, protected backup/recovery refs. Owner-linked Discloud branch `main` is not proof of the live running commit; independent backup, canary and rollback remain unverified.
+
+---
+
 ## INTEGRATE MISSING STACKED CHANNEL-PICKER WORK (2026-11-02)
 
 - **Evidence:** main `6f92f450e7b78313869c084505daad127667e05a` has 35 branches, zero open PRs, exact-main CI #41440443336 passed. PR #724 merged to main, but PR #725 was merged **into a feature branch**, not main. Current main lacked the PR #725 Guided Setup, legacy setup wizard, captions, and Roles Center Use This Channel controls, and lacked its regression test. `fix/legacy-use-this-channel-20261025` is an ancestor of `fix/shared-use-this-channel-20261025`, whose newer commit contains the stacked PR #725 merge.
