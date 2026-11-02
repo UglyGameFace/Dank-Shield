@@ -168,6 +168,7 @@ const owner = 'UglyGameFace', repo = 'Dank-Shield';
 const fullName = owner + '/' + repo, mainSha = 'mainsha';
 const inUse = new Set(['feat/open']);
 const safeName = name => name.startsWith('feat/');
+const integratedCleanupRefs = new Set();
 const cutoff = Date.now() - 48 * 60 * 60 * 1000;
 const branches = [
   {name:'feat/integrated',protected:false,commit:{sha:'oldsha'}},
