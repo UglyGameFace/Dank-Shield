@@ -682,6 +682,9 @@ class IntelligenceTargetView(OwnedView):
     @discord.ui.button(label="Stored History", emoji="🧾", style=discord.ButtonStyle.secondary, row=0)
     async def history(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
+        # Discord's fetch_member may exceed the 3-second interaction window.
+        if not interaction.response.is_done():
+            await interaction.response.defer(ephemeral=True)
         # Keep the buttons on the same ephemeral review instead of opening
         # a second history-only message.
         member, status = await _resolve_intelligence_member(interaction.guild, self.member_id)
