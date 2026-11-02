@@ -258,14 +258,22 @@ jobs:
                 'database','postgres','production','rollback','revert',
                 'snapshot','stable','known','good'
               ]);
-              // Explicitly reviewed cleanup implementation refs, not deployment
-              // or database checkpoints. They may retire ONLY as exact
-              // ancestors of main, never by squash/tree equivalence.
+              // Exact historical integration refs reviewed against main on 2026-11-02.
+              // Despite sensitive words in their names, each has ZERO commits
+              // ahead of main. Preserve the immutable head in an archive tag
+              // before retirement. This exception is never valid for a
+              // divergent ref, a backup/archive/recovery namespace, or a
+              // protected/active branch; the deletion leases remain mandatory.
               const integratedCleanupRefs = new Set([
-                'fix/branch-retirement-and-migration-approval-20261031',
-                'fix/dankshield-archive-first-retirement-20261031',
-                'fix/owner-attested-discloud-branch-retirement-20261101',
-                'fix/squash-merged-retirement-archive-20261101'
+                'extract/discloud-packaging-gate-20261025',
+                'fix/dankshield-live-migration-history-20261031',
+                'fix/dankshield-live-migration-target-20261022',
+                'fix/discloud-pg-audit-test-20261027',
+                'fix/discloud-pg-guild-readiness-20261027',
+                'fix/discloud-pg-readiness-regression-20261027',
+                'fix/discloud-pg-runtime-inventory-20261027',
+                'fix/postgres-production-caller-inventory-20261028',
+                'fix/supabase-egress-configuration-20261028',
               ]);
               const safeName = name =>
                 prefixes.some(p => name.startsWith(p)) &&

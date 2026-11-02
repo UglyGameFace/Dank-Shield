@@ -1,3 +1,12 @@
+## GUARDED HISTORICAL BRANCH RETIREMENT BATCH (2026-11-02 UTC)
+
+- **Verified main before work:** `c2a6fdcbeaba0d1cbd47fac0d1518fcccb86e819`, exact-main Dank Shield CI #41398029837 passed; 48 branch refs, zero open PRs. Discloud is owner-designated to track `main`; exact live deployed commit remains unverified.
+- **Current integration:** `fix/retire-nine-ancestor-db-work-20261102`. Nine exact historical fix/extract branch tips have zero commits ahead of main. Existing reviewed cleanup excludes them solely due to sensitive name tokens. Add only those exact names to owner-reviewed eligibility, require fresh exact ancestry, SHA-bound preview/deletion token, archived original SHA, unchanged main/ref/open PR leases, and owner authorization. The broader backup/archive/recovery/deployment namespace remains protected.
+- **Preserved work:** `audit/idle-grow-discloud-backup-retire-aiven-20261026` is held as a backup-oriented checkpoint. `feat/embed-studio-recurring-campaigns-20261024`, `fix/517-permanent-optout-20261013`, and other divergent heads retain unique commits and are NOT eligible. Dedicated Supabase `viamriafkbqhquvrsnua` remains intended primary; original IdleGrowOp rollback and isolated Discloud PostgreSQL backup candidate untouched.
+- **Release boundary:** This PR changes only branch hygiene and tests. No production deployment, credentials, database migration, irreversible host change or live-state claim. Require exact-head CI, merge validation, then reviewed preview and verified deletion with archive tags. **Branches actually deleted by this integration at this checkpoint: 0.**
+
+---
+
 ## SCHEDULED SQUASH-HEAD ARCHIVAL INTEGRATION (2026-11-02 UTC)
 
 - **Main at inspection:** `be029a1d617f551f91457b47ae5eb29d59929843`, exact-main CI #41369167344 passed; 52 branches, zero open PRs. Live Discloud build remains unverified.
