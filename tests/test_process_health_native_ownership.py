@@ -80,6 +80,70 @@ def test_process_health_bot_attachment_is_explicit_and_idempotent(monkeypatch) -
     ]
 
 
+def test_optional_interaction_ingress_is_private_and_idempotent(monkeypatch, capsys) -> None:
+    import asyncio
+    from types import SimpleNamespace
+    import stoney_verify.startup_guards.process_health as health
+
+    monkeypatch.setenv("DANK_INTERACTION_INGRESS_TRACE", "true")
+    monkeypatch.setattr(health, "_READY_LISTENER_ATTACHED", False)
+    monkeypatch.setattr(health, "_GATEWAY_LISTENERS_ATTACHED", False)
+    monkeypatch.setattr(health, "_INTERACTION_TRACE_LISTENERS_ATTACHED", False)
+    listeners = {}
+
+    class FakeBot:
+        user = None
+        guilds = []
+
+        def add_listener(self, listener, name: str) -> None:
+            listeners[name] = listener
+
+    bot = FakeBot()
+    assert health.attach_process_health(bot) is True
+    assert health.attach_process_health(bot) is False
+    assert "on_socket_event_type" in listeners
+    assert "on_interaction" in listeners
+
+    interaction = SimpleNamespace(
+        data={"name": "test\\nprivate", "custom_id": "secret-token"},
+        type=SimpleNamespace(name="application_command"),
+        user=SimpleNamespace(id=987654321),
+        guild_id=123456789,
+    )
+    asyncio.run(listeners["on_socket_event_type"]("INTERACTION_CREATE"))
+    asyncio.run(listeners["on_interaction"](interaction))
+    output = capsys.readouterr().out
+    assert "RAW_INTERACTION_CREATE" in output
+    assert "INTERACTION_INGRESS" in output
+    assert "test_private" in output
+    assert "secret-token" not in output
+    assert "987654321" not in output
+    assert "123456789" not in output
+    assert "test\\nprivate" not in output
+
+
+def test_interaction_trace_disabled_by_default(monkeypatch) -> None:
+    import stoney_verify.startup_guards.process_health as health
+
+    monkeypatch.delenv("DANK_INTERACTION_INGRESS_TRACE", raising=False)
+    monkeypatch.setattr(health, "_READY_LISTENER_ATTACHED", False)
+    monkeypatch.setattr(health, "_GATEWAY_LISTENERS_ATTACHED", False)
+    monkeypatch.setattr(health, "_INTERACTION_TRACE_LISTENERS_ATTACHED", False)
+    listeners = []
+
+    class FakeBot:
+        user = None
+        guilds = []
+
+        def add_listener(self, listener, name: str) -> None:
+            listeners.append(name)
+
+    assert health.attach_process_health(FakeBot()) is True
+    assert listeners == ["on_ready", "on_connect", "on_disconnect", "on_resumed"]
+    assert health._safe_trace_label("x" * 100) == "x" * 64
+    assert health._safe_trace_label("bad\\nname") == "bad_name"
+
+
 def test_process_health_is_explicit_startup_owner_but_not_dormant_inventory() -> None:
     from stoney_verify.startup_diagnostics import EXPECTED_STARTUP_OWNER_MODULES
     from stoney_verify.startup_guards import LEGACY_DORMANT_STARTUP_GUARDS
