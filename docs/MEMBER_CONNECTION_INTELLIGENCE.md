@@ -39,6 +39,29 @@ Discord bots cannot discover ordinary friendships, other servers, private DMs, o
 - After the approved Discloud deployment, test from Android **and desktop**: owner/staff/member access, default switches, switching settings off and on, ban/join deduplication in a private modlog, bad/modlog-permission paths, selected channel and role, conflicting overwrite refusal, permission change, visible access as trusted and untrusted members, remove/restore, missing role/channel, pending recovery and restart.
 - Verify the actual running bot's commit and the configured guild database schema/permissions. GitHub CI cannot prove live Discord channel permissions or delivery.
 
+## Dank Shield native Safety Reports
+
+No external moderation bot is required. From a selected live member's
+**Intelligence** or **Connections** panel, the physical server owner can choose
+**Safety Reports** to open the existing `/dank safety-network` report view for
+that exact Discord account. The existing database and opt-in publishing /
+receiving controls still apply: the source server must currently be served by
+Dank Shield and have owner-authorized publication, while the receiving server
+must have owner-authorized receiving enabled.
+
+Only the physical owner may read the private cross-server view. Any staff
+member can continue using guild-local connections without gaining permission
+to see unrelated servers' reports. Incident reports remain **owner-attested**,
+not independently verified. They do not prove alternate identities,
+friendships, wrongdoing, or common membership. Inaccessible data is reported
+as unavailable rather than innocent; zero shared reports is not a clearance.
+No external-bot installation, arbitrary-user guild enumeration, OAuth token,
+automatic ban, or moderation restriction is involved.
+
+History counts shown in **Stored History** are explicitly labeled as bounded
+recent readbacks or recorded minimums, not complete lifetimes. Live membership
+is still checked through Discord REST; unknown stored status cannot replace it.
+
 ## Original investigation affordances
 
 Select current member → **Connections**, **Recent Ban Connections**, **Connections by ID** and **Stored History** remain available. Ban status is verified against Discord and a failed lookup is never treated as banned. Existing staff-verdict, moderated-action permissions, role hierarchy, verification and join safeguards are preserved.
