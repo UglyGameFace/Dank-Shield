@@ -29,6 +29,7 @@ _HEALTH_TASK_STARTED = False
 _LOOP_LAG_TASK_STARTED = False
 _READY_LISTENER_ATTACHED = False
 _GATEWAY_LISTENERS_ATTACHED = False
+_INTERACTION_TRACE_LISTENERS_ATTACHED = False
 _PREVIOUS_EXCEPTHOOK = sys.excepthook
 _INSTALLED = False
 _EXTERNAL_WATCHDOG_LAST_OK_AT = 0.0
@@ -42,6 +43,17 @@ def _log(message: str) -> None:
         print(f"🫀 process_health {message}", flush=True)
     except Exception:
         pass
+
+
+def interaction_ingress_trace_enabled() -> bool:
+    """Explicit, startup-time diagnostic opt-in; no per-member data collection."""
+    return os.getenv("DANK_INTERACTION_INGRESS_TRACE", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _safe_trace_label(value: Any) -> str:
+    """Log only bounded command/type labels, never IDs, arguments or custom IDs."""
+    import re
+    return re.sub(r"[^a-zA-Z0-9_.-]", "_", str(value or "unknown"))[:64]
 
 
 def _safe_int(value: Any, default: int = 0) -> int:
@@ -414,7 +426,10 @@ def attach_process_health(bot: Any) -> bool:
 
     global _READY_LISTENER_ATTACHED
     global _GATEWAY_LISTENERS_ATTACHED
-    if _READY_LISTENER_ATTACHED and _GATEWAY_LISTENERS_ATTACHED:
+    global _INTERACTION_TRACE_LISTENERS_ATTACHED
+    trace_enabled = interaction_ingress_trace_enabled()
+    if (_READY_LISTENER_ATTACHED and _GATEWAY_LISTENERS_ATTACHED and
+            (not trace_enabled or _INTERACTION_TRACE_LISTENERS_ATTACHED)):
         return False
     if bot is None:
         return False
@@ -461,6 +476,20 @@ def attach_process_health(bot: Any) -> bool:
             f"latency={latency:.3f}s {_memory_snapshot()}"
         )
 
+    async def _process_health_on_socket_event_type(event_type: str) -> None:
+        if str(event_type or "").upper() == "INTERACTION_CREATE":
+            _log("RAW_INTERACTION_CREATE")
+
+    async def _process_health_on_interaction(interaction: Any) -> None:
+        data = getattr(interaction, "data", None)
+        payload = data if isinstance(data, dict) else {}
+        kind = getattr(getattr(interaction, "type", None), "name", "unknown")
+        _log(
+            "INTERACTION_INGRESS "
+            f"type={_safe_trace_label(kind)} "
+            f"command={_safe_trace_label(payload.get('name'))}"
+        )
+
     try:
         if not _READY_LISTENER_ATTACHED:
             bot.add_listener(_process_health_on_ready, "on_ready")
@@ -472,6 +501,11 @@ def attach_process_health(bot: Any) -> bool:
             bot.add_listener(_process_health_on_resumed, "on_resumed")
             _GATEWAY_LISTENERS_ATTACHED = True
             _log("gateway connect/disconnect/resume listeners attached")
+        if trace_enabled and not _INTERACTION_TRACE_LISTENERS_ATTACHED:
+            bot.add_listener(_process_health_on_socket_event_type, "on_socket_event_type")
+            bot.add_listener(_process_health_on_interaction, "on_interaction")
+            _INTERACTION_TRACE_LISTENERS_ATTACHED = True
+            _log("privacy-safe interaction ingress tracing enabled")
         return True
     except Exception as e:
         _log(f"failed attaching process health listeners: {e!r}")
