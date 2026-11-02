@@ -1,3 +1,13 @@
+## OWNER-REJECTED FEATURE BRANCH RETIREMENT (2026-11-02 UTC)
+
+- **Objective:** Archive and retire the two old feature branches the owner explicitly rejected: `fix/517-permanent-optout-20261013` and `feat/cinema-rolling-supervised-worker-20261014`. Do not remove existing voice-consent checks or other live functionality from main.
+- **Evidence:** Before PR #800, main `ac22d7050cc1175fca1b3628901b962840ce5f1c` passed exact-main CI #41402284203. Inventory was 39 branches, zero open PRs. Old voice branch was two commits ahead, and cinema worker branch one commit ahead; neither was eligible for merged-branch cleanup. Owner-rejected preview #41404408717 found zero eligible merged refs.
+- **Integration:** PR #800 adds a separate authenticated owner-comment-only preview/delete mode for two exact SHA-pinned historical heads. Requires main/branch leases, no open PR dependencies, verified linked deployment branch, owner confirmation token, archive tag SHA readback before branch deletion. Scheduled cleanup cannot invoke this mode. Added `tests/test_owner_rejected_branch_retirement.py`.
+- **Current state:** PR CI pending; **actual branch deletions for this PR: 0**. After verified PR-head CI, merge and exact-main CI, invoke owner preview on PR #788, inspect batch, then invoke owner-confirmed deletion. Verify refs absent and archived SHA tags. Branch count may temporarily increase by one while PR is open.
+- **Preserved:** Dedicated Supabase `viamriafkbqhquvrsnua` primary; original IdleGrowOp rollback; isolated Discloud PostgreSQL backup candidate; all unrelated unique branch work, backup refs and deployment refs. Discloud is owner-linked to main, but live running SHA is unverified. No production release, database or credentials change.
+
+---
+
 ## GUARDED HISTORICAL BRANCH RETIREMENT BATCH (2026-11-02 UTC)
 
 - **Verified main before work:** `c2a6fdcbeaba0d1cbd47fac0d1518fcccb86e819`, exact-main Dank Shield CI #41398029837 passed; 48 branch refs, zero open PRs. Discloud is owner-designated to track `main`; exact live deployed commit remains unverified.
