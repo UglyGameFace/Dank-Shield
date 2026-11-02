@@ -807,6 +807,18 @@ def _historical_member_embed(
     )
     status = snapshot.get("source_status") or {}
     sample_limits = snapshot.get("sample_limits") or {}
+    event_count = (
+        str(events.get("total", 0)) if status.get("events") != "unavailable"
+        else "unavailable"
+    )
+    event_moderation = (
+        str(events.get("moderation_count", 0)) if status.get("events") != "unavailable"
+        else "unavailable"
+    )
+    ticket_count = (
+        str(tickets.get("total", 0)) if status.get("tickets") != "unavailable"
+        else "unavailable"
+    )
     joins_available = status.get("joins") != "unavailable" and status.get("profile") != "unavailable"
     join_count = str(joins.get("times_joined", 0)) if joins_available else "unknown"
     leave_count = str(joins.get("times_left", 0)) if joins_available else "unknown"
@@ -903,16 +915,25 @@ def _historical_member_embed(
     feed_details = "\\n".join(feed_detail_lines)
     feed_line = ""
     if sample_limits.get("activity_feed"):
+        feed_count = (
+            str(feed.get("total", 0))
+            if status.get("activity_feed") != "unavailable"
+            else "unavailable"
+        )
+        feed_moderation = (
+            str(feed.get("moderation_count", 0))
+            if status.get("activity_feed") != "unavailable"
+            else "unavailable"
+        )
         feed_line = (
             f"\\nActivity feed (up to {sample_limits['activity_feed']}): "
-            f"**{feed.get('total', 0)}** records, "
-            f"**{feed.get('moderation_count', 0)}** moderation."
+            f"**{feed_count}** records, **{feed_moderation}** moderation."
         )
     embed.add_field(
         name="Activity & Moderation Evidence",
         value=(
-            f"Member events (up to {sample_limits.get('events', 30)}): **{events.get('total', 0)}** • "
-            f"Moderation: **{events.get('moderation_count', 0)}**\\n"
+            f"Member events (up to {sample_limits.get('events', 30)}): **{event_count}** • "
+            f"Moderation: **{event_moderation}**\\n"
             f"Last member event: `{str(events.get('latest_event_type') or 'unknown')[:65]}`"
             + feed_line
             + (f"\\nRecent feed records:\\n{feed_details}" if feed_details else "")
@@ -935,7 +956,7 @@ def _historical_member_embed(
     embed.add_field(
         name="Tickets & Staff Decisions",
         value=(
-            f"Recent retained tickets (up to {sample_limits.get('tickets', 15)}): **{tickets.get('total', 0)}** • "
+            f"Recent retained tickets (up to {sample_limits.get('tickets', 15)}): **{ticket_count}** • "
             f"Staff verdicts (last 10 queried): **{len(verdicts)}**"
             + (f"\\nVerdicts:\\n{verdict_details}" if verdict_details else "")
             + (f"\\nRecent tickets:\\n{ticket_details}" if ticket_details else "")
@@ -1023,7 +1044,13 @@ async def _show_stored_member_history(
         )
         timeout_embed.add_field(name="Live membership", value=_intelligence_presence_text(presence), inline=False)
         return await _replace_panel(interaction, embed=timeout_embed, view=view)
-    snapshot = context_result if isinstance(context_result, dict) and context_result.get("ok") else {}
+    # Even a fully failed snapshot carries per-source outage diagnostics.
+    # Keep its evidence status rather than rendering an apparent empty history
+    # when unrelated staff-verdict records were recovered.
+    snapshot = (
+        context_result if isinstance(context_result, dict)
+        and context_result.get("source_status") is not None else {}
+    )
     verdicts = feedback_result if isinstance(feedback_result, list) else []
     if not snapshot and not verdicts:
         if view is None:
