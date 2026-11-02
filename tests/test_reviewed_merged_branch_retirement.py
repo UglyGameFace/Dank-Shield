@@ -338,10 +338,12 @@ def test_integrated_cleanup_exception_is_exact_and_ancestor_only() -> None:
         "fix/discloud-pg-runtime-inventory-20261027",
         "fix/postgres-production-caller-inventory-20261028",
         "fix/supabase-egress-configuration-20261028",
+        # PR #745 is merged and the exact audit tip is an ancestor of main.
+        # This exception is deliberately not a blanket backup-ref exemption.
+        "audit/idle-grow-discloud-backup-retire-aiven-20261026",
     ):
         assert reviewed.count("'" + name + "'") == 1
-    for held in ("audit/idle-grow-discloud-backup-retire-aiven-20261026",
-                 "backup/stoneyverify-stable-7fdc331-20261008",
+    for held in ("backup/stoneyverify-stable-7fdc331-20261008",
                  "feat/embed-studio-recurring-campaigns-20261024"):
         assert "'" + held + "'" not in reviewed.split("const integratedCleanupRefs = new Set([", 1)[1].split("]);", 1)[0]
     assert "const integratedCleanupRefs = new Set([" in reviewed
