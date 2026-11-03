@@ -1,3 +1,14 @@
+## LIVE BRANCH RETIREMENT CHECKPOINT (2026-11-03 23:46 UTC)
+
+- **Integration delivered:** PR #817 merged into `main` as `b3e522b7b176a3178d5476d96c483f66c8bf5f03`; PR-head Dank Shield CI #41716061062 passed all five jobs and companion checks. Exact-main CI #41741757261 was still running at the checkpoint. No deployment implied.
+- **Branch inventory:** 27 refs including `main` immediately after merge, zero open PRs, 15 open issues. **This pass: 0 deleted, 1 PR merged.** Earlier verified owner-reviewed cleanup #41723105630 deleted and archived `fix/archive-tag-readback-consistency-20261102` at `94dc1a97df6887daf69fb2292b4f3a7a41063710` (branch confirmed absent).
+- **Next verified candidates:** PR #815 branch `fix/retire-pr814-archive-guard-20261103` at `3d8b17ef5f87f38c5131f4148c8213aeb7e33784`; PR #816 branch `cleanup/remove-cinema-only-repository-artifacts-20261103` at `f9d44fdb2bd0e278420557505119a464ea3e1e56`. Both are pinned in owner-reviewed allowlist after #817. Fresh preview/SHA token and archive readback still needed. New PR #817 branch `fix/retire-merged-cleanup-815-816-20261103` at `578404824adb6df23dfe3872dc0f15f103c449e9` remains to be separately reconciled.
+- **Unattended cleanup blocker:** `DANK_DISCLOUD_DEPLOY_BRANCH` is empty in scheduled retirement run #41741757154; the workflow remains archive-only for historical refs until that deployment-reference gate is independently configured. Owner-authenticated reviewed deletion is still required; connector-authored comments must not bypass owner identity, SHA/main leases or the archive-first check.
+- **Preserve:** Eight divergent feature/repair heads and historical backup/recovery refs; do not discard unique work. No DB, Discloud, secrets, deployment or host mutation. Dedicated Supabase `viamriafkbqhquvrsnua` intended primary; preserve IdleGrowOp Supabase rollback source; Discloud PostgreSQL isolated backup candidate. Live Discloud SHA, independent off-Discloud backup, canary and tested rollback unverified.
+- **Tracking:** Issue #597 received the integration/retirement checkpoint; issue stays open pending verified deletion and remaining integrations.
+
+---
+
 ## HISTORICAL INTEGRATION REF RETIREMENT + ARCHIVE READBACK FIX (2026-11-03 UTC)
 
 - **Actual cleanup:** Starting from 28 branch refs (including main), owner-authenticated cleanup archived and deleted all three obsolete PR #113/#126 aliases and the merged #813 integration branch. Repository reached **24 branch refs** after deletion, before opening the new repair work branch. The new `fix/archive-tag-readback-consistency-20261102` branch temporarily makes **25**. No protected backup, recovery, production, or active feature refs were deleted.
