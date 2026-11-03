@@ -124,3 +124,40 @@ def test_owner_opt_in_cleanup_is_preview_bound_and_rechecks_main() -> None:
     assert workflow.index("process.env.CLEANUP_CONFIRMATION !== optInToken") < workflow.index(
         "await github.rest.git.deleteRef({ owner, repo, ref: 'heads/' + name })"
     )
+
+
+def test_exact_sha_merged_cleanup_can_retire_after_main_ci_without_generic_exemption() -> None:
+    """Only three audited heads bypass name exclusions and the 48-hour delay."""
+    workflow = AUTO.read_text(encoding="utf-8")
+    historical = workflow.split("const exactMergedCleanupHeads = new Map([", 1)[1]
+    historical = historical.split("const after =", 1)[0]
+    for name, sha in (
+        ("fix/retire-pr814-archive-guard-20261103", "3d8b17ef5f87f38c5131f4148c8213aeb7e33784"),
+        ("cleanup/remove-cinema-only-repository-artifacts-20261103", "f9d44fdb2bd0e278420557505119a464ea3e1e56"),
+        ("fix/retire-merged-cleanup-815-816-20261103", "578404824adb6df23dfe3872dc0f15f103c449e9"),
+    ):
+        assert repr(name) in historical
+        assert repr(sha) in historical
+    assert "exactMergedCleanupHeads.get(branch.name) === branch.commit.sha" in historical
+    assert "(normallySafe || exactReviewedAuto)" in historical
+    assert "(!exactReviewedAuto && Date.parse(pr.merged_at) > cutoff)" in historical
+    assert "github.rest.actions.listWorkflowRuns" in historical
+    assert "workflow_id: 'ci.yml'" in historical
+    assert "head_sha: startMain" in historical
+    for fail_closed in (
+        "run.head_sha === startMain",
+        "run.event === 'push'",
+        "run.head_branch === 'main'",
+        "run.status === 'completed'",
+        "run.conclusion === 'success'",
+        "prs.length !== 1",
+        "pr.head?.sha !== sha",
+        "equivalentAtMerge(item, pr, graph)",
+        "archive.object.sha !== sha",
+        "mainLease !== startMain || lease.object.sha !== sha",
+    ):
+        assert fail_closed in historical
+    for held in ("'backup/'", "'recovery/'", "'integration/'",
+                 "'deployment/'", "'production/'"):
+        assert held in historical
+    assert "const cutoff = Date.now() - 48 * 60 * 60 * 1000" in historical
