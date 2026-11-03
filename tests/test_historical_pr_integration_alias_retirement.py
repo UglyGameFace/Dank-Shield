@@ -5,6 +5,10 @@ to the immutable merged PR trees. They are NOT eligible for generic ancestor
 pruning, and no protected backup or deployment ref is eligible here.
 """
 from pathlib import Path
+import shutil
+import subprocess
+
+import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = (ROOT / ".github/workflows/retire-merged-temporary-branches.yml").read_text()
@@ -110,3 +114,51 @@ def test_archive_readback_retries_only_transient_404_after_creation() -> None:
     ):
         assert expected in WORKFLOW
     assert "github.rest.git.deleteRef" in WORKFLOW
+
+
+def test_archive_readback_behavior_with_mocked_github_api() -> None:
+    if not shutil.which("node"):
+        pytest.skip("Node.js is required for the workflow's JavaScript behavior test")
+    helper = "const readCreatedArchive = async (tag, expectedSha) =>" + WORKFLOW.split(
+        "const readCreatedArchive = async (tag, expectedSha) =>", 1
+    )[1].split("            if (fullName !==", 1)[0]
+    script = (
+        "const owner='UglyGameFace', repo='Dank-Shield';\n"
+        "const setTimeout = fn => { fn(); };\n"
+        "let replies = [], calls = 0;\n"
+        "const github = {rest:{git:{getRef:async()=>{\n"
+        "  calls++; const next = replies.shift();\n"
+        "  if (next instanceof Error) throw next; return {data:next};\n"
+        "}}}};\n"
+        + helper
+        + """
+(async () => {
+  const missing = () => Object.assign(new Error('Not Found'), {status:404});
+  replies = [missing(), {object:{type:'commit',sha:'expected'}}];
+  calls = 0;
+  const recovered = await readCreatedArchive('tags/example', 'expected');
+  if (calls !== 2 || recovered.object.sha !== 'expected')
+    throw new Error('Transient 404 was not retried and verified');
+  replies = [{object:{type:'commit',sha:'wrong'}}]; calls = 0;
+  try { await readCreatedArchive('tags/example', 'expected'); throw new Error('accepted wrong SHA'); }
+  catch (error) {
+    if (!String(error.message).includes('Archive SHA mismatch') || calls !== 1) throw error;
+  }
+  replies = [Object.assign(new Error('Forbidden'), {status:403})]; calls = 0;
+  try { await readCreatedArchive('tags/example', 'expected'); throw new Error('accepted 403'); }
+  catch (error) {
+    if (error.status !== 403 || calls !== 1) throw error;
+  }
+  replies = Array.from({length:5}, missing); calls = 0;
+  try { await readCreatedArchive('tags/example', 'expected'); throw new Error('accepted missing tag'); }
+  catch (error) {
+    if (error.status !== 404 || calls !== 5) throw error;
+  }
+})().catch(error => { console.error(error); process.exit(1); });
+"""
+    )
+    result = subprocess.run(
+        ["node", "-e", script], text=True, capture_output=True, timeout=15,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
