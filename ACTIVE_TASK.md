@@ -1,3 +1,13 @@
+## HISTORICAL INTEGRATION REF RETIREMENT + ARCHIVE READBACK FIX (2026-11-03 UTC)
+
+- **Actual cleanup:** Starting from 28 branch refs (including main), owner-authenticated cleanup archived and deleted all three obsolete PR #113/#126 aliases and the merged #813 integration branch. Repository reached **24 branch refs** after deletion, before opening the new repair work branch. The new `fix/archive-tag-readback-consistency-20261102` branch temporarily makes **25**. No protected backup, recovery, production, or active feature refs were deleted.
+- **Deleted:** `integration/pr-113-current-main` (`e55228c38e9ebcc26bc79718058d44fd31352875`), `integration/pr-113-squash-current-main` (`c3779d8fbe1b87fff99ca44d595e91324541dac3`), `integration/pr-126-current-main` (`e51fe07cd33233860aa96c35bc1a79109d73677d`), `fix/reconcile-pr113-pr126-integration-refs-20261102` (`f5e47a2f174b537ed050cc825ff91fa955045910`). All four archive tags independently read back at their exact original SHAs. Successful owner-reviewed runs #41552699445 and #41552813229.
+- **Root cause repaired in PR #814:** First `delete-reconciled` run #41552637908 created the first archive ref but failed because GitHub returned a transient 404 on immediate ref readback. Retry succeeded without data loss. The PR adds bounded 404-only readback retries and exact-SHA verification across all four archive creation paths, plus regression tests. PR-head CI and subsequent exact-main CI are required before merge/retirement.
+- **Still preserved:** Eight divergent feature/repair branches were compared against main (recurring embeds, welcome cards, AntiNuke, two live captions branches, profile moderation, guild-loop scaling, 10k readiness). Each retains unique commits; no speculative retirement. Backups, known-good Cinema refs and recovery refs remain protected.
+- **Production boundary:** Main is owner-attested as Discloud-linked branch, but the running commit SHA is not verified. Dedicated Supabase `viamriafkbqhquvrsnua` remains intended primary; original IdleGrowOp Supabase rollback source preserved; Discloud PostgreSQL only isolated backup candidate. No production deployment, database/credential/host mutation; independent off-Discloud backup, live canary and tested rollback remain unverified.
+
+---
+
 ## PR #113/#126 HISTORICAL INTEGRATION ALIAS RETIREMENT (2026-11-02 UTC)
 
 - **Starting state:** 27 branch refs including `main`, zero open PRs, main `a05492a96016f6f8ac8cc983720556d568108ae5`; exact-main Dank Shield CI #41534767691 passed. Discloud is owner-attested linked to `main`, but its live running commit remains unverified.
