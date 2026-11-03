@@ -171,6 +171,8 @@ const safeName = name => name.startsWith('feat/');
 const integratedCleanupRefs = new Set();
 // This isolated inventory harness has no owner-specific historical work heads.
 const reconciledWorkHeads = new Map();
+// Match the workflow's exact-head exception registry in this isolated harness.
+const verifiedCleanupHeads = new Map();
 const cutoff = Date.now() - 48 * 60 * 60 * 1000;
 const branches = [
   {name:'feat/integrated',protected:false,commit:{sha:'oldsha'}},
