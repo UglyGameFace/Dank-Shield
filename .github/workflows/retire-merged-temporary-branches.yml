@@ -326,11 +326,13 @@ jobs:
               ]);
               const safeName = name =>
                 (prefixes.some(p => name.startsWith(p)) ||
-                 reconciledWorkHeads.has(name)) &&
+                 reconciledWorkHeads.has(name) ||
+                 verifiedCleanupHeads.has(name)) &&
                 !heldPrefixes.some(p => name.startsWith(p)) &&
                 !protectedHeads.has(name) &&
                 (!hasHeldHistoricalSegment(name, sensitive) ||
-                 integratedCleanupRefs.has(name));
+                 integratedCleanupRefs.has(name) ||
+                 verifiedCleanupHeads.has(name));
               // Owner-reviewed cleanup has an exact-SHA preview token and
               // fresh main/PR/ref leases. The 48-hour cooldown remains on
               // unattended cleanup, not on explicitly approved owner batches.
