@@ -323,6 +323,10 @@ jobs:
               const verifiedCleanupHeads = new Map([
                 ['fix/archive-tag-readback-consistency-20261102',
                  '94dc1a97df6887daf69fb2292b4f3a7a41063710'],
+                ['fix/retire-pr814-archive-guard-20261103',
+                 '3d8b17ef5f87f38c5131f4148c8213aeb7e33784'],
+                ['cleanup/remove-cinema-only-repository-artifacts-20261103',
+                 'f9d44fdb2bd0e278420557505119a464ea3e1e56'],
               ]);
               const safeName = name =>
                 (prefixes.some(p => name.startsWith(p)) ||
