@@ -123,6 +123,12 @@ def test_verified_archive_cleanup_exception_executes_only_for_exact_head() -> No
     reviewed = workflow.split("if (reviewed) {", 1)[1].split("const allBranches =", 1)[0]
     assert reviewed.count("'fix/archive-tag-readback-consistency-20261102'") == 1
     assert "'94dc1a97df6887daf69fb2292b4f3a7a41063710'" in reviewed
+    for name, sha in (
+        ('fix/retire-pr814-archive-guard-20261103', '3d8b17ef5f87f38c5131f4148c8213aeb7e33784'),
+        ('cleanup/remove-cinema-only-repository-artifacts-20261103', 'f9d44fdb2bd0e278420557505119a464ea3e1e56'),
+    ):
+        assert repr(name) in reviewed
+        assert repr(sha) in reviewed
     assert "verifiedCleanupHeads.has(name)" in reviewed
     assert "verifiedCleanupHeads.get(branch.name) !== branch.commit.sha" in reviewed
     assert "prs.length !== 1" in reviewed
