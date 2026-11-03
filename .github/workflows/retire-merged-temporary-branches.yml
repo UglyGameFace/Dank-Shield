@@ -84,6 +84,26 @@ jobs:
           script: |
             const { owner, repo } = context.repo;
             const fullName = owner + '/' + repo;
+            // GitHub can briefly return 404 after accepting a new tag ref.
+            // Require a readable exact-SHA archive before any branch deletion.
+            const readCreatedArchive = async (tag, expectedSha) => {
+              for (let attempt = 0; attempt < 5; attempt++) {
+                try {
+                  const archive = (await github.rest.git.getRef({
+                    owner, repo, ref: tag
+                  })).data;
+                  if (archive.object?.type !== 'commit' ||
+                      archive.object.sha !== expectedSha) {
+                    throw new Error('Archive SHA mismatch after creation: ' + tag);
+                  }
+                  return archive;
+                } catch (error) {
+                  if (error.status !== 404 || attempt === 4) throw error;
+                  await new Promise(resolve => setTimeout(resolve, 500 * (attempt + 1)));
+                }
+              }
+              throw new Error('Archive readback unavailable: ' + tag);
+            };
             if (fullName !== 'UglyGameFace/Dank-Shield') {
               throw new Error('Unexpected repo');
             }
@@ -473,7 +493,7 @@ jobs:
                     await github.rest.git.createRef({
                       owner,repo,ref:'refs/' + tag,sha:item.sha
                     });
-                    archive = (await github.rest.git.getRef({owner,repo,ref:tag})).data;
+                    archive = await readCreatedArchive(tag, item.sha);
                   }
                   if (archive.object.type !== 'commit' || archive.object.sha !== item.sha) {
                     held.push(item.name + ': archive mismatch');
@@ -1025,7 +1045,7 @@ jobs:
                   await github.rest.git.createRef({
                     owner,repo,ref:'refs/' + tag,sha:item.sha
                   });
-                  archive = (await github.rest.git.getRef({owner,repo,ref:tag})).data;
+                  archive = await readCreatedArchive(tag, item.sha);
                 }
                 if (archive.object.type !== 'commit' || archive.object.sha !== item.sha) {
                   held.push(item.name + ': archive mismatch');
@@ -1214,7 +1234,7 @@ jobs:
                   await github.rest.git.createRef({
                     owner,repo,ref:'refs/' + tag,sha:branch.commit.sha
                   });
-                  archive = (await github.rest.git.getRef({owner,repo,ref:tag})).data;
+                  archive = await readCreatedArchive(tag, branch.commit.sha);
                 }
                 if (archive.object.type !== 'commit' ||
                     archive.object.sha !== branch.commit.sha) {
@@ -1330,9 +1350,7 @@ jobs:
                         owner, repo, ref: 'refs/' + tagRef, sha
                       });
                       archiveCreated = true;
-                      archive = (await github.rest.git.getRef({
-                        owner, repo, ref: tagRef
-                      })).data;
+                      archive = await readCreatedArchive(tagRef, sha);
                     }
                     if (archive.object.type !== 'commit' || archive.object.sha !== sha) {
                       rows.push([name, 'held', 'Archive SHA mismatch']);
