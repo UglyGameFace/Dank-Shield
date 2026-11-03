@@ -316,6 +316,14 @@ jobs:
                 ['work/dankshield-owner-cleanup-relay-20261101',
                  'bafe17a86225d71700f65496fb8339190418792f'],
               ]);
+              // PR #814 is a merged cleanup implementation, not a backup ref.
+              // The word "archive" in its filename otherwise triggers the
+              // historical hold. Permit only its immutable, reviewed head;
+              // ordinary PR/main equivalence, CI, archive and leases still apply.
+              const verifiedCleanupHeads = new Map([
+                ['fix/archive-tag-readback-consistency-20261102',
+                 '94dc1a97df6887daf69fb2292b4f3a7a41063710'],
+              ]);
               const safeName = name =>
                 (prefixes.some(p => name.startsWith(p)) ||
                  reconciledWorkHeads.has(name)) &&
@@ -356,7 +364,9 @@ jobs:
               for (const branch of branches) {
                 if (branch.protected || inUse.has(branch.name) || !safeName(branch.name) ||
                   (reconciledWorkHeads.has(branch.name) &&
-                   reconciledWorkHeads.get(branch.name) !== branch.commit.sha)) continue;
+                   reconciledWorkHeads.get(branch.name) !== branch.commit.sha) ||
+                  (verifiedCleanupHeads.has(branch.name) &&
+                   verifiedCleanupHeads.get(branch.name) !== branch.commit.sha)) continue;
                 const prs = prsByHead.get(branch.name) || [];
                 // Owner-reviewed fast-forward ancestry proof: a branch with zero
                 // commits ahead of main is already contained byte-for-byte in
