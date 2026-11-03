@@ -111,6 +111,68 @@ def test_no_unpreserved_work_or_production_refs_deleted() -> None:
     assert "github.rest.git.deleteRef({owner,repo,ref:'heads/' + item.name})" in text
 
 
+
+def test_verified_archive_cleanup_exception_executes_only_for_exact_head() -> None:
+    """Execute the real name classifier and SHA gate, including negative cases."""
+    import json
+    import shutil
+    import subprocess
+    import textwrap
+
+    workflow = _workflow()
+    reviewed = workflow.split("if (reviewed) {", 1)[1].split("const allBranches =", 1)[0]
+    assert reviewed.count("'fix/archive-tag-readback-consistency-20261102'") == 1
+    assert "'94dc1a97df6887daf69fb2292b4f3a7a41063710'" in reviewed
+    assert "verifiedCleanupHeads.has(name)" in reviewed
+    assert "verifiedCleanupHeads.get(branch.name) !== branch.commit.sha" in reviewed
+    assert "prs.length !== 1" in reviewed
+    assert "await equivalentAtMerge(branch, pr, branchGraph)" in reviewed
+    if shutil.which("node") is None:
+        return
+
+    classifier = "const hasHeldHistoricalSegment = " + textwrap.dedent(
+        workflow.split("            const hasHeldHistoricalSegment = ", 1)[1]
+        .split("            const reviewed = ", 1)[0]
+    )
+    declarations = []
+    for name, terminator in (
+        ("prefixes", ";"),
+        ("heldPrefixes", ";"),
+        ("sensitive", "]);"),
+        ("verifiedCleanupHeads", "]);"),
+        ("safeName", ";"),
+    ):
+        expression = reviewed.split("const " + name + " =", 1)[1]
+        declarations.append("const " + name + " =" + expression.split(terminator, 1)[0] + terminator)
+    # The tested guard comes directly from the executable owner-reviewed loop.
+    guard = reviewed.split("for (const branch of branches) {", 1)[1].split(
+        "const prs = prsByHead.get(branch.name) || [];", 1
+    )[0]
+    js = r"""
+const reconciledWorkHeads = new Map();
+const integratedCleanupRefs = new Set();
+const protectedHeads = new Set(['main']);
+const inUse = new Set(['fix/open']);
+const exact = '94dc1a97df6887daf69fb2292b4f3a7a41063710';
+const branches = [
+  {name:'fix/archive-tag-readback-consistency-20261102', protected:false,commit:{sha:exact}},
+  {name:'fix/archive-tag-readback-consistency-20261102', protected:false,commit:{sha:'wrong-head'}},
+  {name:'fix/archive-other-20261102',protected:false,commit:{sha:'other'}},
+  {name:'backup/previous',protected:false,commit:{sha:'backup'}},
+  {name:'recovery/previous',protected:false,commit:{sha:'recovery'}},
+  {name:'fix/open',protected:false,commit:{sha:'open'}},
+  {name:'fix/ordinary',protected:false,commit:{sha:'ordinary'}},
+  {name:'fix/archive-tag-readback-consistency-20261102',protected:true,commit:{sha:exact}}
+];
+const accepted=[];
+""" + classifier + "\n" + "\n".join(declarations) + "\nfor (const branch of branches) {\n" + guard + "\naccepted.push(branch.name + ':' + branch.commit.sha);\n}\nconsole.log(JSON.stringify(accepted));\n"
+    result = subprocess.run(["node", "-e", js], text=True, capture_output=True)
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == [
+        "fix/archive-tag-readback-consistency-20261102:94dc1a97df6887daf69fb2292b4f3a7a41063710",
+        "fix/ordinary:ordinary",
+    ]
+
 def test_opt_in_deletion_is_archived_and_high_branch_count_is_not_failure() -> None:
     text = _workflow()
     assert "branch-retirement-opt-in/" in text
@@ -171,6 +233,8 @@ const safeName = name => name.startsWith('feat/');
 const integratedCleanupRefs = new Set();
 // This isolated inventory harness has no owner-specific historical work heads.
 const reconciledWorkHeads = new Map();
+// Match the workflow's exact-head exception registry in this isolated harness.
+const verifiedCleanupHeads = new Map();
 const cutoff = Date.now() - 48 * 60 * 60 * 1000;
 const branches = [
   {name:'feat/integrated',protected:false,commit:{sha:'oldsha'}},
