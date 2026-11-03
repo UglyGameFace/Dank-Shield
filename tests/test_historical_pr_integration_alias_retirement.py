@@ -90,3 +90,23 @@ def test_retirement_stays_owner_only_sha_leased_and_archive_first() -> None:
     assert "'preview-reconciled','delete-reconciled'" in RELAY
     assert "/^DELETE_RECONCILED_[0-9A-F]{16}$/" in RELAY
     assert "I_VERIFIED_LIVE_DISCLOUD_BRANCH" in RELAY
+
+
+def test_archive_readback_retries_only_transient_404_after_creation() -> None:
+    # GitHub accepted a tag create but immediately returned 404 on readback.
+    # All four cleanup paths must wait for exact-SHA verification, fail closed
+    # on mismatch, and never delete an unverified original ref.
+    assert "const readCreatedArchive = async (tag, expectedSha) =>" in WORKFLOW
+    assert "attempt < 5" in WORKFLOW
+    assert "error.status !== 404 || attempt === 4" in WORKFLOW
+    assert "archive.object.sha !== expectedSha" in WORKFLOW
+    assert "throw new Error('Archive SHA mismatch after creation:" in WORKFLOW
+    assert "await new Promise(resolve => setTimeout(resolve," in WORKFLOW
+    assert WORKFLOW.count("await readCreatedArchive(") == 4
+    for expected in (
+        "readCreatedArchive(tag, item.sha)",
+        "readCreatedArchive(tag, branch.commit.sha)",
+        "readCreatedArchive(tagRef, sha)",
+    ):
+        assert expected in WORKFLOW
+    assert "github.rest.git.deleteRef" in WORKFLOW
