@@ -170,7 +170,13 @@ def test_shard_claim_parameters_sent_to_database(monkeypatch):
     assert requests[0][1] == {"p_limit":8,"p_shard_count":4,"p_owned_shards":[1,3]}
 
 
-def test_studio_schedule_rejects_form_at_queue_preview_and_delivery_boundary():
+def test_studio_schedule_rejects_form_at_queue_preview_and_delivery_boundary(monkeypatch):
+    # Keep the feature itself enabled so the preview test proves the
+    # form restriction, not merely the global disabled-by-default flag.
+    monkeypatch.setattr(schedules, "schedules_enabled", lambda: True)
+    baseline = StudioSession(guild_id=1, owner_id=2)
+    assert not StudioReviewView(baseline).schedule_later.disabled
+
     model = new_project()
     model["embeds"][0]["title"] = "Staff request"
     model["form"] = {
