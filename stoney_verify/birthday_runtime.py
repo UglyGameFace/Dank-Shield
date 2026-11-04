@@ -16,8 +16,8 @@ from .birthday_service import (
 )
 
 _TASK: asyncio.Task[None] | None = None
-POLL_SECONDS = 60
-MAX_PARALLEL = 4
+POLL_SECONDS = 15
+MAX_PARALLEL = 6
 
 
 def _manageable_role(guild: discord.Guild, role: discord.Role) -> bool:
@@ -47,9 +47,7 @@ async def _deliver_guild(bot: Any, claim: dict[str, Any]) -> None:
         return
     zone = ZoneInfo(str(settings["timezone"]))
     now = datetime.now(timezone.utc)
-    local_day = now.astimezone(zone).date()
-    if str(claim.get("last_local_date")) != local_day.isoformat():
-        return
+    local_day = date.fromisoformat(str(claim["last_local_date"]))
     scheduled = datetime.combine(
         local_day, time(hour=int(settings.get("announce_hour", 9))), tzinfo=zone
     ).astimezone(timezone.utc)
@@ -144,7 +142,7 @@ async def _loop(bot: Any) -> None:
     semaphore = asyncio.Semaphore(MAX_PARALLEL)
     while not bot.is_closed():
         try:
-            guilds, expired = await asyncio.gather(claim_due(limit=24), claim_expired_roles(limit=24))
+            guilds, expired = await asyncio.gather(claim_due(limit=50), claim_expired_roles(limit=50))
             async def guarded(operation, row: dict[str, Any]) -> None:
                 async with semaphore:
                     try:
