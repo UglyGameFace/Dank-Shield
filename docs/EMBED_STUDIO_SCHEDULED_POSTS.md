@@ -16,7 +16,10 @@ This adds **one-shot scheduled posts** to the canonical Discord editor.
 
 ## Security and behavior
 - **Only new posts** may be scheduled, not edits of an existing post.
-- Unattended role controls are blocked. Link buttons are permitted.
+- Unattended role controls **and interactive forms** are blocked. Link buttons are permitted.
+  This is checked again at delivery, including for persisted rows created by
+  legacy writers or privileged database clients; the worker does not send
+  them to Discord.
 - Smart Text is resolved at actual send time, not when queued.
 - Scheduler rechecks creator's Manage Server/Administrator permissions, bot
   membership, channel existence and send/embed permissions at delivery.
