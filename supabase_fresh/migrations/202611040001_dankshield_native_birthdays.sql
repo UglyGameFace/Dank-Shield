@@ -90,7 +90,7 @@ begin
         for update skip locked limit p_limit
     )
     update public.dank_birthday_guild_settings s
-       set last_local_date = (now() at time zone s.timezone)::date,
+       set last_local_date = (s.next_fire_at at time zone s.timezone)::date,
            next_fire_at = (((now() at time zone s.timezone)::date + 1
                            + make_interval(hours => s.announce_hour))
                            at time zone s.timezone),
