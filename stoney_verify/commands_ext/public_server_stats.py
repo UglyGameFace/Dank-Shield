@@ -722,14 +722,9 @@ class ServerStatsView(discord.ui.View):
     )
     async def home(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
-        from .public_command_surface_v2 import CompactDankHomeView, _home_embed
+        from .public_command_surface_v2 import _open_home
 
-        await interaction.response.edit_message(
-            content=None,
-            embed=_home_embed(),
-            view=CompactDankHomeView(self.owner_id),
-            allowed_mentions=discord.AllowedMentions.none(),
-        )
+        await _open_home(interaction)
 
     @discord.ui.button(
         label="Close",

@@ -62,56 +62,16 @@ async def _invoke_saved(name: str, interaction: discord.Interaction) -> None:
     await callback(interaction)
 
 
-_DANK_HOME_SECTIONS = {
-    "personal": ("My Profile", "Roles & Profiles", "Status", "Help"),
-    "server": (
-        "Setup & Settings", "Protection", "Welcome & Join", "Members",
-        "Server Design", "Logs & Activity", "Diagnostics",
-    ),
-}
-
-
-def _home_embed(*, section: str = "personal") -> discord.Embed:
-    section = section if section in _DANK_HOME_SECTIONS else "personal"
-    return discord.Embed(
-        title=f"🛡️ Dank Shield • {'My Tools' if section == 'personal' else 'Server Tools'}",
-        description=(
-            "Choose a task below. Every feature opens its own focused settings; "
-            "staff-only actions still check your permissions."
-        ),
-        color=discord.Color.blurple(),
-    )
-
-
 async def open_dank_home(interaction: discord.Interaction) -> None:
-    await _private(
-        interaction,
-        embed=_home_embed(),
-        view=DankHomeView(owner_id=interaction.user.id),
-    )
+    """Early-registration entry for `/dank home`.
 
+    The final public surface (public_command_surface_v2) re-registers
+    `/dank home` with the canonical home. This delegate keeps the early
+    registration on that same single owner instead of a second home menu.
+    """
+    from .public_command_surface_v2 import open_compact_dank_home
 
-class _DankHomeSectionSelect(discord.ui.Select):
-    def __init__(self, owner_id: int, section: str) -> None:
-        self.owner_id = int(owner_id)
-        super().__init__(
-            placeholder="Choose Dank Shield tools",
-            options=[
-                discord.SelectOption(label="My Tools", value="personal", default=section == "personal"),
-                discord.SelectOption(label="Server Tools", value="server", default=section == "server"),
-            ],
-            row=0, custom_id="dank:home:area:v2",
-        )
-
-    async def callback(self, interaction: discord.Interaction) -> None:
-        if int(interaction.user.id) != self.owner_id:
-            return await _private(interaction, content="Open your own Dank Shield home.")
-        section = self.values[0]
-        await interaction.response.edit_message(
-            embed=_home_embed(section=section),
-            view=DankHomeView(owner_id=self.owner_id, section=section),
-            allowed_mentions=discord.AllowedMentions.none(),
-        )
+    await open_compact_dank_home(interaction)
 
 
 async def open_profile_entry(interaction: discord.Interaction) -> None:
@@ -125,228 +85,6 @@ async def open_help_entry(interaction: discord.Interaction) -> None:
     # maintain a second command list with obsolete /dank aliases.
     from .public_command_surface_v2 import _route_feature
     await _route_feature(interaction, "help")
-
-class _OwnedView(discord.ui.View):
-    def __init__(self, *, owner_id: int, timeout: float = PRIVATE_MENU_TTL_SECONDS) -> None:
-        super().__init__(timeout=timeout)
-        self.owner_id = int(owner_id)
-
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        if int(interaction.user.id) == self.owner_id:
-            return True
-        await _private(
-            interaction,
-            content="❌ Open your own `/dank home` panel to use these controls.",
-        )
-        return False
-
-
-class DankHomeView(_OwnedView):
-    def __init__(self, *, owner_id: int, section: str = "personal") -> None:
-        super().__init__(owner_id=owner_id)
-        self.section = section if section in _DANK_HOME_SECTIONS else "personal"
-        existing = {str(getattr(item, "label", "")): item for item in self.children}
-        self.clear_items()
-        self.add_item(_DankHomeSectionSelect(self.owner_id, self.section))
-        names = (*_DANK_HOME_SECTIONS[self.section], "Close")
-        for index, name in enumerate(names):
-            item = existing[name]
-            item.row = 1 + index // 4
-            self.add_item(item)
-
-
-    @discord.ui.button(
-        label="Setup & Settings",
-        emoji="⚙️",
-        style=discord.ButtonStyle.success,
-        row=0,
-    )
-    async def setup(
-        self,
-        interaction: discord.Interaction,
-        button: discord.ui.Button,
-    ) -> None:
-        _ = button
-        await _invoke_saved("setup", interaction)
-
-    @discord.ui.button(
-        label="Protection",
-        emoji="🛡️",
-        style=discord.ButtonStyle.primary,
-        row=0,
-    )
-    async def protection(
-        self,
-        interaction: discord.Interaction,
-        button: discord.ui.Button,
-    ) -> None:
-        _ = button
-        from . import public_protection_center
-        await public_protection_center._ack_protection_entry(interaction)
-        from .public_setup_group import _require_setup_permission
-        if not await _require_setup_permission(interaction):
-            return
-
-        await public_protection_center._refresh_panel(
-            interaction,
-            content="🛡️ Protection Center opened from `/dank home`.",
-        )
-
-    @discord.ui.button(
-        label="Welcome & Join",
-        emoji="👋",
-        style=discord.ButtonStyle.primary,
-        row=0,
-    )
-    async def welcome(
-        self,
-        interaction: discord.Interaction,
-        button: discord.ui.Button,
-    ) -> None:
-        _ = button
-        from stoney_verify.welcome_setup_ui import open_welcome_setup
-
-        await open_welcome_setup(interaction)
-
-    @discord.ui.button(
-        label="My Profile",
-        emoji="🪪",
-        style=discord.ButtonStyle.primary,
-        row=0,
-    )
-    async def profile(
-        self,
-        interaction: discord.Interaction,
-        button: discord.ui.Button,
-    ) -> None:
-        _ = button
-        await open_profile_entry(interaction)
-
-    @discord.ui.button(
-        label="Members",
-        emoji="👥",
-        style=discord.ButtonStyle.secondary,
-        row=1,
-    )
-    async def members(
-        self,
-        interaction: discord.Interaction,
-        button: discord.ui.Button,
-    ) -> None:
-        _ = button
-        await _invoke_saved("members", interaction)
-
-    @discord.ui.button(
-        label="Server Design",
-        emoji="🎨",
-        style=discord.ButtonStyle.secondary,
-        row=1,
-    )
-    async def design(
-        self,
-        interaction: discord.Interaction,
-        button: discord.ui.Button,
-    ) -> None:
-        _ = button
-        from . import public_design_bridge
-
-        await public_design_bridge.open_design_studio_from_setup(interaction)
-
-    @discord.ui.button(
-        label="Roles & Profiles",
-        emoji="🎭",
-        style=discord.ButtonStyle.secondary,
-        row=1,
-    )
-    async def roles(
-        self,
-        interaction: discord.Interaction,
-        button: discord.ui.Button,
-    ) -> None:
-        _ = button
-        from .public_role_center import open_roles_profiles_center
-
-        await open_roles_profiles_center(interaction)
-
-    @discord.ui.button(
-        label="Logs & Activity",
-        emoji="🧾",
-        style=discord.ButtonStyle.secondary,
-        row=1,
-    )
-    async def logs(
-        self,
-        interaction: discord.Interaction,
-        button: discord.ui.Button,
-    ) -> None:
-        _ = button
-        from .public_setup_group import _require_setup_permission
-        if not await _require_setup_permission(interaction):
-            return
-        from .public_setup_recommend import _open_advanced_logs_activity
-
-        await _open_advanced_logs_activity(interaction)
-
-    @discord.ui.button(
-        label="Diagnostics",
-        emoji="🩺",
-        style=discord.ButtonStyle.secondary,
-        row=2,
-    )
-    async def diagnostics(
-        self,
-        interaction: discord.Interaction,
-        button: discord.ui.Button,
-    ) -> None:
-        _ = button
-        await _invoke_saved("diagnostics", interaction)
-
-    @discord.ui.button(
-        label="Status",
-        emoji="📡",
-        style=discord.ButtonStyle.secondary,
-        row=2,
-    )
-    async def status(
-        self,
-        interaction: discord.Interaction,
-        button: discord.ui.Button,
-    ) -> None:
-        _ = button
-        await _invoke_saved("status", interaction)
-
-    @discord.ui.button(
-        label="Help",
-        emoji="❓",
-        style=discord.ButtonStyle.secondary,
-        row=2,
-    )
-    async def help(
-        self,
-        interaction: discord.Interaction,
-        button: discord.ui.Button,
-    ) -> None:
-        _ = button
-        await open_help_entry(interaction)
-
-    @discord.ui.button(
-        label="Close",
-        emoji="✖️",
-        style=discord.ButtonStyle.danger,
-        row=2,
-    )
-    async def close(
-        self,
-        interaction: discord.Interaction,
-        button: discord.ui.Button,
-    ) -> None:
-        _ = button
-        await interaction.response.edit_message(
-            content="Dank Shield Control Center closed.",
-            embed=None,
-            view=None,
-        )
-
 
 def _command_payload(group: app_commands.Group, tree: Any) -> dict[str, Any]:
     try:
@@ -502,7 +240,6 @@ def compact_public_dank_surface(bot: Any, tree: Any) -> int:
 __all__ = [
     "DANK_PAYLOAD_SAFETY_LIMIT",
     "MAX_DANK_PAYLOAD",
-    "DankHomeView",
     "compact_public_dank_surface",
     "dank_payload_size",
     "open_dank_home",

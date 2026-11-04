@@ -1400,13 +1400,9 @@ class ServerLiveCaptionsView(_OwnedView):
     ) -> None:
         _ = button
         await _defer_update(interaction)
-        from .public_command_surface_v2 import CompactDankHomeView, _home_embed
+        from .public_command_surface_v2 import _open_home
 
-        await _edit_original(
-            interaction,
-            embed=_home_embed(),
-            view=CompactDankHomeView(self.owner_id),
-        )
+        await _open_home(interaction)
 
     @discord.ui.button(
         label="Close",

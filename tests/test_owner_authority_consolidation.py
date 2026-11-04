@@ -426,10 +426,15 @@ def test_staff_management_entrypoints_check_staff_before_native_permission_copy(
     assert "_require_setup_permission(interaction)" in surface_logs
     assert "Log settings require **Manage Server**" not in surface_logs
 
-    hub_logs = hub[hub.index("async def logs("):hub.index("async def diagnostics(", hub.index("async def logs("))]
-    assert "_require_setup_permission(interaction)" in hub_logs
-    assert "Log settings require **Manage Server**" not in hub_logs
+    # The retired home no longer owns a second logs or design handler.
+    assert "async def logs(" not in hub
+    assert "async def design(" not in hub
 
-    hub_design = hub[hub.index("async def design("):hub.index("async def roles(", hub.index("async def design("))]
-    assert "_admin_or_manage(interaction)" not in hub_design
-    assert "public_design_bridge" in hub_design
+    design_start = surface.index('if key == "server_design":')
+    design_route = surface[design_start:surface.index('if key == "card_assets":', design_start)]
+    assert "_admin_or_manage(interaction)" not in design_route
+    assert "public_design_bridge.open_design_studio_from_setup(interaction)" in design_route
+
+    # The canonical design bridge checks permission before loading studio data.
+    design_bridge = (root / "stoney_verify" / "commands_ext" / "public_design_bridge.py").read_text(encoding="utf-8")
+    assert "design._require_design_permission(interaction)" in design_bridge

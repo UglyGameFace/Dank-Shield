@@ -392,7 +392,7 @@ FEATURES: tuple[NavigationFeature, ...] = (
         "📡",
         "ops",
         "See whether Dank Shield is online and running.",
-        ("status", "bot status", "online", "uptime"),
+        ("status", "bot status", "online", "uptime", "server health overview", "home status"),
     ),
     NavigationFeature(
         "diagnostics",

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import asyncio
 from pathlib import Path
 from types import SimpleNamespace
@@ -190,9 +191,12 @@ def test_member_guides_are_owner_scoped(monkeypatch):
 
 def test_legacy_help_entry_delegates_and_no_second_command_list():
     hub = (ROOT / "stoney_verify/commands_ext/public_command_hub.py").read_text()
-    start = hub.index("async def open_help_entry(")
-    end = hub.index("class _OwnedView(", start)
-    snippet = hub[start:end]
+    help_entry = next(
+        node for node in ast.parse(hub).body
+        if isinstance(node, ast.AsyncFunctionDef) and node.name == "open_help_entry"
+    )
+    snippet = ast.get_source_segment(hub, help_entry)
+    assert snippet is not None
     assert 'await _route_feature(interaction, "help")' in snippet
     assert "embed.add_field" not in snippet
     assert "DankHelpView" not in hub
