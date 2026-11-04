@@ -66,57 +66,90 @@ class _OwnedView(discord.ui.View):
 
 def _center_embed() -> discord.Embed:
     embed = discord.Embed(
-        title="🛡️ Moderation Center",
+        title="🛡️ Moderation",
         description=(
-            "The full Member Command Center handles current members with fresh hierarchy checks, "
-            "typed confirmations, locks, and audit logging. Cleanup has its own guided center, and "
-            "the two legacy-only moderation utilities remain available here too: raw-ID ban/unban "
-            "and gateway-intent diagnostics."
+            "Choose a member below to see who they are and act on them: "
+            "timeout, kick, ban, message, verify or roles.\n\n"
+            "-# Someone who already left? Use **Ban / Unban by ID**."
         ),
         color=discord.Color.blurple(),
-        timestamp=discord.utils.utcnow(),
     )
-    embed.add_field(
-        name="Current members",
-        value="Verify • Message • Timeout • Kick • Ban • Add/Remove Role • Intelligence • Bulk tools • Member cleanup",
-        inline=False,
-    )
-    embed.add_field(
-        name="Cleanup tools",
-        value=(
-            "Channel cleanup • user-message purge with preview/confirmation • blocked-invite history cleanup • "
-            "DM-spam reporting"
-        ),
-        inline=False,
-    )
-    embed.add_field(
-        name="Users who already left",
-        value="Use **Ban / Unban by ID** below. This preserves the old `/mod ban-unban` capability.",
-        inline=False,
-    )
-    embed.set_footer(text="/mod • one staff doorway")
+    embed.set_footer(text="Every action re-checks permissions and is logged.")
     return embed
 
 
+class ModMemberSelect(discord.ui.UserSelect):
+    """First step of /mod: pick the member, land on their action card."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            placeholder="Pick a member to moderate…",
+            min_values=1,
+            max_values=1,
+            row=0,
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        if not await _require_staff(interaction):
+            return
+        guild = interaction.guild
+        selected = self.values[0] if self.values else None
+        member_id = int(getattr(selected, "id", 0) or 0)
+        member = guild.get_member(member_id) if guild is not None else None
+        if member is None and guild is not None and member_id:
+            try:
+                member = await guild.fetch_member(member_id)
+            except Exception:
+                member = None
+        if not isinstance(member, discord.Member):
+            return await _private(
+                interaction,
+                "❌ That user isn't in the server right now. Use **Ban / Unban by ID** instead.",
+            )
+
+        from .member_role_browser_actions import MemberActionView, member_detail_embed
+
+        center = self.view
+        await interaction.response.edit_message(
+            embed=member_detail_embed(member, None),
+            view=MemberActionView(owner_id=center.owner_id, member=member, browser=center),
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+
+
 class ModerationCenterView(_OwnedView):
-    @discord.ui.button(label="Member Command Center", emoji="👥", style=discord.ButtonStyle.primary, row=0)
+    """/mod entry. Doubles as the "browser" MemberActionView returns to."""
+
+    role = None  # MemberActionView reads browser.role for its embed context.
+
+    def __init__(self, owner_id: int, *, timeout: float = PRIVATE_MENU_TTL_SECONDS) -> None:
+        super().__init__(owner_id, timeout=timeout)
+        self.add_item(ModMemberSelect())
+
+    def rebuild(self) -> None:
+        """Called by MemberActionView's Back button; nothing to recompute here."""
+
+    def render_embed(self) -> discord.Embed:
+        return _center_embed()
+
+    @discord.ui.button(label="Member Command Center", emoji="👥", style=discord.ButtonStyle.secondary, row=1)
     async def members(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         from .member_command_center import open_member_command_center
         await open_member_command_center(interaction)
 
-    @discord.ui.button(label="Cleanup Tools", emoji="🧹", style=discord.ButtonStyle.primary, row=0)
+    @discord.ui.button(label="Cleanup Tools", emoji="🧹", style=discord.ButtonStyle.secondary, row=1)
     async def cleanup(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         from .public_cleanup_command_center import open_cleanup_command_center
         await open_cleanup_command_center(interaction)
 
-    @discord.ui.button(label="Ban / Unban by ID", emoji="🔨", style=discord.ButtonStyle.danger, row=0)
+    @discord.ui.button(label="Ban / Unban by ID", emoji="🔨", style=discord.ButtonStyle.danger, row=1)
     async def ban_unban(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await interaction.response.send_modal(BanUnbanByIdModal(self.owner_id))
 
-    @discord.ui.button(label="Gateway Intents", emoji="📡", style=discord.ButtonStyle.secondary, row=0)
+    @discord.ui.button(label="Gateway Intents", emoji="📡", style=discord.ButtonStyle.secondary, row=1)
     async def intents(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         if not await _require_staff(interaction):
@@ -124,7 +157,7 @@ class ModerationCenterView(_OwnedView):
         from .public_mod_group import mod_debug_intents_group_command
         await _invoke(mod_debug_intents_group_command, interaction)
 
-    @discord.ui.button(label="Dank Shield Home", emoji="🏠", style=discord.ButtonStyle.secondary, row=1)
+    @discord.ui.button(label="Dank Shield Home", emoji="🏠", style=discord.ButtonStyle.secondary, row=2)
     async def home(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         from .public_command_surface_v2 import open_compact_dank_home
