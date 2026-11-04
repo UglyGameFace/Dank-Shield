@@ -1119,6 +1119,13 @@ async def _start_workers_once() -> None:
         print("⚠️ Verification reminder worker failed:", repr(e))
 
     try:
+        from .birthday_runtime import start_birthday_worker
+        start_birthday_worker(bot)
+        print("🎂 Native opt-in birthday worker started (indexed due queue)")
+    except Exception as e:
+        print("⚠️ Birthday worker could not start:", type(e).__name__)
+
+    try:
         from .somewhere_420_runtime import start_somewhere_420_worker
         start_somewhere_420_worker(bot)
         print("🌍 Opt-in 4:20 delivery worker started (indexed due queue)")
