@@ -157,11 +157,30 @@ class MemberBirthdayView(discord.ui.View):
 
     @discord.ui.button(label="Set Birthday", emoji="📅", style=discord.ButtonStyle.primary, row=0)
     async def set_date(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        # Discord requires modals to be the first interaction response. Avoid a
+        # potentially slow storage read before opening the member's form.
+        await interaction.response.send_modal(BirthdayDateModal(None))
+
+    async def _revoke_lease(self, interaction: discord.Interaction) -> None:
+        from stoney_verify.birthday_service import get_role_lease, clear_role_lease
+        from stoney_verify.birthday_runtime import _manageable_role
+        guild = interaction.guild
+        lease = await get_role_lease(guild.id, interaction.user.id)
+        if not lease:
+            return
+        role = guild.get_role(int(lease["role_id"]))
+        member = interaction.user
+        if role is None or role not in member.roles:
+            await clear_role_lease(guild.id, member.id)
+            return
+        if not _manageable_role(guild, role):
+            return  # Keep lease for later retry rather than losing cleanup.
         try:
-            saved = await get_member(interaction.guild.id, interaction.user.id)
-        except BirthdayStorageUnavailable:
-            return await _reply(interaction, "Birthday storage is unavailable.")
-        await interaction.response.send_modal(BirthdayDateModal(saved))
+            await member.remove_roles(role, reason="Member opted out of birthday role")
+        except (discord.Forbidden, discord.HTTPException):
+            return
+        await clear_role_lease(guild.id, member.id)
+
 
     async def _toggle(self, interaction: discord.Interaction, field: str) -> None:
         guild = interaction.guild
@@ -179,6 +198,8 @@ class MemberBirthdayView(discord.ui.View):
                 guild.id, interaction.user.id, month=int(member["birth_month"]),
                 day=int(member["birth_day"]), **payload,
             )
+            if field == "birthday_role" and not payload["birthday_role"]:
+                await self._revoke_lease(interaction)
         except BirthdayStorageUnavailable:
             return await _reply(interaction, "Birthday storage is unavailable. Nothing changed.")
         await open_member_birthday(interaction)
@@ -199,6 +220,7 @@ class MemberBirthdayView(discord.ui.View):
     async def remove(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         try:
             await delete_member(interaction.guild.id, interaction.user.id)
+            await self._revoke_lease(interaction)
         except BirthdayStorageUnavailable:
             return await _reply(interaction, "Storage is unavailable. Nothing was removed.")
         await open_member_birthday(interaction)
