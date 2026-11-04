@@ -1295,13 +1295,29 @@ jobs:
                   'supabase', 'database', 'postgres', 'production', 'rollback',
                   'revert', 'snapshot', 'stable', 'known', 'good'
                 ]);
-                const historical = allBranches.filter(branch =>
-                  !branch.protected && !inUse.has(branch.name) &&
-                  !protectedHeads.has(branch.name) &&
-                  historicalPrefixes.some(prefix => branch.name.startsWith(prefix)) &&
-                  !heldPrefixes.some(prefix => branch.name.startsWith(prefix)) &&
-                  !hasHeldHistoricalSegment(branch.name, heldSegments)
-                ).sort((a, b) => a.name.localeCompare(b.name));
+                // These three exact heads were compared against their immutable
+                // squash-merge trees, including all changed path SHAs and modes.
+                // A name match without its original commit SHA is NOT eligible.
+                // The generic 48-hour hold and sensitive-name exclusions remain.
+                const exactMergedCleanupHeads = new Map([
+                  ['fix/retire-pr814-archive-guard-20261103',
+                   '3d8b17ef5f87f38c5131f4148c8213aeb7e33784'],
+                  ['cleanup/remove-cinema-only-repository-artifacts-20261103',
+                   'f9d44fdb2bd0e278420557505119a464ea3e1e56'],
+                  ['fix/retire-merged-cleanup-815-816-20261103',
+                   '578404824adb6df23dfe3872dc0f15f103c449e9'],
+                ]);
+                const historical = allBranches.filter(branch => {
+                  const exactReviewedAuto = exactMergedCleanupHeads.has(branch.name) &&
+                    exactMergedCleanupHeads.get(branch.name) === branch.commit.sha;
+                  const normallySafe = historicalPrefixes.some(prefix =>
+                    branch.name.startsWith(prefix)) &&
+                    !heldPrefixes.some(prefix => branch.name.startsWith(prefix)) &&
+                    !hasHeldHistoricalSegment(branch.name, heldSegments);
+                  return !branch.protected && !inUse.has(branch.name) &&
+                    !protectedHeads.has(branch.name) &&
+                    (normallySafe || exactReviewedAuto);
+                }).sort((a, b) => a.name.localeCompare(b.name));
                 const startMain = (await github.rest.repos.getBranch({
                   owner, repo, branch: 'main'
                 })).data.commit.sha;
@@ -1325,12 +1341,30 @@ jobs:
                     });
                     if (prs.length !== 1) continue;
                     const pr = prs[0];
+                    const exactReviewedAuto =
+                      exactMergedCleanupHeads.get(name) === sha;
                     if (!pr.merged_at || pr.state !== 'closed' ||
-                        Date.parse(pr.merged_at) > cutoff ||
+                        (!exactReviewedAuto && Date.parse(pr.merged_at) > cutoff) ||
                         pr.base?.ref !== 'main' ||
                         pr.base?.repo?.full_name !== fullName ||
                         pr.head?.repo?.full_name !== fullName ||
                         pr.head?.sha !== sha || !pr.merge_commit_sha) continue;
+                    // Allow a fresh merged cleanup head only after successful
+                    // push CI on the exact current main SHA. A green old PR
+                    // check or a successful workflow on another SHA is not enough.
+                    if (exactReviewedAuto) {
+                      const ci = (await github.rest.actions.listWorkflowRuns({
+                        owner, repo, workflow_id: 'ci.yml',
+                        head_sha: startMain, per_page: 100
+                      })).data.workflow_runs || [];
+                      if (!ci.some(run =>
+                        run.head_sha === startMain &&
+                        run.event === 'push' && run.head_branch === 'main' &&
+                        run.status === 'completed' && run.conclusion === 'success')) {
+                        rows.push([name, 'held', 'Exact-main Dank Shield CI not green']);
+                        continue;
+                      }
+                    }
                     if (graph.ahead_by !== 0 ||
                         !['behind', 'identical'].includes(graph.status)) {
                       if (!await equivalentAtMerge(item, pr, graph)) continue;

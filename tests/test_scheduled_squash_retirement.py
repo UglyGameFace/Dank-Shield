@@ -42,9 +42,18 @@ const cases = [
   {name:'merge-not-main', ahead:2, status:'diverged', equivalent:true, merged:false},
   {name:'head-changed', ahead:0, status:'behind', equivalent:false, merged:true, wrongHead:true},
   {name:'recent', ahead:0, status:'behind', equivalent:false, merged:true, recent:true},
+  {name:'recent-exact-good', ahead:0, status:'behind', equivalent:false, merged:true, recent:true},
+  {name:'recent-exact-no-ci', ahead:0, status:'behind', equivalent:false, merged:true, recent:true, noCi:true},
+  {name:'recent-exact-wrong-ci', ahead:0, status:'behind', equivalent:false, merged:true, recent:true, wrongCiSha:true},
   {name:'wrong-base', ahead:0, status:'behind', equivalent:false, merged:true, wrongBase:true},
   {name:'multiple-prs', ahead:0, status:'behind', equivalent:false, merged:true, multiple:true},
 ];
+const exactMergedCleanupHeads = new Map([
+  ['recent-exact-good','recent-exact-good'],
+  ['recent-exact-no-ci','recent-exact-no-ci'],
+  ['recent-exact-wrong-ci','recent-exact-wrong-ci']
+]);
+const rows = [];
 let active, proofCalls = [];
 const github = {
   paginate: async () => {
@@ -60,6 +69,10 @@ const github = {
   },
   rest: {
     pulls:{list:()=>{}},
+    actions:{listWorkflowRuns:async () => ({data:{workflow_runs:active.noCi ? [] : [{
+      head_sha:active.wrongCiSha ? 'other-main' : startMain,
+      event:'push',head_branch:'main',status:'completed',conclusion:'success'
+    }]}})},
     repos:{compareCommits:async ({base}) => {
       if (base === 'main') return {data:{ahead_by:active.ahead,status:active.status}};
       return {data:{behind_by:active.merged ? 0 : 1,status:'ahead'}};
@@ -88,5 +101,5 @@ const accepted = [];
     result = subprocess.run(["node", "-e", script], text=True, capture_output=True)
     assert result.returncode == 0, result.stderr
     actual = json.loads(result.stdout)
-    assert actual["accepted"] == ["direct-good", "squash-good"]
+    assert actual["accepted"] == ["direct-good", "squash-good", "recent-exact-good"]
     assert actual["proofCalls"] == ["squash-good", "squash-bad", "merge-not-main"]
