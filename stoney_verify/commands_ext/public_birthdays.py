@@ -32,9 +32,12 @@ async def _reply(interaction: discord.Interaction, content: str) -> None:
 async def _defer(interaction: discord.Interaction) -> None:
     if interaction.response.is_done():
         return
-    if interaction.type == discord.InteractionType.component:
+    if interaction.type == discord.InteractionType.component and bool(
+        getattr(getattr(interaction.message, "flags", None), "ephemeral", False)
+    ):
         await interaction.response.defer()
     else:
+        # Persistent public profile panels must NEVER be replaced by private data.
         await interaction.response.defer(ephemeral=True, thinking=True)
 
 
