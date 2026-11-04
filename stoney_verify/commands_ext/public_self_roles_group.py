@@ -12,6 +12,7 @@ from discord import app_commands
 
 from .public_setup_group import _require_setup_permission, dank_group
 from stoney_verify.panel_lifecycle import public_panel_lifecycle_text
+from stoney_verify.ui import cards
 from stoney_verify.ui.picker import DankChoice, DankMultiPickerView
 
 
@@ -1482,6 +1483,158 @@ class ProfileEditView(discord.ui.View):
         self.add_item(discord.ui.Button(label="Community & Pings", emoji="🌿", style=discord.ButtonStyle.secondary, custom_id=f"{PROFILE_PREFIX}community_pings", row=2))
 
 
+# ---------------------------------------------------------------------------
+# Refreshed member-facing profile UI (layout cards).
+#
+# ProfilePanelView / ProfileEditView above stay defined, registered and routed
+# so panels already posted in servers keep working. Every button below reuses
+# an existing PROFILE_PREFIX action, so _handle_profile_interaction stays the
+# single owner of behavior. The only new action is ``suggest``.
+# ---------------------------------------------------------------------------
+
+PROFILE_PANEL_HEADING = "Make your profile"
+PROFILE_PANEL_BLURB = (
+    "Let people know who you are and what you're into. "
+    "Everything is optional, and you can change it anytime."
+)
+PROFILE_SETUP_REVIEW_TIMEOUT_SECONDS = 1.5
+
+
+def _profile_panel_chip_labels() -> list[str]:
+    return [label for _emoji, label, _names, _desc in PROFILE_CATEGORIES.values()] + ["Pings", "Tags"]
+
+
+class ProfilePanelLayout(discord.ui.LayoutView):
+    """Public, persistent Member Setup & Profile panel."""
+
+    def __init__(self, *, notice: str = "") -> None:
+        super().__init__(timeout=None)
+        items: list[discord.ui.Item] = [
+            cards.heading(PROFILE_PANEL_HEADING, PROFILE_PANEL_BLURB),
+            cards.chips(_profile_panel_chip_labels()),
+        ]
+        if notice:
+            items += [cards.divider(), cards.note(notice)]
+        items += [
+            cards.divider(),
+            cards.row(
+                cards.button("Set up my profile", f"{PROFILE_PREFIX}edit", style="success", emoji="✏️"),
+            ),
+            cards.row(
+                cards.button("View a profile", f"{PROFILE_PREFIX}pick_member"),
+                cards.button("What do these mean?", f"{PROFILE_PREFIX}learn"),
+            ),
+            cards.line_with_action(
+                "-# Don't see yours listed?",
+                cards.button("Suggest one", f"{PROFILE_PREFIX}suggest"),
+            ),
+        ]
+        self.add_item(cards.card(*items))
+
+
+def _profile_section_summary(member: discord.Member, names: tuple[str, ...]) -> tuple[str, bool]:
+    labels = [_short_role_label(role.name) for role in _member_profile_roles(member, names)]
+    return cards.summarize(labels), bool(labels)
+
+
+class ProfileEditorLayout(discord.ui.LayoutView):
+    """Private profile editor: every section shows its value with the action beside it."""
+
+    def __init__(self, member: discord.Member, *, setup_review: str = "") -> None:
+        super().__init__(timeout=300)
+        items: list[discord.ui.Item] = [
+            cards.heading("Your profile", "Tap **Change** on anything you want to update."),
+        ]
+        if setup_review:
+            items.append(
+                cards.line_with_action(
+                    setup_review,
+                    cards.button("Review", f"{PROFILE_PREFIX}member_setup", style="primary"),
+                )
+            )
+        items.append(cards.divider())
+
+        for key, (_emoji, label, names, _desc) in PROFILE_CATEGORIES.items():
+            value, has_value = _profile_section_summary(member, names)
+            items.append(
+                cards.setting_row(
+                    label,
+                    value,
+                    cards.button(
+                        "Change" if has_value else "Add",
+                        f"{PROFILE_PREFIX}open:{key}",
+                        style="secondary" if has_value else "success",
+                    ),
+                )
+            )
+        items.append(
+            cards.setting_row(
+                "Pings",
+                "Choose what you get pinged for",
+                cards.button("Open", f"{PROFILE_PREFIX}community_pings"),
+            )
+        )
+        items.append(
+            cards.setting_row(
+                "Tags & cosmetics",
+                "Extra tags and name colors",
+                cards.button("Open", f"{PROFILE_PREFIX}cosmetics"),
+            )
+        )
+        items.append(cards.divider())
+
+        footer = [
+            cards.button("Preview my card", f"{PROFILE_PREFIX}view"),
+            cards.button("Card settings", f"{PROFILE_PREFIX}privacy"),
+        ]
+        if not setup_review:
+            # Custom IDs must be unique within one message.
+            footer.append(cards.button("Server setup", f"{PROFILE_PREFIX}member_setup"))
+        items.append(cards.row(*footer))
+        items.append(
+            cards.line_with_action(
+                "-# Want a fresh start? This removes your pronoun, identity and interest picks.",
+                cards.button("Clear all", f"{PROFILE_PREFIX}clear", style="danger"),
+            )
+        )
+        self.add_item(cards.card(*items))
+
+
+class ProfileSuggestLayout(discord.ui.LayoutView):
+    """Pick what kind of missing option to suggest; reuses the existing request modals."""
+
+    def __init__(self) -> None:
+        super().__init__(timeout=300)
+        self.add_item(
+            cards.card(
+                cards.heading("Suggest something", "Staff review every suggestion before anything is added."),
+                cards.row(
+                    cards.button("An identity", f"{PROFILE_PREFIX}missing"),
+                    cards.button("An interest", f"{PROFILE_PREFIX}missing_interest"),
+                ),
+            )
+        )
+
+
+async def _profile_setup_review_notice(member: discord.Member) -> str:
+    """Return a one-line notice when this member has a pending Member Setup review."""
+
+    try:
+        from stoney_verify.action_center_service import _read_member_setup
+
+        item = await asyncio.wait_for(
+            _read_member_setup(member),
+            timeout=PROFILE_SETUP_REVIEW_TIMEOUT_SECONDS,
+        )
+    except Exception:
+        return ""
+    if item is None:
+        return ""
+    if str(getattr(item, "severity", "")) == "required":
+        return "The server changed its setup and needs you to review a few choices."
+    return "The server added new options. Take a look?"
+
+
 def register_profile_panel_runtime(bot: Any) -> bool:
     """Register the public Profile Panel as persistent across bot restarts."""
 
@@ -1492,7 +1645,9 @@ def register_profile_panel_runtime(bot: Any) -> bool:
     try:
         add_view = getattr(bot, "add_view", None)
         if callable(add_view):
+            # Legacy panels already posted in servers, then the refreshed layout.
             add_view(ProfilePanelView())
+            add_view(ProfilePanelLayout())
             _PROFILE_PANEL_VIEW_REGISTERED = True
             print("✅ profile_panel: persistent ProfilePanelView registered")
             return True
@@ -2004,8 +2159,7 @@ async def _handle_builder_action(interaction: discord.Interaction, action: str) 
 
     if action == "preview":
         await interaction.response.send_message(
-            embed=_profile_panel_embed(guild),
-            view=ProfilePanelView(),
+            view=ProfilePanelLayout(),
             ephemeral=True,
             allowed_mentions=discord.AllowedMentions.none(),
         )
@@ -2025,8 +2179,7 @@ async def _handle_builder_action(interaction: discord.Interaction, action: str) 
         try:
             _roles, created, reused = await _create_profile_roles(interaction, guild)
             sent = await channel.send(
-                embed=_profile_panel_embed(guild),
-                view=ProfilePanelView(),
+                view=ProfilePanelLayout(),
                 allowed_mentions=discord.AllowedMentions.none(),
             )
             try:
@@ -2134,9 +2287,17 @@ async def _handle_profile_interaction(interaction: discord.Interaction) -> bool:
         return True
 
     if suffix == "edit":
+        setup_review = await _profile_setup_review_notice(member)
         await interaction.response.send_message(
-            embed=_profile_edit_embed(member),
-            view=ProfileEditView(),
+            view=ProfileEditorLayout(member, setup_review=setup_review),
+            ephemeral=True,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+        return True
+
+    if suffix == "suggest":
+        await interaction.response.send_message(
+            view=ProfileSuggestLayout(),
             ephemeral=True,
             allowed_mentions=discord.AllowedMentions.none(),
         )

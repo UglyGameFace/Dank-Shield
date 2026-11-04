@@ -616,15 +616,25 @@ async def open_member_setup(
 
 
 def _message_component_ids(message: discord.Message) -> set[str]:
+    """Collect custom IDs at any depth.
+
+    Classic panels nest buttons one level deep (action rows). Layout panels
+    nest them inside containers, action rows and section accessories.
+    """
+
     out: set[str] = set()
-    for row in list(getattr(message, "components", []) or []):
-        children = list(getattr(row, "children", []) or [])
-        if not children:
-            children = [row]
-        for child in children:
-            custom_id = str(getattr(child, "custom_id", "") or "")
-            if custom_id:
-                out.add(custom_id)
+    stack = list(getattr(message, "components", []) or [])
+    seen = 0
+    while stack and seen < 200:
+        seen += 1
+        component = stack.pop()
+        custom_id = str(getattr(component, "custom_id", "") or "")
+        if custom_id:
+            out.add(custom_id)
+        stack.extend(list(getattr(component, "children", []) or []))
+        accessory = getattr(component, "accessory", None)
+        if accessory is not None:
+            stack.append(accessory)
     return out
 
 
@@ -706,26 +716,27 @@ async def refresh_public_member_setup_panel(
     if message is None:
         return None, error
 
-    from .public_self_roles_group import ProfilePanelView, _profile_panel_embed
+    from .public_self_roles_group import ProfilePanelLayout
 
-    public_embed = _profile_panel_embed(guild)
     current_revision = int(state.get("current_revision") or 0)
     latest = latest_revision(state)
+    notice = ""
     if current_revision > 0:
-        public_embed.add_field(
-            name=f"Published setup revision {current_revision}",
-            value=(
-                f"**{_severity_label(str((latest or {}).get('severity') or SEVERITY_MINOR))}**"
-                + (f" — {_clip((latest or {}).get('summary'), 850)}" if _clip((latest or {}).get("summary"), 850) else "")
-                + "\nOpen **Member Setup / Review** to see whether this revision needs anything from you."
-            ),
-            inline=False,
+        summary = _clip((latest or {}).get("summary"), 180)
+        notice = (
+            f"Setup update {current_revision} · "
+            f"{_severity_label(str((latest or {}).get('severity') or SEVERITY_MINOR))}"
+            + (f" — {summary}" if summary else "")
+            + ". Tap Set up my profile to see if it affects you."
         )
 
     try:
+        # Converts a classic embed panel into the layout panel in place.
+        # content/embed must be cleared for a layout message.
         await message.edit(
-            embed=public_embed,
-            view=ProfilePanelView(),
+            content=None,
+            embed=None,
+            view=ProfilePanelLayout(notice=notice),
             allowed_mentions=discord.AllowedMentions.none(),
         )
     except discord.Forbidden:
