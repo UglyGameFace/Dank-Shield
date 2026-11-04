@@ -1,3 +1,12 @@
+## BRANCH CLEANUP CHECKPOINT (2026-11-04, latest verified)
+
+- **Live branch inventory:** 25 refs including main, verified from GitHub branch listing. Previously retired refs `feat/mod-quick-actions`, `feat/profile-panel-refresh`, `fix/studio-schedule-persisted-form-gate-20261103`, and `fix/exact-merged-cleanup-automatic-retirement-20261103` are absent. **This checkpoint: 0 additional deletions, 0 merges.** Do not confuse earlier deletions with this run.
+- **Active:** `feat/staff-home-refresh` remains; preserve until PR #822 is merged and verified. Eight other divergent feature/repair branches remain; retain unique commits and investigate before integrating or retiring. Backup/archive/recovery/Cinema checkpoint refs remain held.
+- **Next implementation priority:** reconcile the recurring Embed Studio branch's SQL migration with the existing authoritative migrations, runtime scheduler and permissions, and implement a cohesive tested PR; no database execution or deployment without approval. Use existing guarded owner-authenticated archive-first retirement workflow for subsequent verified-integrated heads.
+- **Release gate:** dedicated Supabase `viamriafkbqhquvrsnua` is intended primary; preserve IdleGrowOp rollback source and isolate Discloud PostgreSQL backup candidate. Live Discloud SHA, independent off-Discloud backup, canary and tested rollback remain unverified. No release authorized.
+
+---
+
 ## VERIFIED MERGED-BRANCH RETIREMENT (2026-11-04 UTC)
 
 - **Actual result:** 28 branch refs before cleanup rerun → **25 live branch refs after**; **3 branches deleted**, all independently verified absent in GitHub's branch list. No open PRs, 15 open issues (excluding PRs) at the checkpoint.
