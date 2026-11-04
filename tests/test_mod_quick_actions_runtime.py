@@ -79,16 +79,20 @@ def test_member_card_puts_actions_first() -> None:
     assert "Back" in rows[3]
 
 
-def test_member_card_summary_is_three_short_facts() -> None:
+def test_member_card_summary_is_one_facts_line() -> None:
     embed = actions.member_detail_embed(_member(), None)
-    inline = [field.name for field in embed.fields if field.inline]
+    facts = embed.description.splitlines()[-1]
 
-    assert inline == ["Joined", "Account made", "Status"]
-    assert embed.fields[2].value == "Active"
+    assert facts.startswith("Joined ")
+    assert "Account made" in facts and facts.endswith("Active")
+    assert [field.name for field in embed.fields] == ["Roles (3)"]
     assert "mellowjay" in embed.title
 
     timed_out = actions.member_detail_embed(_member(timed_out=True), None)
-    assert "Timed out until" in timed_out.fields[2].value
+    assert "Timed out until" in timed_out.description
+
+    from_role = actions.member_detail_embed(_member(), SimpleNamespace(mention="@Mods"))
+    assert len(from_role.fields) <= 4, "mobile guardrail: at most four fields"
 
 
 def test_member_card_caps_long_role_lists() -> None:

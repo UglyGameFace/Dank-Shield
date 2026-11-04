@@ -71,27 +71,29 @@ def member_detail_embed(
     member: discord.Member,
     selected_role: Optional[discord.Role],
 ) -> discord.Embed:
+    # One compact facts line instead of a paragraph of status lines. A single
+    # line reads the same on phones, where inline fields stack vertically.
+    if member.is_timed_out():
+        status = f"⏱️ Timed out until {timestamp(member.timed_out_until, 'f')}"
+    else:
+        status = "Active"
+    facts = (
+        f"Joined {timestamp(member.joined_at)} · "
+        f"Account made {timestamp(member.created_at)} · {status}"
+    )
     embed = discord.Embed(
         title=f"👤 {trim(display_name(member), 200)}",
-        description=f"{member.mention} · `{member.id}`" + (" · 🤖 Bot" if member.bot else ""),
+        description=(
+            f"{member.mention} · `{member.id}`"
+            + (" · 🤖 Bot" if member.bot else "")
+            + f"\n{facts}"
+        ),
         color=member.color if member.color.value else discord.Color.blurple(),
     )
     try:
         embed.set_thumbnail(url=member.display_avatar.url)
     except Exception:
         pass
-
-    # Three short side-by-side facts instead of a paragraph of status lines.
-    embed.add_field(name="Joined", value=timestamp(member.joined_at), inline=True)
-    embed.add_field(name="Account made", value=timestamp(member.created_at), inline=True)
-    if member.is_timed_out():
-        embed.add_field(
-            name="Status",
-            value=f"⏱️ Timed out until {timestamp(member.timed_out_until, 'f')}",
-            inline=True,
-        )
-    else:
-        embed.add_field(name="Status", value="Active", inline=True)
 
     roles = [
         role.mention
