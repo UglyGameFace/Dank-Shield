@@ -2545,6 +2545,8 @@ class StudioReviewView(_StudioView):
             return await _say(interaction, "Scheduled edits of existing posts are not supported.")
         if self.session.project.get("role_actions"):
             return await _say(interaction, "Self-role panels require immediate moderator publishing.")
+        if self.session.project.get("form"):
+            return await _say(interaction, "Interactive forms require immediate moderator publishing.")
         await interaction.response.send_modal(StudioScheduleModal(
             self.session, preview=self.preview_project,
             channel_id=self.preview_channel_id, post_key=self.preview_post_key,
