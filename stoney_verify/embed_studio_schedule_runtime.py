@@ -25,6 +25,11 @@ async def _dispatch(bot: Any, job: Mapping[str, Any]) -> tuple[int, str]:
         model = validate_project(job["project"])
         if model["role_actions"]:
             return 0, "role_actions_not_supported"
+        # A queued record may have been imported or modified after enqueue.
+        # The delivery boundary must enforce the same no-forms policy as the
+        # private preview and queue, without touching Discord.
+        if model.get("form"):
+            return 0, "form_not_supported"
         guild = bot.get_guild(gid)
         if guild is None:
             return 0, "guild_not_cached"
