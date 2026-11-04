@@ -20,18 +20,32 @@ POLL_SECONDS = 15
 MAX_PARALLEL = 6
 
 
-def _manageable_role(guild: discord.Guild, role: discord.Role) -> bool:
+def _can_remove_role(guild: discord.Guild, role: discord.Role) -> bool:
     me = guild.me
-    if me is None or role.managed or role.is_default():
-        return False
-    if not (me.guild_permissions.manage_roles or me.guild_permissions.administrator):
-        return False
-    return role < me.top_role and not (
-        role.permissions.administrator or role.permissions.manage_guild
-        or role.permissions.manage_roles or role.permissions.manage_channels
-        or role.permissions.ban_members or role.permissions.kick_members
-        or role.permissions.moderate_members
+    return bool(
+        me and not role.managed and not role.is_default()
+        and (me.guild_permissions.manage_roles or me.guild_permissions.administrator)
+        and role < me.top_role
     )
+
+
+def _manageable_role(guild: discord.Guild, role: discord.Role) -> bool:
+    if not _can_remove_role(guild, role):
+        return False
+    name = role.name.lower()
+    if not any(part in name for part in ("birthday", "bday", "🎂")):
+        return False
+    if any(part in name for part in ("verified", "resident", "staff", "admin", "moderator")):
+        return False
+    permissions = role.permissions
+    return not any((
+        permissions.administrator, permissions.manage_guild,
+        permissions.manage_roles, permissions.manage_channels,
+        permissions.manage_messages, permissions.ban_members,
+        permissions.kick_members, permissions.moderate_members,
+        permissions.mention_everyone, permissions.manage_webhooks,
+        permissions.view_audit_log,
+    ))
 
 
 async def _deliver_guild(bot: Any, claim: dict[str, Any]) -> None:
@@ -72,6 +86,15 @@ async def _deliver_guild(bot: Any, claim: dict[str, Any]) -> None:
                 continue
         if member.bot:
             continue
+        # Recheck member consent immediately before any public side effects.
+        from .birthday_service import get_member, celebrated_on
+        latest = await get_member(guild_id, user_id)
+        if not latest or not celebrated_on(
+            int(latest["birth_month"]), int(latest["birth_day"]), local_day,
+            str(settings.get("leap_day_policy") or "feb28"),
+        ):
+            continue
+        row = latest
         if channel_ok and row.get("public_wishes"):
             if await claim_delivery(guild_id, user_id, local_day, "announce"):
                 embed = discord.Embed(
@@ -127,7 +150,7 @@ async def _remove_expired_role(bot: Any, lease: dict[str, Any]) -> None:
     if role is None or role not in member.roles:
         await clear_role_lease(guild_id, user_id)
         return
-    if not _manageable_role(guild, role):
+    if not _can_remove_role(guild, role):
         print(f"[birthdays] role cleanup held by hierarchy guild={guild_id}")
         return
     try:
