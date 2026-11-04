@@ -108,7 +108,7 @@ def test_server_is_disabled_by_default_and_requires_a_channel(monkeypatch) -> No
 
 
 def test_command_and_profile_builder_integration_is_discoverable() -> None:
-    assert {command.name for command in ui.birthday_group.get_commands()} == {"me", "setup", "upcoming"}
+    assert {command.name for command in ui.birthday_group.commands} == {"me", "setup", "upcoming"}
     assert "birthday" not in profiles.PROFILE_CATEGORIES  # Not a self-assignable cosmetic access role.
     assert "birthday" in profiles.PROFILE_COSMETIC_BLOCKED_NAME_PARTS
 
