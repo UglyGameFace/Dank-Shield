@@ -60,7 +60,10 @@ def _safe_birthday_role(guild: discord.Guild, role: discord.Role) -> bool:
     if not (me.guild_permissions.manage_roles or me.guild_permissions.administrator):
         return False
     # Never offer an existing access-control / staff / verification role as a birthday perk.
-    if not any(label in role.name.lower() for label in ("birthday", "bday", "🎂")):
+    name = role.name.lower()
+    if not any(label in name for label in ("birthday", "bday", "🎂")):
+        return False
+    if any(label in name for label in ("verified", "resident", "staff", "admin", "moderator")):
         return False
     perms = role.permissions
     return not any((
@@ -107,7 +110,7 @@ async def open_member_birthday(interaction: discord.Interaction) -> None:
         return await interaction.edit_original_response(content="Birthday storage is not ready. No changes were made.", embed=None, view=None)
     await interaction.edit_original_response(
         content=None, embed=_member_embed(interaction, member, settings),
-        view=MemberBirthdayView(owner_id=interaction.user.id),
+        view=MemberBirthdayView(owner_id=interaction.user.id, saved=member),
         allowed_mentions=discord.AllowedMentions.none(),
     )
 
@@ -148,9 +151,10 @@ class BirthdayDateModal(discord.ui.Modal, title="🎂 Set My Birthday"):
 
 
 class MemberBirthdayView(discord.ui.View):
-    def __init__(self, *, owner_id: int) -> None:
+    def __init__(self, *, owner_id: int, saved: dict[str, Any] | None = None) -> None:
         super().__init__(timeout=300)
         self.owner_id = int(owner_id)
+        self.saved = saved
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.owner_id:
@@ -162,11 +166,11 @@ class MemberBirthdayView(discord.ui.View):
     async def set_date(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         # Discord requires modals to be the first interaction response. Avoid a
         # potentially slow storage read before opening the member's form.
-        await interaction.response.send_modal(BirthdayDateModal(None))
+        await interaction.response.send_modal(BirthdayDateModal(self.saved))
 
     async def _revoke_lease(self, interaction: discord.Interaction) -> None:
         from stoney_verify.birthday_service import get_role_lease, clear_role_lease
-        from stoney_verify.birthday_runtime import _manageable_role
+        from stoney_verify.birthday_runtime import _can_remove_role
         guild = interaction.guild
         lease = await get_role_lease(guild.id, interaction.user.id)
         if not lease:
@@ -176,7 +180,7 @@ class MemberBirthdayView(discord.ui.View):
         if role is None or role not in member.roles:
             await clear_role_lease(guild.id, member.id)
             return
-        if not _manageable_role(guild, role):
+        if not _can_remove_role(guild, role):
             return  # Keep lease for later retry rather than losing cleanup.
         try:
             await member.remove_roles(role, reason="Member opted out of birthday role")
@@ -385,13 +389,19 @@ class BirthdayStaffView(discord.ui.View):
         me = guild.me
         if me is None or not me.guild_permissions.manage_roles:
             return await _reply(interaction, "Dank Shield needs Manage Roles to create a birthday role.")
-        try:
-            role = await guild.create_role(
-                name="🎂 Birthday", permissions=discord.Permissions.none(),
-                mentionable=False, hoist=False, reason="Dank Shield opt-in birthday celebrations",
-            )
-        except (discord.Forbidden, discord.HTTPException):
-            return await _reply(interaction, "Couldn't create the birthday role. Check Manage Roles and role hierarchy.")
+        role = next(
+            (value for value in guild.roles
+             if value.name == "🎂 Birthday" and _safe_birthday_role(guild, value)),
+            None,
+        )
+        if role is None:
+            try:
+                role = await guild.create_role(
+                    name="🎂 Birthday", permissions=discord.Permissions.none(),
+                    mentionable=False, hoist=False, reason="Dank Shield opt-in birthday celebrations",
+                )
+            except (discord.Forbidden, discord.HTTPException):
+                return await _reply(interaction, "Couldn't create the birthday role. Check Manage Roles and role hierarchy.")
         await _save_staff(interaction, role_id=role.id)
 
 
