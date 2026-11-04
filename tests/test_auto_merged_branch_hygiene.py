@@ -157,7 +157,9 @@ def test_exact_sha_merged_cleanup_can_retire_after_main_ci_without_generic_exemp
         "mainLease !== startMain || lease.object.sha !== sha",
     ):
         assert fail_closed in historical
+    assert "!heldPrefixes.some(prefix => branch.name.startsWith(prefix))" in historical
+    assert "!hasHeldHistoricalSegment(branch.name, heldSegments)" in historical
     for held in ("'backup/'", "'recovery/'", "'integration/'",
                  "'deployment/'", "'production/'"):
-        assert held in historical
+        assert held in workflow
     assert "const cutoff = Date.now() - 48 * 60 * 60 * 1000" in historical
