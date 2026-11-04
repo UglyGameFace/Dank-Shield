@@ -105,13 +105,13 @@ create or replace function public.dank_birthdays_claim_delivery(
 )
 returns boolean language plpgsql security invoker set search_path = public
 as $$
-declare claimed boolean;
+declare affected bigint;
 begin
     insert into public.dank_birthday_deliveries(guild_id, user_id, local_date, kind)
         values (p_guild_id, p_user_id, p_local_date, p_kind)
     on conflict do nothing;
-    get diagnostics claimed = row_count;
-    return claimed;
+    get diagnostics affected = row_count;
+    return affected > 0;
 end;
 $$;
 
