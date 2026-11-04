@@ -249,6 +249,15 @@ async def claim_expired_roles(*, limit: int = 24) -> list[dict[str, Any]]:
     return _many(response)
 
 
+async def get_role_lease(guild_id: int, user_id: int) -> dict[str, Any] | None:
+    response = await _execute(
+        "read role lease",
+        lambda db: db.table(LEASES).select("*").eq("guild_id", _ident(guild_id))
+        .eq("user_id", _ident(user_id)).limit(1).execute(),
+    )
+    return _one(response)
+
+
 async def clear_role_lease(guild_id: int, user_id: int) -> None:
     await _execute(
         "clear role lease",
