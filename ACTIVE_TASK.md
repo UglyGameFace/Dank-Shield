@@ -1,3 +1,14 @@
+## VERIFIED MERGED-BRANCH RETIREMENT (2026-11-04 UTC)
+
+- **Actual result:** 28 branch refs before cleanup rerun → **25 live branch refs after**; **3 branches deleted**, all independently verified absent in GitHub's branch list. No open PRs, 15 open issues (excluding PRs) at the checkpoint.
+- **Archive SHA verified:** `fix/retire-pr814-archive-guard-20261103` (PR #815; `3d8b17ef5f87f38c5131f4148c8213aeb7e33784`), `cleanup/remove-cinema-only-repository-artifacts-20261103` (PR #816; `f9d44fdb2bd0e278420557505119a464ea3e1e56`), and `fix/retire-merged-cleanup-815-816-20261103` (PR #817; `578404824adb6df23dfe3872dc0f15f103c449e9`). Each `refs/tags/branch-retirement-integrated/<branch>` points to its exact original commit SHA and type `commit`.
+- **Runner evidence:** canonical archive-first workflow run **#41744427121, attempt 2**, completed successfully after authenticated GitHub job rerun. Its log confirms `LINKED_PRODUCTION_BRANCH: main`; the repository variable `DANK_DISCLOUD_DEPLOY_BRANCH` is now visible to the runner. Last exact-main Dank Shield CI **#41744426813** passed for `bf6b0c8e81773e51f52fb792b6335eac6b49e7e6` before this documentation update.
+- **Implementation:** merged PR #818 enables unattended retirement of only three immutable, merge-tree-equivalent cleanup heads with exact-main push CI and all original protection/PR/ref/archive SHA checks. PR #818's merged implementation branch `fix/exact-merged-cleanup-automatic-retirement-20261103` remains; let existing guarded generic merge/48-hour cooldown handle it rather than creating another self-perpetuating cleanup PR.
+- **Preserve:** Eight divergent feature/repair branches retain unique commits, and historical backup, Cinema/recovery and deployment refs remain untouched. Do not infer that a merged GitHub main SHA is the live Discloud runtime. Production release stays blocked pending independent verified off-Discloud backup, current live SHA, explicit risk approval, canary, and tested rollback. Dedicated Supabase `viamriafkbqhquvrsnua` is intended primary; preserve IdleGrowOp Supabase rollback source; Discloud PostgreSQL is an isolated backup candidate only. No production, credential, database or host mutation.
+- **Next work:** Reconcile unique feature branches into cohesive tested integrations, verify exact-main checks after any change, continue safe archive-first retirement and issue/PR reconciliation. Track overall objective in issue #597.
+
+---
+
 ## LIVE BRANCH RETIREMENT CHECKPOINT (2026-11-03 23:46 UTC)
 
 - **Integration delivered:** PR #817 merged into `main` as `b3e522b7b176a3178d5476d96c483f66c8bf5f03`; PR-head Dank Shield CI #41716061062 passed all five jobs and companion checks. Exact-main CI #41741757261 was still running at the checkpoint. No deployment implied.
