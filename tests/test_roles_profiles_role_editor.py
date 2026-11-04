@@ -223,12 +223,11 @@ def test_both_roles_and_profiles_doorways_use_one_authoritative_center() -> None
     assert "open_roles_profiles_center(interaction)" in compact_route
     assert "_post_profile_builder(interaction" not in compact_route
 
+    # The compatibility hub no longer keeps its own home buttons; `/dank home`
+    # always delegates to the compact home above.
     compat = COMPAT_HOME.read_text(encoding="utf-8")
-    compat_start = compat.index('label="Roles & Profiles"')
-    compat_end = compat.index('label="Logs & Activity"', compat_start)
-    compat_route = compat[compat_start:compat_end]
-    assert "open_roles_profiles_center(interaction)" in compat_route
-    assert "_post_profile_builder(interaction" not in compat_route
+    assert 'label="Roles & Profiles"' not in compat
+    assert "open_compact_dank_home" in compat
 
 
 

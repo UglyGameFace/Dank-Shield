@@ -96,7 +96,9 @@ class _OwnedView(discord.ui.View):
         return False
 
 
-def _home_embed() -> discord.Embed:
+def _home_embed(status: Any = None) -> discord.Embed:
+    if status is not None:
+        return _status_home_embed(status)
     embed = discord.Embed(
         title="🛡️ DANK SHIELD",
         description=(
@@ -669,12 +671,83 @@ async def _route_feature(interaction: discord.Interaction, feature_key: str) -> 
         )
 
 
-async def _open_home(interaction: discord.Interaction) -> None:
-    await _replace_panel(
-        interaction,
-        embed=_home_embed(),
-        view=CompactDankHomeView(int(interaction.user.id)),
+def _status_home_embed(status: Any) -> discord.Embed:
+    """Staff home: how the server is doing, then what needs a decision."""
+
+    embed = discord.Embed(
+        title=f"🛡️ {str(getattr(status, 'guild_name', '') or 'Dank Shield')}"[:256],
+        description=(
+            f"**{status.headline}**\n"
+            "-# Pick a task below, or choose a section for everything else."
+        ),
+        color=discord.Color.blurple(),
     )
+    embed.add_field(name="Setup", value=status.setup_label, inline=True)
+    embed.add_field(name="Protection", value=status.protection_label, inline=True)
+    embed.add_field(name="Open tickets", value=status.tickets_label, inline=True)
+    attention = list(getattr(status, "attention", []) or [])
+    if attention:
+        embed.add_field(
+            name="Needs you",
+            value="\n".join(f"• {item.text}" for item in attention)[:1024],
+            inline=False,
+        )
+    embed.set_footer(text="Private to you • about 15 minutes")
+    return embed
+
+
+def _home_viewer_is_staff(interaction: discord.Interaction) -> bool:
+    if interaction.guild is None:
+        return False
+    try:
+        from .public_owner_authority import interaction_has_manage_guild_authority
+
+        if interaction_has_manage_guild_authority(interaction):
+            return True
+    except Exception:
+        pass
+    try:
+        from .common import _staff_check
+
+        return bool(_staff_check(interaction))
+    except Exception:
+        return False
+
+
+async def _ack_before_status(interaction: discord.Interaction) -> None:
+    """Status can take a moment to load; acknowledge first so Discord doesn't time out."""
+
+    if interaction.response.is_done():
+        return
+    try:
+        if interaction.message is not None and interaction.type in (
+            discord.InteractionType.component,
+            discord.InteractionType.modal_submit,
+        ):
+            await interaction.response.defer()
+        else:
+            await interaction.response.defer(ephemeral=True, thinking=True)
+    except Exception:
+        pass
+
+
+async def _home_payload(interaction: discord.Interaction) -> tuple[discord.Embed, CompactDankHomeView]:
+    owner_id = int(interaction.user.id)
+    if not _home_viewer_is_staff(interaction):
+        return _home_embed(), CompactDankHomeView(owner_id)
+    await _ack_before_status(interaction)
+    from .public_home_status import load_home_status
+
+    try:
+        status = await load_home_status(interaction.guild)
+    except Exception:
+        return _home_embed(), CompactDankHomeView(owner_id)
+    return _home_embed(status), CompactDankHomeView(owner_id, status=status)
+
+
+async def _open_home(interaction: discord.Interaction) -> None:
+    embed, view = await _home_payload(interaction)
+    await _replace_panel(interaction, embed=embed, view=view)
 
 
 async def _open_category(interaction: discord.Interaction, category_key: str) -> None:
@@ -760,13 +833,13 @@ class FeatureSearchModal(discord.ui.Modal, title="Find a Dank Shield Feature"):
 
 
 class _HomeSectionSelect(discord.ui.Select):
-    def __init__(self) -> None:
+    def __init__(self, *, row: int = 0) -> None:
         super().__init__(
             placeholder="🧭 Choose a section…",
             min_values=1,
             max_values=1,
             custom_id="dank:home:sections:v1",
-            row=0,
+            row=row,
             options=[
                 discord.SelectOption(
                     label=category.label[:100],
@@ -917,15 +990,78 @@ class _CategoryNavButton(discord.ui.Button):
             await _open_category(interaction, self.category_key)
 
 
+# The four everyday staff jobs, shown as big tiles on the staff home.
+# (label, emoji, canonical feature key)
+HOME_TASKS: tuple[tuple[str, str, str], ...] = (
+    ("Moderate", "👥", "members_moderation"),
+    ("Tickets", "🎫", "tickets"),
+    ("Safety", "🛡️", "protection"),
+    ("Setup", "⚙️", "setup_center"),
+)
+
+
+class _HomeTaskButton(discord.ui.Button):
+    def __init__(self, label: str, emoji: str, feature_key: str, *, row: int) -> None:
+        super().__init__(
+            label=label,
+            emoji=emoji,
+            style=discord.ButtonStyle.primary,
+            custom_id=f"dank:home:task:{feature_key}:v1"[:100],
+            row=row,
+        )
+        self.feature_key = feature_key
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await _route_feature(interaction, self.feature_key)
+
+
+class _HomeAttentionButton(discord.ui.Button):
+    def __init__(self, label: str, feature_key: str, *, row: int) -> None:
+        super().__init__(
+            label=label[:80],
+            style=discord.ButtonStyle.success,
+            custom_id=f"dank:home:attention:{feature_key}:v1"[:100],
+            row=row,
+        )
+        self.feature_key = feature_key
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await _route_feature(interaction, self.feature_key)
+
+
 class CompactDankHomeView(_OwnedView):
-    def __init__(self, owner_id: int) -> None:
+    """The one Dank Shield home.
+
+    Without ``status`` (members, stale-menu recovery) it is the compact section
+    picker. With a staff ``status`` it leads with the four everyday tasks and
+    one-tap fixes for whatever needs attention, then the section picker.
+    """
+
+    def __init__(self, owner_id: int, *, status: Any = None) -> None:
         super().__init__(owner_id)
-        self.add_item(_HomeSectionSelect())
-        self.add_item(_FindFeatureButton(row=1))
-        self.add_item(_AllFeaturesButton(row=1))
-        self.add_item(_HelpNavigationButton(row=1))
-        self.add_item(_CloseNavigationButton(row=1))
-        self.add_item(_RecentFeaturesButton(row=2))
+        self.status = status
+        if status is None:
+            self.add_item(_HomeSectionSelect())
+            self.add_item(_FindFeatureButton(row=1))
+            self.add_item(_AllFeaturesButton(row=1))
+            self.add_item(_HelpNavigationButton(row=1))
+            self.add_item(_CloseNavigationButton(row=1))
+            self.add_item(_RecentFeaturesButton(row=2))
+            return
+
+        for label, emoji, feature_key in HOME_TASKS:
+            self.add_item(_HomeTaskButton(label, emoji, feature_key, row=0))
+        attention = list(getattr(status, "attention", []) or [])
+        for item in attention[:4]:
+            self.add_item(_HomeAttentionButton(item.button_label, item.feature_key, row=1))
+        select_row = 2 if attention else 1
+        self.add_item(_HomeSectionSelect(row=select_row))
+        nav_row = select_row + 1
+        self.add_item(_FindFeatureButton(row=nav_row))
+        self.add_item(_AllFeaturesButton(row=nav_row))
+        self.add_item(_HelpNavigationButton(row=nav_row))
+        self.add_item(_RecentFeaturesButton(row=nav_row))
+        self.add_item(_CloseNavigationButton(row=nav_row))
 
 
 class FeatureCategoryView(_OwnedView):
@@ -1302,11 +1438,7 @@ class CardAssetView(_OwnedView):
     @discord.ui.button(label="Control Center", emoji="🏠", style=discord.ButtonStyle.secondary, custom_id="dank:assets:home:v1", row=1)
     async def home(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
-        await interaction.response.edit_message(
-            embed=_home_embed(),
-            view=CompactDankHomeView(self.owner_id),
-            allowed_mentions=discord.AllowedMentions.none(),
-        )
+        await _open_home(interaction)
 
 
 async def replace_with_compact_dank_home(
@@ -1328,12 +1460,18 @@ async def open_compact_dank_home(
     *,
     content: str = "",
 ) -> None:
-    await _private(
-        interaction,
-        content=content,
-        embed=_home_embed(),
-        view=CompactDankHomeView(int(interaction.user.id)),
-    )
+    was_done = interaction.response.is_done()
+    embed, view = await _home_payload(interaction)
+    if not was_done and interaction.response.is_done():
+        # _home_payload acknowledged while loading staff status.
+        await interaction.edit_original_response(
+            content=content or None,
+            embed=embed,
+            view=view,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+        return
+    await _private(interaction, content=content, embed=embed, view=view)
 
 
 @app_commands.describe(

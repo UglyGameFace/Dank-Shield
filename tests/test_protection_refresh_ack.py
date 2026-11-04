@@ -124,7 +124,6 @@ def test_public_protection_entries_ack_before_permission_checks() -> None:
     checks = (
         ("stoney_verify/commands_ext/public_protection_center.py", "async def protection_center"),
         ("stoney_verify/commands_ext/public_command_surface_v2.py", 'if key == "protection":'),
-        ("stoney_verify/commands_ext/public_command_hub.py", 'label="Protection"'),
         ("stoney_verify/commands_ext/public_setup_solid.py", 'custom_id="stoney_solid:features_protection"'),
         ("stoney_verify/commands_ext/public_setup_recommend.py", "async def _open_protection_options"),
         ("stoney_verify/protection_center_services.py", "async def open_protection_center"),

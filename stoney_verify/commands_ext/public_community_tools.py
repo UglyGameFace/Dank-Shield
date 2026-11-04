@@ -375,9 +375,9 @@ class CommunityToolsView(_OwnedView):
     @discord.ui.button(label="Dank Shield Home", emoji="🏠", style=discord.ButtonStyle.secondary, row=2)
     async def home(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
-        from .public_command_surface_v2 import CompactDankHomeView, _home_embed
+        from .public_command_surface_v2 import _open_home
 
-        await _replace(interaction, embed=_home_embed(), view=CompactDankHomeView(self.owner_id))
+        await _open_home(interaction)
 
     @discord.ui.button(label="Close", emoji="✖️", style=discord.ButtonStyle.secondary, row=2)
     async def close(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:

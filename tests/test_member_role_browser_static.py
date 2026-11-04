@@ -52,7 +52,9 @@ def test_one_members_command_replaces_visible_subcommand_group() -> None:
 def test_members_entry_survives_final_dank_compaction() -> None:
     hub = _source(COMMAND_HUB)
     assert 'for name in ("setup", "status", "diagnostics", "members")' in hub
-    assert 'await _invoke_saved("members", interaction)' in hub
+    # The retired hub home view no longer exists; the live home reaches the
+    # members owner through the members_moderation route checked below.
+    assert "class DankHomeView" not in hub
     assert "from .public_members_group import members_scan" not in hub
     # /dank members is now a hidden legacy alias. Help must not advertise it,
     # but both /mod and Home → Members & Moderation must still reach its owner.
