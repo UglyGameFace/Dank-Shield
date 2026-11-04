@@ -79,13 +79,16 @@ def _member_embed(interaction: discord.Interaction, member: dict[str, Any] | Non
     )
     display = f"{int(member['birth_month']):02d}-{int(member['birth_day']):02d}" if member else "Not set"
     embed.add_field(name="Saved date", value=display, inline=False)
-    embed.add_field(name="Public wishes", value="On ✅" if member and member.get("public_wishes") else "Off", inline=True)
-    embed.add_field(name="Temporary birthday role", value="On ✅" if member and member.get("birthday_role") else "Off", inline=True)
-    embed.add_field(name="Private birthday DM", value="On ✅" if member and member.get("dm_wishes") else "Off", inline=True)
+    preferences = (
+        f"📣 Public wishes: {'On ✅' if member and member.get('public_wishes') else 'Off'}\n"
+        f"🏷️ Birthday role: {'On ✅' if member and member.get('birthday_role') else 'Off'}\n"
+        f"💌 Private DM: {'On ✅' if member and member.get('dm_wishes') else 'Off'}"
+    )
+    embed.add_field(name="My celebration choices", value=preferences, inline=False)
     embed.add_field(
         name="Server celebrations",
-        value=("Enabled" if settings and settings.get("enabled") else "Not enabled by server staff") +
-              " · " + str((settings or {}).get("timezone") or "UTC"),
+        value=("Enabled" if settings and settings.get("enabled") else "Not enabled by server staff")
+              + " · " + str((settings or {}).get("timezone") or "UTC"),
         inline=False,
     )
     embed.set_footer(text="Your birthday is not proof of age or Discord verification.")
@@ -240,12 +243,24 @@ def _settings_embed(guild: discord.Guild, row: dict[str, Any] | None) -> discord
         description="Staff configure this once. Members then opt in through /dank profile birthday.",
         color=discord.Color.blurple(),
     )
-    embed.add_field(name="Celebrations", value="Enabled ✅" if settings.get("enabled") else "Disabled", inline=True)
-    embed.add_field(name="Time zone", value=str(settings.get("timezone") or "UTC"), inline=True)
-    embed.add_field(name="Daily announcement", value=f"{int(settings.get('announce_hour') or 9):02d}:00 local", inline=True)
-    embed.add_field(name="Channel", value=channel.mention if channel else "Not selected", inline=True)
-    embed.add_field(name="Birthday-only role", value=role.mention if role else "Optional / not set", inline=True)
-    embed.add_field(name="Leap-day birthdays", value="March 1" if settings.get("leap_day_policy") == "mar1" else "February 28", inline=True)
+    embed.add_field(
+        name="Celebration schedule",
+        value=("Enabled ✅" if settings.get("enabled") else "Disabled")
+              + " · " + str(settings.get("timezone") or "UTC")
+              + f" · {int(settings.get('announce_hour', 9)):02d}:00 local",
+        inline=False,
+    )
+    embed.add_field(
+        name="Discord destination",
+        value=f"Channel: {channel.mention if channel else 'Not selected'}\n"
+              f"Role: {role.mention if role else 'Optional / not set'}",
+        inline=False,
+    )
+    embed.add_field(
+        name="February 29 policy",
+        value="March 1" if settings.get("leap_day_policy") == "mar1" else "February 28",
+        inline=False,
+    )
     embed.set_footer(text="No birth year collected · celebration is not age verification")
     return embed
 
