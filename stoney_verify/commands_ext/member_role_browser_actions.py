@@ -24,49 +24,92 @@ from .member_role_browser_review import open_review_panel
 
 _DESTRUCTIVE_PRECHECK_TIMEOUT_SECONDS = 8.0
 _DESTRUCTIVE_DISCORD_TIMEOUT_SECONDS = 15.0
+_MEMBER_CARD_ROLE_LIMIT = 12
+
+# Timeout presets shown in the modal (label, minutes). Discord's maximum is 28 days.
+TIMEOUT_PRESETS: tuple[tuple[str, int], ...] = (
+    ("10 minutes", 10),
+    ("1 hour", 60),
+    ("6 hours", 360),
+    ("1 day", 1440),
+    ("1 week", 10080),
+)
+TIMEOUT_DEFAULT_MINUTES = 60
+TIMEOUT_MAX_MINUTES = 40320
+
+
+def resolve_timeout_minutes(preset: str, custom: str) -> tuple[Optional[int], str]:
+    """Pick the timeout length: exact minutes win over the preset when given.
+
+    Returns ``(minutes, "")`` or ``(None, error message)``.
+    """
+
+    raw = str(custom or "").strip()
+    if raw:
+        try:
+            minutes = int(raw)
+        except ValueError:
+            return None, "❌ Exact minutes must be a whole number."
+    else:
+        try:
+            minutes = int(str(preset or TIMEOUT_DEFAULT_MINUTES).strip())
+        except ValueError:
+            minutes = TIMEOUT_DEFAULT_MINUTES
+    if minutes < 1 or minutes > TIMEOUT_MAX_MINUTES:
+        return None, "❌ Duration must be between 1 and 40,320 minutes (28 days)."
+    return minutes, ""
+
+
+def describe_minutes(minutes: int) -> str:
+    for label, value in TIMEOUT_PRESETS:
+        if value == minutes:
+            return label
+    return f"{minutes} minute(s)"
 
 
 def member_detail_embed(
     member: discord.Member,
     selected_role: Optional[discord.Role],
 ) -> discord.Embed:
+    # One compact facts line instead of a paragraph of status lines. A single
+    # line reads the same on phones, where inline fields stack vertically.
+    if member.is_timed_out():
+        status = f"⏱️ Timed out until {timestamp(member.timed_out_until, 'f')}"
+    else:
+        status = "Active"
+    facts = (
+        f"Joined {timestamp(member.joined_at)} · "
+        f"Account made {timestamp(member.created_at)} · {status}"
+    )
     embed = discord.Embed(
-        title="👤 Member Moderation Panel",
-        description=f"{member.mention}\n`{member.id}`",
+        title=f"👤 {trim(display_name(member), 200)}",
+        description=(
+            f"{member.mention} · `{member.id}`"
+            + (" · 🤖 Bot" if member.bot else "")
+            + f"\n{facts}"
+        ),
         color=member.color if member.color.value else discord.Color.blurple(),
-        timestamp=discord.utils.utcnow(),
     )
     try:
         embed.set_thumbnail(url=member.display_avatar.url)
     except Exception:
         pass
 
-    status_lines = [
-        f"**Server joined:** {timestamp(member.joined_at, 'F')} "
-        f"({timestamp(member.joined_at)})",
-        f"**Account created:** {timestamp(member.created_at, 'F')} "
-        f"({timestamp(member.created_at)})",
-        f"**Bot:** {'Yes' if member.bot else 'No'}",
-        f"**Timed out:** {'Yes' if member.is_timed_out() else 'No'}",
-    ]
-    if member.is_timed_out():
-        status_lines.append(
-            f"**Timeout ends:** {timestamp(member.timed_out_until, 'F')}"
-        )
-    embed.add_field(
-        name="Status",
-        value="\n".join(status_lines)[:1024],
-        inline=False,
-    )
-
     roles = [
         role.mention
         for role in reversed(member.roles)
         if not role.is_default()
     ]
+    shown = roles[:_MEMBER_CARD_ROLE_LIMIT]
+    hidden = len(roles) - len(shown)
     embed.add_field(
         name=f"Roles ({len(roles)})",
-        value=trim(" ".join(roles) if roles else "No assigned roles.", 1024),
+        value=trim(
+            (" ".join(shown) + (f" +{hidden} more" if hidden > 0 else ""))
+            if roles
+            else "No assigned roles.",
+            1024,
+        ),
         inline=False,
     )
     if selected_role is not None:
@@ -121,7 +164,7 @@ class MemberActionView(OwnedView):
         label="Verify",
         emoji="✅",
         style=discord.ButtonStyle.success,
-        row=0,
+        row=1,
     )
     async def verify(
         self,
@@ -164,10 +207,10 @@ class MemberActionView(OwnedView):
         )
 
     @discord.ui.button(
-        label="Intelligence Review",
+        label="Review history",
         emoji="🧠",
         style=discord.ButtonStyle.primary,
-        row=0,
+        row=1,
     )
     async def review(
         self,
@@ -183,7 +226,7 @@ class MemberActionView(OwnedView):
         label="Message",
         emoji="💬",
         style=discord.ButtonStyle.secondary,
-        row=0,
+        row=1,
     )
     async def message(
         self,
@@ -197,7 +240,7 @@ class MemberActionView(OwnedView):
         label="Timeout",
         emoji="⏱️",
         style=discord.ButtonStyle.secondary,
-        row=1,
+        row=0,
     )
     async def timeout_member(
         self,
@@ -211,7 +254,7 @@ class MemberActionView(OwnedView):
         label="Kick",
         emoji="👢",
         style=discord.ButtonStyle.danger,
-        row=1,
+        row=0,
     )
     async def kick(
         self,
@@ -227,7 +270,7 @@ class MemberActionView(OwnedView):
         label="Ban",
         emoji="🔨",
         style=discord.ButtonStyle.danger,
-        row=1,
+        row=0,
     )
     async def ban(
         self,
@@ -307,7 +350,7 @@ class MemberActionView(OwnedView):
             )
 
     @discord.ui.button(
-        label="Back to List",
+        label="Back",
         emoji="◀️",
         style=discord.ButtonStyle.secondary,
         row=3,
@@ -488,22 +531,60 @@ class MemberMessageModal(discord.ui.Modal, title="Message member"):
         )
 
 
-class MemberTimeoutModal(discord.ui.Modal, title="Timeout member"):
-    minutes = discord.ui.TextInput(
-        label="Duration in minutes",
-        placeholder="60",
-        max_length=6,
+def _timeout_duration_select() -> discord.ui.Select:
+    return discord.ui.Select(
+        options=[
+            discord.SelectOption(
+                label=label,
+                value=str(minutes),
+                default=minutes == TIMEOUT_DEFAULT_MINUTES,
+            )
+            for label, minutes in TIMEOUT_PRESETS
+        ],
+        min_values=1,
+        max_values=1,
     )
-    reason = discord.ui.TextInput(
-        label="Reason",
-        style=discord.TextStyle.paragraph,
-        max_length=400,
-        placeholder="Why is this timeout needed?",
+
+
+class MemberTimeoutModal(discord.ui.Modal, title="Timeout member"):
+    """One step: pick a length, give a reason. Exact minutes stay available."""
+
+    duration = discord.ui.Label(
+        text="How long",
+        description="They can still read, but can't chat or join voice.",
+        component=_timeout_duration_select(),
+    )
+    exact_minutes = discord.ui.Label(
+        text="Or exact minutes (optional)",
+        component=discord.ui.TextInput(
+            placeholder="Leave empty to use the length above",
+            max_length=6,
+            required=False,
+        ),
+    )
+    reason = discord.ui.Label(
+        text="Reason",
+        description="Saved to the moderation log.",
+        component=discord.ui.TextInput(
+            style=discord.TextStyle.paragraph,
+            max_length=400,
+            placeholder="Why is this timeout needed?",
+        ),
     )
 
     def __init__(self, parent: MemberActionView) -> None:
         super().__init__(timeout=300)
         self.parent = parent
+
+    def _chosen_minutes(self) -> tuple[Optional[int], str]:
+        select = self.duration.component
+        values = list(getattr(select, "values", []) or [])
+        preset = values[0] if values else str(TIMEOUT_DEFAULT_MINUTES)
+        custom = str(getattr(self.exact_minutes.component, "value", "") or "")
+        return resolve_timeout_minutes(preset, custom)
+
+    def _reason_text(self) -> str:
+        return str(getattr(self.reason.component, "value", "") or "").strip()
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         if not await require_review(interaction):
@@ -511,19 +592,9 @@ class MemberTimeoutModal(discord.ui.Modal, title="Timeout member"):
         target = await self.parent._fresh_target(interaction)
         if target is None:
             return
-        try:
-            minutes = int(str(self.minutes.value).strip())
-        except Exception:
-            await reply_ephemeral(
-                interaction,
-                "❌ Duration must be a whole number of minutes.",
-            )
-            return
-        if minutes < 1 or minutes > 40320:
-            await reply_ephemeral(
-                interaction,
-                "❌ Duration must be between 1 and 40,320 minutes (28 days).",
-            )
+        minutes, error = self._chosen_minutes()
+        if minutes is None:
+            await reply_ephemeral(interaction, error)
             return
         blockers = await action_blockers(
             interaction.guild,
@@ -537,7 +608,7 @@ class MemberTimeoutModal(discord.ui.Modal, title="Timeout member"):
                 "❌ Timeout blocked:\n• " + "\n• ".join(blockers),
             )
             return
-        reason = str(self.reason.value or "").strip()
+        reason = self._reason_text()
         await interaction.response.defer(ephemeral=True, thinking=True)
         async with action_lock(interaction.guild.id, target.id, "timeout"):
             try:
@@ -552,7 +623,7 @@ class MemberTimeoutModal(discord.ui.Modal, title="Timeout member"):
                 ok = True
                 result = (
                     f"{target.mention} was timed out for "
-                    f"**{minutes} minute(s)**."
+                    f"**{describe_minutes(minutes)}**."
                 )
             except discord.Forbidden:
                 ok = False
