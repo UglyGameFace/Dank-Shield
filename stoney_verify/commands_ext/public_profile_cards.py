@@ -345,6 +345,22 @@ async def profile_background_clear(
     await _preview(interaction, member=member, notice="✅ Custom background removed. Theme artwork is active again.")
 
 
+class _BirthdaySettingsButton(discord.ui.Button):
+    def __init__(self, *, row: int = 0) -> None:
+        super().__init__(
+            label="My Birthday", emoji="🎂",
+            style=discord.ButtonStyle.secondary,
+            custom_id="dank:profilecard:v3:birthdays", row=row,
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        view = self.view
+        if not isinstance(view, ProfileSettingsView) or not await view.interaction_check(interaction):
+            return
+        from .public_birthdays import open_member_birthday
+        await open_member_birthday(interaction)
+
+
 class ProfileSettingsView(_core.ProfileSettingsView):
     def __init__(
         self,
@@ -376,6 +392,7 @@ class ProfileSettingsView(_core.ProfileSettingsView):
         self.add_item(_ManagePlatformsButton(row=0))
         self.add_item(_PreviewProfileButton(row=0))
         self.add_item(_BackToSignatureButton(row=0))
+        self.add_item(_BirthdaySettingsButton(row=0))
         for label, key, emoji in detail_specs:
             self.add_item(_core._GlobalPrivacyToggleButton(label, key, global_values, emoji, 1))
         for label, key, emoji in detail_specs:
