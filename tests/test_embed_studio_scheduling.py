@@ -168,3 +168,30 @@ def test_shard_claim_parameters_sent_to_database(monkeypatch):
     monkeypatch.setattr(schedules,"_client",lambda:DB())
     assert asyncio.run(schedules.claim_due(shard_count=4,owned_shards=(1,3))) == []
     assert requests[0][1] == {"p_limit":8,"p_shard_count":4,"p_owned_shards":[1,3]}
+
+
+def test_studio_schedule_rejects_form_at_queue_preview_and_delivery_boundary():
+    model = new_project()
+    model["embeds"][0]["title"] = "Staff request"
+    model["form"] = {
+        "title": "Request", "button_label": "Open",
+        "questions": [{"label": "Reason", "style": "paragraph", "required": True}],
+    }
+    with pytest.raises(schedules.StudioScheduleError, match="forms"):
+        schedules.safe_scheduled_project(model)
+
+    session = StudioSession(guild_id=1, owner_id=2)
+    session.project = deepcopy(model)
+    assert StudioReviewView(session).schedule_later.disabled
+
+    # Simulate a database row inserted by an old writer or service-role
+    # operator. A stored form must never get as far as a Discord guild lookup.
+    job = {"guild_id": "123", "channel_id": "321", "scheduled_by": "456",
+           "project": deepcopy(model)}
+    class NoDiscordAccess:
+        def get_guild(self, *_args):
+            raise AssertionError("form-bearing schedule reached Discord")
+
+    assert asyncio.run(worker._dispatch(NoDiscordAccess(), job)) == (
+        0, "form_not_supported",
+    )
