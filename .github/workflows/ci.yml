@@ -265,6 +265,67 @@ jobs:
           insert into public.guild_configs(guild_id) values ('smoke-guild-1');
           SQL
 
+      - name: Validate native birthday SQL migration, RPC idempotency and expiry
+        shell: bash
+        run: |
+          set -euo pipefail
+          psql -v ON_ERROR_STOP=1 -f supabase_fresh/migrations/202611040001_dankshield_native_birthdays.sql
+          psql -v ON_ERROR_STOP=1 -f supabase_fresh/migrations/202611040001_dankshield_native_birthdays.sql
+          psql -v ON_ERROR_STOP=1 <<'SQL'
+          do $test$
+          declare
+              claimed public.dank_birthday_guild_settings%rowtype;
+              expired public.dank_birthday_role_leases%rowtype;
+          begin
+              insert into public.dank_birthday_members
+                  (guild_id, user_id, birth_month, birth_day, public_wishes)
+              values ('birthday-ci', '123', 2, 29, true);
+              begin
+                  insert into public.dank_birthday_members
+                      (guild_id, user_id, birth_month, birth_day)
+                  values ('birthday-ci', '124', 2, 30);
+                  raise exception 'invalid February 30 was accepted';
+              exception when check_violation or datetime_field_overflow then
+                  null; -- Rejected by the calendar constraint.
+              end;
+              insert into public.dank_birthday_guild_settings
+                  (guild_id, enabled, timezone, channel_id, next_fire_at)
+              values ('birthday-ci', true, 'America/New_York', '321', now() - interval '10 minutes');
+              select * into claimed from public.dank_birthdays_claim_due(5)
+               where guild_id = 'birthday-ci';
+              if claimed.guild_id is distinct from 'birthday-ci' then
+                  raise exception 'due birthday schedule was not claimed';
+              end if;
+              if claimed.next_fire_at <= now() then
+                  raise exception 'birthday schedule did not advance to the next day';
+              end if;
+              if not public.dank_birthdays_claim_delivery('birthday-ci', '123', current_date, 'announce') then
+                  raise exception 'first birthday reservation was rejected';
+              end if;
+              if public.dank_birthdays_claim_delivery('birthday-ci', '123', current_date, 'announce') then
+                  raise exception 'duplicate birthday reservation was accepted';
+              end if;
+              insert into public.dank_birthday_role_leases
+                  (guild_id, user_id, role_id, expires_at, next_try_at)
+              values ('birthday-ci', '123', '987', now() - interval '2 minutes',
+                      now() - interval '1 minute');
+              select * into expired from public.dank_birthdays_claim_expired_roles(5)
+               where guild_id = 'birthday-ci';
+              if expired.guild_id is distinct from 'birthday-ci'
+                 or expired.next_try_at <= now() then
+                  raise exception 'expired birthday role did not claim a retry lease';
+              end if;
+              if not exists (
+                 select 1 from pg_class
+                  where oid = 'public.dank_birthday_members'::regclass
+                    and relrowsecurity
+              ) then
+                  raise exception 'birthday member RLS disabled';
+              end if;
+          end
+          $test$;
+          SQL
+
       - name: Verify atomic guild config sparse patch under concurrent writers
         shell: bash
         run: |

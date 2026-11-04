@@ -101,6 +101,9 @@ PROFILE_COSMETIC_BLOCKED_NAME_PARTS: tuple[str, ...] = (
     "timeout",
     "banned",
     "ticket",
+    "birthday",
+    "bday",
+    "🎂",
 )
 
 PROFILE_CATEGORIES: dict[str, tuple[str, str, tuple[str, ...], str]] = {
@@ -1425,6 +1428,7 @@ class ProfilePanelView(discord.ui.View):
         self.add_item(discord.ui.Button(label="Edit Identity", emoji="🌈", style=discord.ButtonStyle.secondary, custom_id=f"{PROFILE_PREFIX}open:identity", row=1))
         self.add_item(discord.ui.Button(label="Edit Interests", emoji="🎮", style=discord.ButtonStyle.secondary, custom_id=f"{PROFILE_PREFIX}open:interests", row=1))
         self.add_item(discord.ui.Button(label="Signature Settings", emoji="🔐", style=discord.ButtonStyle.primary, custom_id=f"{PROFILE_PREFIX}privacy", row=1))
+        self.add_item(discord.ui.Button(label="My Birthday", emoji="🎂", style=discord.ButtonStyle.secondary, custom_id=f"{PROFILE_PREFIX}birthday", row=1))
         self.add_item(discord.ui.Button(label="Profile Tags & Cosmetics", emoji="🎭", style=discord.ButtonStyle.secondary, custom_id=f"{PROFILE_PREFIX}cosmetics", row=2))
         self.add_item(discord.ui.Button(label="Community & Pings", emoji="🌿", style=discord.ButtonStyle.secondary, custom_id=f"{PROFILE_PREFIX}community_pings", row=2))
 
@@ -1995,6 +1999,7 @@ class ProfileBuilderView(discord.ui.View):
 
         self.add_item(discord.ui.Button(label="Profile Tags & Cosmetics", emoji="🎭", style=discord.ButtonStyle.primary, custom_id=f"{PROFILE_PREFIX}builder:cosmetics", row=1))
         self.add_item(discord.ui.Button(label="Community & Pings", emoji="🌿", style=discord.ButtonStyle.primary, custom_id=f"{PROFILE_PREFIX}builder:community_pings", row=1))
+        self.add_item(discord.ui.Button(label="Birthday Setup", emoji="🎂", style=discord.ButtonStyle.primary, custom_id=f"{PROFILE_PREFIX}builder:birthday", row=1))
         self.add_item(discord.ui.Button(label="Health", emoji="🩺", style=discord.ButtonStyle.secondary, custom_id=f"{PROFILE_PREFIX}builder:health", row=1))
         self.add_item(discord.ui.Button(label="Member Setup Manager", emoji="🧭", style=discord.ButtonStyle.primary, custom_id=f"{PROFILE_PREFIX}builder:member_setup", row=2))
 
@@ -2109,6 +2114,11 @@ async def _handle_builder_action(interaction: discord.Interaction, action: str) 
             ephemeral=True,
             allowed_mentions=discord.AllowedMentions.none(),
         )
+        return True
+
+    if action == "birthday":
+        from .public_birthdays import open_staff_birthday
+        await open_staff_birthday(interaction)
         return True
 
     if action == "community_pings":
@@ -2332,6 +2342,11 @@ async def _handle_profile_interaction(interaction: discord.Interaction) -> bool:
             ephemeral=True,
             allowed_mentions=discord.AllowedMentions.none(),
         )
+        return True
+
+    if suffix == "birthday":
+        from .public_birthdays import open_member_birthday
+        await open_member_birthday(interaction)
         return True
 
     if suffix == "privacy":
