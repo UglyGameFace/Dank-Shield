@@ -67,7 +67,12 @@ async def _deliver_guild(bot: Any, claim: dict[str, Any]) -> None:
     for row in rows:
         user_id = int(row["user_id"])
         member = guild.get_member(user_id)
-        if member is None or member.bot:
+        if member is None:
+            try:
+                member = await guild.fetch_member(user_id)
+            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                continue
+        if member.bot:
             continue
         if channel_ok and row.get("public_wishes"):
             if await claim_delivery(guild_id, user_id, local_day, "announce"):
