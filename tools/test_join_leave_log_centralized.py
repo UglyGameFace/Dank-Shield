@@ -43,11 +43,11 @@ for marker in required_router:
 if "staff audit remains a separate route" not in router.lower():
     failures.append("router no longer documents that staff audit remains a separate route")
 
-if "operational join/leave log is an audit-style event stream" not in router:
-    failures.append("router no longer documents independent operational join logging")
+if "card already delivered to same channel" not in router:
+    failures.append("router does not prevent duplicate same-channel lifecycle announcements")
 
-if "operational join/leave log is separate from Exit Card Studio" not in router:
-    failures.append("router no longer documents independent operational leave logging")
+if "delivery = await send_live_exit_card(member)" not in router:
+    failures.append("router no longer routes exit card delivery")
 
 if "member join event duplicate suppressed" in router:
     failures.append("router still suppresses operational joins when Welcome Card Studio posts")

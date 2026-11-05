@@ -428,10 +428,9 @@ async def _join_listener(member: discord.Member) -> None:
             f"{type(exc).__name__}: {exc}"
         )
 
-    # The operational join/leave log is an audit-style event stream and must
-    # not depend on Welcome Card Studio or invite-source attribution. The
-    # member-facing card and operational log are separate products, even when
-    # an administrator intentionally points both at the same channel.
+    # A successfully delivered welcome card already announces this join.
+    # Preserve the operational log in a different channel, or when card
+    # delivery failed; never post two public messages in the same channel.
     try:
         cfg = await _load_config(int(member.guild.id))
         join_log_channel = _resolve_channel(member.guild, cfg, JOIN_LEAVE_KEYS)
@@ -439,6 +438,18 @@ async def _join_listener(member: discord.Member) -> None:
             _log(
                 f"member join event skipped guild={member.guild.id} member={member.id}: "
                 "no configured join/leave log channel"
+            )
+            return
+
+        if (
+            delivery is not None
+            and bool(getattr(delivery, "sent", False))
+            and _safe_int(getattr(delivery, "channel_id", None)) == int(join_log_channel.id)
+        ):
+            _log(
+                f"member join log skipped guild={member.guild.id} "
+                f"member={member.id} channel={join_log_channel.id}: "
+                "card already delivered to same channel"
             )
             return
 
@@ -467,9 +478,8 @@ async def _leave_listener(member: discord.Member) -> None:
             f"{type(exc).__name__}: {exc}"
         )
 
-    # The operational join/leave log is separate from Exit Card Studio. A
-    # successful member-facing exit card never replaces the operational event
-    # record, even if both routes currently point at the same channel.
+    # A successfully delivered exit card already announces this departure.
+    # Preserve operational logging elsewhere or as a fallback on card failure.
     try:
         cfg = await _load_config(int(member.guild.id))
         leave_log_channel = _resolve_channel(member.guild, cfg, JOIN_LEAVE_KEYS)
@@ -477,6 +487,18 @@ async def _leave_listener(member: discord.Member) -> None:
             _log(
                 f"member leave event skipped guild={member.guild.id} member={member.id}: "
                 "no configured join/leave log channel"
+            )
+            return
+
+        if (
+            delivery is not None
+            and bool(getattr(delivery, "sent", False))
+            and _safe_int(getattr(delivery, "channel_id", None)) == int(leave_log_channel.id)
+        ):
+            _log(
+                f"member leave log skipped guild={member.guild.id} "
+                f"member={member.id} channel={leave_log_channel.id}: "
+                "card already delivered to same channel"
             )
             return
 
