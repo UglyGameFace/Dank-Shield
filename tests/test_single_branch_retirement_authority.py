@@ -59,7 +59,7 @@ def test_previous_auto_archive_hotfix_scope_is_preserved_safely() -> None:
     text = RETIRE.read_text(encoding="utf-8")
     assert "const historicalPrefixes = ['feat/', 'fix/', 'hotfix/', 'extract/', 'docs/', 'audit/', 'chore/']" in text
     reviewed = text.split("if (reviewed) {", 1)[1].split("const allBranches =", 1)[0]
-    assert "const prefixes = ['feat/', 'fix/', 'hotfix/', 'extract/', 'docs/', 'audit/', 'chore/', 'work/dankshield-']" in reviewed
+    assert "const prefixes = ['feat/', 'fix/', 'hotfix/', 'extract/', 'docs/', 'audit/', 'chore/', 'integrate/', 'work/dankshield-']" in reviewed
     assert "if (!await equivalentAtMerge(branch, pr, branchGraph)) continue;" in reviewed
     assert "const historicalPrefixes = ['feat/', 'fix/', 'hotfix/', 'extract/', 'docs/', 'audit/', 'chore/']" in text
     for excluded in ("'backup/'", "'recovery/'", "'migration/'",
