@@ -36,18 +36,24 @@ def _summary(guild: discord.Guild, cfg: object) -> discord.Embed:
         description="One setup center for arrivals, departures, and operational records. Existing settings are preserved.",
         color=discord.Color.green(),
     )
-    embed.add_field(name="Welcome cards", value=_channel(guild, join_id), inline=True)
-    embed.add_field(name="Goodbye cards", value=_channel(guild, exit_id), inline=True)
-    embed.add_field(name="Join/leave log", value=_channel(guild, log_id), inline=True)
+    embed.add_field(
+        name="Delivery destinations",
+        value=(
+            f"🎉 Welcome: {_channel(guild, join_id)}\\n"
+            f"👋 Goodbye: {_channel(guild, exit_id)}\\n"
+            f"📋 Operational log: {_channel(guild, log_id)}"
+        ),
+        inline=False,
+    )
     if log_id and log_id in (join_id, exit_id):
         embed.add_field(
             name="Shared-channel delivery",
-            value="When a card is successfully delivered to the same channel, the operational event is suppressed. If delivery fails, the log remains a fallback.",
+            value="A successful same-channel card suppresses the duplicate operational event; a failed card leaves the log fallback available.",
             inline=False,
         )
     embed.add_field(
-        name="Static welcome message",
-        value="Use `/dank welcome set-channel`, `/dank welcome template`, and `/dank welcome post` to manage the persistent start-here message.",
+        name="Static start-here message",
+        value="Use `/dank welcome set-channel`, `/dank welcome template`, then `/dank welcome post` to update the persistent message.",
         inline=False,
     )
     embed.set_footer(text="Staff Modlog remains independent. No historical settings are reset.")
