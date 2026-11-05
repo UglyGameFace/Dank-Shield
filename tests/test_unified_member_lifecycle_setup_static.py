@@ -30,7 +30,7 @@ def test_separate_existing_engines_and_modlog() -> None:
     assert "WelcomeEventsCenterView(guild=guild, cfg=cfg)" in center
     assert "Staff Modlog remains independent" in center
     assert "Static Welcome Help" in center
-    assert "card is successfully delivered to the same channel" in center.lower()
+    assert "a successful same-channel card suppresses the duplicate operational event" in center.lower()
 
 
 if __name__ == "__main__":
