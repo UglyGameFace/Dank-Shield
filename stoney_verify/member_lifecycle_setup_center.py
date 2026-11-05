@@ -90,13 +90,15 @@ class OperationalLogSelect(discord.ui.ChannelSelect):
         perms = channel.permissions_for(me)
         if not all((perms.view_channel, perms.send_messages, perms.embed_links)):
             return await _send_ephemeral(interaction, "❌ Bot needs View Channel, Send Messages and Embed Links in that channel.")
+        if not interaction.response.is_done():
+            await interaction.response.defer()
         try:
             await _upsert_config(int(guild.id), _join_leave_alias_payload(str(channel.id)))
             invalidate_guild_config(int(guild.id))
             cfg = await get_guild_config(int(guild.id), refresh=True)
         except Exception as exc:
             return await _send_ephemeral(interaction, f"❌ Could not save log channel: {type(exc).__name__}.")
-        await interaction.response.edit_message(embed=_summary(guild, cfg), view=MemberLifecycleSetupView())
+        await interaction.edit_original_response(embed=_summary(guild, cfg), view=MemberLifecycleSetupView())
 
 
 class MemberLifecycleSetupView(discord.ui.View):
@@ -113,8 +115,13 @@ class MemberLifecycleSetupView(discord.ui.View):
         guild = interaction.guild
         if guild is None:
             return
-        cfg = await get_guild_config(int(guild.id), refresh=True)
-        await interaction.response.edit_message(embed=_build_center_embed(guild, cfg), view=WelcomeEventsCenterView(guild=guild, cfg=cfg))
+        if not interaction.response.is_done():
+            await interaction.response.defer()
+        try:
+            cfg = await get_guild_config(int(guild.id), refresh=True)
+        except Exception:
+            return await _send_ephemeral(interaction, "❌ Could not load welcome settings. Try again shortly.")
+        await interaction.edit_original_response(embed=_build_center_embed(guild, cfg), view=WelcomeEventsCenterView(guild=guild, cfg=cfg))
 
     @discord.ui.button(label="Check Delivery", emoji="🔎", style=discord.ButtonStyle.secondary, row=0)
     async def health(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -124,7 +131,12 @@ class MemberLifecycleSetupView(discord.ui.View):
         guild = interaction.guild
         if guild is None:
             return
-        cfg = await get_guild_config(int(guild.id), refresh=True)
+        if not interaction.response.is_done():
+            await interaction.response.defer(ephemeral=True, thinking=True)
+        try:
+            cfg = await get_guild_config(int(guild.id), refresh=True)
+        except Exception:
+            return await _send_ephemeral(interaction, "❌ Could not load delivery settings. Try again shortly.")
         log_id = _log_channel_id(cfg)
         channel = guild.get_channel(log_id) if log_id else None
         if not isinstance(channel, discord.TextChannel) or guild.me is None:
@@ -152,5 +164,7 @@ async def open_member_lifecycle_setup(interaction: discord.Interaction) -> None:
     guild = interaction.guild
     if guild is None:
         return await _send_ephemeral(interaction, "This setup is only available inside a server.")
+    if not interaction.response.is_done():
+        await interaction.response.defer(ephemeral=True)
     cfg = await get_guild_config(int(guild.id), refresh=True)
-    await _send_ephemeral(interaction, embed=_summary(guild, cfg), view=MemberLifecycleSetupView(), allowed_mentions=discord.AllowedMentions.none())
+    await interaction.followup.send(embed=_summary(guild, cfg), view=MemberLifecycleSetupView(), ephemeral=True, allowed_mentions=discord.AllowedMentions.none())

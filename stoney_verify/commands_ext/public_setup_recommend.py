@@ -3778,9 +3778,9 @@ class AdvancedSettingsHubView(discord.ui.View):
         button: discord.ui.Button,
     ) -> None:
         _ = button
-        from stoney_verify import welcome_setup_ui
+        from stoney_verify.member_lifecycle_setup_center import open_member_lifecycle_setup
 
-        await welcome_setup_ui.open_welcome_setup(interaction)
+        await open_member_lifecycle_setup(interaction)
 
     @discord.ui.button(
         label="Profile Signatures",

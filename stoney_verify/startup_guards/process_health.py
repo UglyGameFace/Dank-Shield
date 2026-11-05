@@ -480,6 +480,24 @@ def attach_process_health(bot: Any) -> bool:
         if str(event_type or "").upper() == "INTERACTION_CREATE":
             _log("RAW_INTERACTION_CREATE")
 
+    async def _trace_interaction_ack(interaction: Any, label: str) -> None:
+        """Observe the Discord acknowledgment deadline without handling the action."""
+        started = time.monotonic()
+        for checkpoint in (1.5, 2.5):
+            await asyncio.sleep(max(0.0, checkpoint - (time.monotonic() - started)))
+            try:
+                acknowledged = bool(interaction.response.is_done())
+            except Exception:
+                acknowledged = False
+            if not acknowledged:
+                _log(
+                    f"INTERACTION_ACK_LATE command={label} "
+                    f"elapsed={time.monotonic() - started:.2f}s "
+                    f"checkpoint={checkpoint:.1f}s"
+                )
+            else:
+                return
+
     async def _process_health_on_interaction(interaction: Any) -> None:
         data = getattr(interaction, "data", None)
         payload = data if isinstance(data, dict) else {}
@@ -489,6 +507,11 @@ def attach_process_health(bot: Any) -> bool:
             f"type={_safe_trace_label(kind)} "
             f"command={_safe_trace_label(payload.get('name'))}"
         )
+        try:
+            label = _safe_trace_label(payload.get("name"))
+            asyncio.create_task(_trace_interaction_ack(interaction, label), name="interaction_ack_trace")
+        except RuntimeError:
+            pass
 
     try:
         if not _READY_LISTENER_ATTACHED:

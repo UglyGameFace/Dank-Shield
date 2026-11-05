@@ -42,3 +42,14 @@ if __name__ == "__main__":
     ):
         test()
         print("PASS", test.__name__)
+
+
+def test_main_setup_routes_to_unified_center() -> None:
+    setup = (ROOT / "stoney_verify/commands_ext/public_setup_recommend.py").read_text()
+    assert "await open_member_lifecycle_setup(interaction)" in setup
+    assert "await welcome_setup_ui.open_welcome_setup(interaction)" not in setup
+
+
+def test_lifecycle_database_paths_acknowledge_before_io() -> None:
+    assert center.count("await interaction.response.defer(") >= 4
+    assert "await interaction.edit_original_response(" in center
