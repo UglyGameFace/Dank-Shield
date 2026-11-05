@@ -117,7 +117,10 @@ class MemberLifecycleSetupView(discord.ui.View):
             return
         if not interaction.response.is_done():
             await interaction.response.defer()
-        cfg = await get_guild_config(int(guild.id), refresh=True)
+        try:
+            cfg = await get_guild_config(int(guild.id), refresh=True)
+        except Exception:
+            return await _send_ephemeral(interaction, "❌ Could not load welcome settings. Try again shortly.")
         await interaction.edit_original_response(embed=_build_center_embed(guild, cfg), view=WelcomeEventsCenterView(guild=guild, cfg=cfg))
 
     @discord.ui.button(label="Check Delivery", emoji="🔎", style=discord.ButtonStyle.secondary, row=0)
@@ -130,7 +133,10 @@ class MemberLifecycleSetupView(discord.ui.View):
             return
         if not interaction.response.is_done():
             await interaction.response.defer(ephemeral=True, thinking=True)
-        cfg = await get_guild_config(int(guild.id), refresh=True)
+        try:
+            cfg = await get_guild_config(int(guild.id), refresh=True)
+        except Exception:
+            return await _send_ephemeral(interaction, "❌ Could not load delivery settings. Try again shortly.")
         log_id = _log_channel_id(cfg)
         channel = guild.get_channel(log_id) if log_id else None
         if not isinstance(channel, discord.TextChannel) or guild.me is None:
