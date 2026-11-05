@@ -129,12 +129,14 @@ def test_member_logs_configuration_no_longer_retargets_exit_card_studio() -> Non
     assert "Exit Card Studio owns its own route" in source
 
 
-def test_operational_log_is_not_suppressed_by_successful_studio_delivery() -> None:
+def test_operational_log_is_suppressed_only_after_same_channel_card_delivery() -> None:
     join_source = inspect.getsource(router._join_listener)
     leave_source = inspect.getsource(router._leave_listener)
 
-    assert "duplicate suppressed" not in join_source
-    assert "duplicate suppressed" not in leave_source
+    assert 'getattr(delivery, "sent", False)' in join_source
+    assert 'getattr(delivery, "sent", False)' in leave_source
+    assert 'getattr(delivery, "channel_id", None)' in join_source
+    assert 'getattr(delivery, "channel_id", None)' in leave_source
     assert "await _send_join_log_event(member, join_log_channel)" in join_source
     assert "await _send_leave_log_event(member, leave_log_channel)" in leave_source
 
