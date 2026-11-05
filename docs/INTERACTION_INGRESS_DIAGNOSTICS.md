@@ -25,6 +25,8 @@ This diagnostic does not change pool sizes or connection credentials.
 The November 5 stabilization removes synchronous token-store and VC persistence
 calls from the affected verification callbacks, token issuance, startup timer reload
 and VC sweeper. Birthday and welcome storage paths acknowledge explicitly before I/O.
+Profile edit, cosmetic manager navigation and identity-form submission also acknowledge
+before their Member Setup, configuration or staff-channel lookups.
 Date/template modals open immediately from the already-loaded panel snapshot; their
 submit callbacks acknowledge separately. Full Discord/Discloud acceptance still needs
 the deployed release fingerprint and a real command/button/modal canary.

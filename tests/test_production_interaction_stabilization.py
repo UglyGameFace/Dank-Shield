@@ -14,6 +14,7 @@ from stoney_verify import member_lifecycle_setup_center as lifecycle
 from stoney_verify import welcome_event_services as welcome
 from stoney_verify.commands_ext import public_birthdays as birthdays
 from stoney_verify.commands_ext import public_setup_group
+from stoney_verify.commands_ext import public_self_roles_group as profiles
 from stoney_verify.startup_guards import process_health
 from stoney_verify.verification_new import service as verification
 from stoney_verify.verification_new import voice_verify
@@ -290,4 +291,71 @@ def test_lifecycle_storage_error_is_visible_after_acknowledgement(monkeypatch):
         await lifecycle.open_member_lifecycle_setup(event)
         assert "Could not load" in event.followup.send.call_args.args[0]
         assert event.followup.send.call_args.kwargs["ephemeral"]
+    asyncio.run(run())
+
+
+def profile_interaction():
+    event = interaction(private=False)
+    member = object.__new__(discord.Member)
+    member._user = SimpleNamespace(id=456)
+    event.user = member
+    event.channel = object.__new__(discord.TextChannel)
+    return event
+
+
+def test_profile_edit_acknowledges_before_member_setup_review(monkeypatch):
+    async def run():
+        event = profile_interaction()
+        event.data = {"custom_id": profiles.PROFILE_PREFIX + "edit"}
+
+        async def review(member):
+            assert event.response.is_done()
+            return "Review your setup"
+
+        monkeypatch.setattr(profiles, "_profile_setup_review_notice", review)
+        monkeypatch.setattr(profiles, "ProfileEditorLayout", lambda *args, **kwargs: discord.ui.View())
+        assert await profiles._handle_profile_interaction(event)
+        event.response.defer.assert_awaited_once_with(ephemeral=True, thinking=True)
+        assert event.followup.send.call_args.kwargs["ephemeral"]
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("action", ["open", "back", "refresh"])
+def test_profile_cosmetics_acknowledges_before_config_read(monkeypatch, action):
+    async def run():
+        event = profile_interaction()
+        monkeypatch.setattr(profiles, "_profile_builder_status", lambda *args: ([], [], []))
+
+        async def embed(guild):
+            assert event.response.is_done()
+            return discord.Embed(title="Cosmetic roles")
+
+        monkeypatch.setattr(profiles, "_profile_cosmetic_manager_embed", embed)
+        if action == "open":
+            assert await profiles._handle_builder_action(event, "cosmetics")
+            assert event.followup.send.call_args.kwargs["ephemeral"]
+        elif action == "back":
+            await profiles.ProfileRolePickerBackButton(row=0).callback(event)
+            assert event.edit_original_response.called
+        else:
+            view = profiles.ProfileCosmeticRoleManagerView(author_id=456)
+            await view.refresh.callback(event)
+            assert event.edit_original_response.called
+    asyncio.run(run())
+
+
+def test_profile_identity_form_acknowledges_before_staff_channel_lookup(monkeypatch):
+    async def run():
+        event = profile_interaction()
+
+        async def channel(guild):
+            assert event.response.is_done()
+            return None
+
+        monkeypatch.setattr(profiles, "_staff_review_channel", channel)
+        modal = profiles.MissingIdentityModal()
+        modal.label._value = "Example identity"
+        await modal.on_submit(event)
+        assert event.followup.send.call_args.kwargs["ephemeral"]
+        assert "No staff/modlog channel" in event.followup.send.call_args.args[0]
     asyncio.run(run())
