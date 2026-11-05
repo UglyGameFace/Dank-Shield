@@ -352,6 +352,7 @@ _FEATURE_ROUTE_KEYS = frozenset(
         "members_moderation",
         "roles_profiles",
         "profile_builder",
+        "birthdays",
         "community_pings_manager",
         "community_tools",
         "embed_studio",
@@ -561,6 +562,10 @@ async def _route_feature(interaction: discord.Interaction, feature_key: str) -> 
             title="Profile Panel",
             replace_message=True,
         )
+
+    if key == "birthdays":
+        from .public_birthdays import open_member_birthday
+        return await open_member_birthday(interaction)
 
     if key == "community_pings_manager":
         from .public_toke import open_community_ping_setup
