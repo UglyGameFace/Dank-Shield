@@ -240,6 +240,14 @@ FEATURES: tuple[NavigationFeature, ...] = (
         True,
     ),
     NavigationFeature(
+        "birthdays",
+        "Birthday Celebrations",
+        "🎂",
+        "people",
+        "Set your birthday privately, manage celebration preferences, and see upcoming birthdays.",
+        ("birthday", "birthdays", "birthday setup", "birthday role", "birthday announcements", "upcoming birthdays", "private birth year"),
+    ),
+    NavigationFeature(
         "community_pings_manager",
         "Community & Pings Manager",
         "🌿",
@@ -525,6 +533,7 @@ def recent_features() -> tuple[NavigationFeature, ...]:
 # Short task-based headings, not backend module names. All feature keys retain
 # their original route, access checks, and persisted configuration.
 FEATURE_GROUPS: dict[str, str] = {
+    "birthdays": "Profiles & celebrations",
     "action_reminder_center": "Your reminders",
     "action_my_preferences": "Your reminders",
     "action_notification_systems": "For server moderators",
