@@ -462,7 +462,7 @@ class _ThreadsPostMetadata(HTMLParser):
         if tag != "meta":
             return
         fields = dict(attrs)
-        if fields.get("property", "").lower() == "og:url":
+        if str(fields.get("property") or "").lower() == "og:url":
             self.canonical = fields.get("content") or ""
 
 
