@@ -850,7 +850,7 @@ async def _legacy_request_resubmission(
 ) -> Dict[str, Any]:
     _ = guild
     try:
-        sb_mark_decision(token, "RESUBMIT REQUESTED", int(staff_member.id))
+        await asyncio.to_thread(sb_mark_decision, token, "RESUBMIT REQUESTED", int(staff_member.id))
     except Exception:
         pass
 
@@ -867,7 +867,7 @@ async def _legacy_request_resubmission(
         return {"ok": False, "message": f"Failed to post resubmission UI: {e}"}
 
     try:
-        sb_set_used(token, True)
+        await asyncio.to_thread(sb_set_used, token, True)
     except Exception:
         pass
 
@@ -898,12 +898,12 @@ async def _legacy_deny_verification(
 ) -> Dict[str, Any]:
     _ = channel
     try:
-        sb_mark_decision(token, decision_text, int(staff_member.id))
+        await asyncio.to_thread(sb_mark_decision, token, decision_text, int(staff_member.id))
     except Exception:
         pass
 
     try:
-        sb_set_used(token, True)
+        await asyncio.to_thread(sb_set_used, token, True)
     except Exception:
         pass
 
@@ -932,7 +932,7 @@ async def _legacy_approve_verification(
 
     if _member_looks_already_verified(owner):
         try:
-            sb_mark_decision(
+            await asyncio.to_thread(sb_mark_decision,
                 token,
                 f"{decision_text} (already verified)",
                 int(staff_member.id),
@@ -941,7 +941,7 @@ async def _legacy_approve_verification(
         except Exception:
             pass
         try:
-            sb_set_used(token, True)
+            await asyncio.to_thread(sb_set_used, token, True)
         except Exception:
             pass
         return {
@@ -953,7 +953,7 @@ async def _legacy_approve_verification(
     can_assign, error_msg, roles_to_assign = await check_bot_can_assign_roles(guild)
     if not can_assign:
         try:
-            sb_mark_decision(token, f"{decision_text} (roles unavailable)", int(staff_member.id))
+            await asyncio.to_thread(sb_mark_decision, token, f"{decision_text} (roles unavailable)", int(staff_member.id))
         except Exception:
             pass
         return {
@@ -975,7 +975,7 @@ async def _legacy_approve_verification(
         )
         if remove_error:
             try:
-                sb_mark_decision(
+                await asyncio.to_thread(sb_mark_decision,
                     token,
                     f"{decision_text} (unverified cleanup failed)",
                     int(staff_member.id),
@@ -984,7 +984,7 @@ async def _legacy_approve_verification(
             except Exception:
                 pass
             try:
-                sb_set_used(token, True)
+                await asyncio.to_thread(sb_set_used, token, True)
             except Exception:
                 pass
             return {
@@ -993,11 +993,11 @@ async def _legacy_approve_verification(
             }
 
         try:
-            sb_mark_decision(token, decision_text, int(staff_member.id), approved_user_id=int(owner.id))
+            await asyncio.to_thread(sb_mark_decision, token, decision_text, int(staff_member.id), approved_user_id=int(owner.id))
         except Exception:
             pass
         try:
-            sb_set_used(token, True)
+            await asyncio.to_thread(sb_set_used, token, True)
         except Exception:
             pass
 
@@ -1093,7 +1093,7 @@ async def handle_possible_submission(message: discord.Message) -> None:
     if not token:
         return
 
-    token_info = sb_get_token_info(token)
+    token_info = await asyncio.to_thread(sb_get_token_info, token)
     if not token_info:
         return
 
@@ -1123,9 +1123,9 @@ async def handle_possible_submission(message: discord.Message) -> None:
     if token_info.get("submitted", False):
         return
 
-    sb_set_submitted(token)
+    await asyncio.to_thread(sb_set_submitted, token)
     try:
-        sb_set_submitted_at(token, now_utc())
+        await asyncio.to_thread(sb_set_submitted_at, token, now_utc())
     except Exception:
         pass
 
@@ -1350,7 +1350,7 @@ async def _handle_standard_staff_decision(
     except Exception:
         pass
 
-    token_info = sb_get_token_info(token)
+    token_info = await asyncio.to_thread(sb_get_token_info, token)
     if not token_info:
         await interaction.followup.send("❌ Invalid or expired token.", ephemeral=True)
         return True
@@ -1386,7 +1386,7 @@ async def _handle_standard_staff_decision(
         )
 
     async with _interaction_action_lock(action, token, channel.id):
-        token_info_live = sb_get_token_info(token)
+        token_info_live = await asyncio.to_thread(sb_get_token_info, token)
         if not token_info_live or token_info_live.get("used", False):
             await interaction.followup.send(
                 "❌ This decision token was already handled. Use the latest panel.",
@@ -1513,7 +1513,7 @@ async def _handle_standard_staff_decision(
             )
             return True
 
-        token_info_live = sb_get_token_info(token)
+        token_info_live = await asyncio.to_thread(sb_get_token_info, token)
         proof_saved = False
         proof_meta: Optional[str] = None
         if isinstance(owner, discord.Member):
@@ -1762,7 +1762,7 @@ async def _handle_vc_staff_action(
     )
 
     async with _interaction_action_lock(action, token, ticket_ch.id):
-        token_info_live = sb_get_token_info(token) or token_info_q
+        token_info_live = await asyncio.to_thread(sb_get_token_info, token) or token_info_q
         current_status = _vc_request_status(token)
         assigned_staff_id = _vc_request_assigned_staff_id(token)
 
@@ -1867,7 +1867,7 @@ async def _handle_vc_staff_action(
             )
 
             if result.get("ok"):
-                token_info_after = sb_get_token_info(token)
+                token_info_after = await asyncio.to_thread(sb_get_token_info, token)
                 proof_saved = False
                 proof_meta: Optional[str] = None
                 if isinstance(owner, discord.Member):
@@ -2040,7 +2040,7 @@ async def handle_component_interaction(interaction: discord.Interaction) -> None
             await interaction.followup.send("❌ Missing decision token.", ephemeral=True)
             return
 
-        token_info_q = sb_get_token_info(token)
+        token_info_q = await asyncio.to_thread(sb_get_token_info, token)
         if not token_info_q:
             await interaction.followup.send("❌ Invalid or expired token.", ephemeral=True)
             return

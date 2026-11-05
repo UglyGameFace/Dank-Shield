@@ -449,19 +449,19 @@ class WelcomeSetupView(discord.ui.View):
         )
         embed.add_field(
             name="Join background",
-            value="Use `/dank welcome card-upload` and attach a safe 3:1 image.",
+            value="Use `/dank upload`, choose **Join Card Background**, and attach a safe 3:1 image.",
             inline=False,
         )
         embed.add_field(
             name="Exit background",
-            value="Use `/dank welcome exit-card-upload` and attach a safe 3:1 image.",
+            value="Use `/dank upload`, choose **Exit Card Background**, and attach a safe 3:1 image.",
             inline=False,
         )
         embed.add_field(
             name="Shared custom font",
             value=(
-                "Use `/dank welcome card-font-upload`, then choose **Uploaded Font** "
-                "inside either Studio. Use `/dank welcome card-font-clear` to remove it."
+                "Use `/dank upload` and choose **Custom Card Font**, then choose **Uploaded Font** "
+                "inside either Studio. Use the upload center's **Clear Uploaded Font** control to remove it."
             ),
             inline=False,
         )
@@ -561,7 +561,7 @@ class WelcomeSetupView(discord.ui.View):
         )
 
 
-async def open_welcome_setup(interaction: discord.Interaction) -> None:
+async def open_welcome_setup(interaction: discord.Interaction, *, section: str = "static") -> None:
     if not await _require_setup_permission(interaction):
         return
     guild = interaction.guild
@@ -575,8 +575,8 @@ async def open_welcome_setup(interaction: discord.Interaction) -> None:
     try:
         config = await get_guild_config(guild.id, refresh=True)
         await interaction.followup.send(
-            embed=await _welcome_embed(guild, config),
-            view=WelcomeSetupView(owner_id=interaction.user.id, config=config),
+            embed=await _welcome_embed(guild, config, section=section),
+            view=WelcomeSetupView(owner_id=interaction.user.id, config=config, section=section),
             ephemeral=True,
             allowed_mentions=discord.AllowedMentions.none(),
         )

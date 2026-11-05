@@ -63,6 +63,7 @@ GUILD_CONFIG_PATCH_LEGACY_RPC = "patch_dank_guild_config"
 
 _CONFIG_CACHE: Dict[str, Dict[str, Any]] = {}
 _CONFIG_CACHE_TS: Dict[str, datetime] = {}
+_LAST_SLOW_DB_LOG_AT = 0.0
 
 _JSON_CONFIG_KEYS = {"settings", "config", "metadata", "meta"}
 _BASE_WRITE_KEYS = {"guild_id", "updated_at", "created_at"}
@@ -402,7 +403,29 @@ def _execute_db_op(op_name: str, executor, max_attempts: int = _DB_MAX_ATTEMPTS)
 
 
 async def _run_db(op_name: str, executor):
-    return await asyncio.to_thread(_execute_db_op, op_name, executor)
+    global _LAST_SLOW_DB_LOG_AT
+    queued_at = time.monotonic()
+    timing: list[float] = []
+
+    def run():
+        timing.append(time.monotonic())
+        try:
+            return _execute_db_op(op_name, executor)
+        finally:
+            timing.append(time.monotonic())
+
+    try:
+        return await asyncio.to_thread(run)
+    finally:
+        now = time.monotonic()
+        if len(timing) == 2 and now - queued_at >= 1.5 and now - _LAST_SLOW_DB_LOG_AT >= 30:
+            _LAST_SLOW_DB_LOG_AT = now
+            operation = op_name.split(" guild=", 1)[0]
+            _warn(
+                f"CONFIG_DB_SLOW operation={operation} "
+                f"queue_ms={(timing[0] - queued_at) * 1000:.0f} "
+                f"work_ms={(timing[1] - timing[0]) * 1000:.0f}"
+            )
 
 
 def _mapping_dict(value: Any) -> Dict[str, Any]:

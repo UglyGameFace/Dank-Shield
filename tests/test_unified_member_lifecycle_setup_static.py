@@ -14,7 +14,7 @@ def test_single_existing_entrypoint() -> None:
 
 
 def test_canonical_log_aliases_preserved() -> None:
-    assert "_join_leave_alias_payload(str(channel.id))" in center
+    assert "_join_leave_alias_payload(str(channel.id), current=cfg)" in center
     assert "def _join_leave_alias_payload(" in logs
     assert "JOIN_LEAVE_KEYS" in center
     assert "JOIN_LEAVE_KEYS" in router

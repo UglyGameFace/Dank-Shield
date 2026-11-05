@@ -8,6 +8,8 @@ from .common import safe_defer
 from .public_setup_group import (
     _add_validation_summary,
     _channel_value,
+    _cfg_snowflake,
+    _cfg_value,
     _config_embed,
     _require_setup_permission,
     _upsert_config,
@@ -50,24 +52,30 @@ def _display_channel(channel: Optional[discord.TextChannel], *, fallback: Option
         return "Not set"
 
 
-def _join_leave_alias_payload(channel_id: str) -> Dict[str, Any]:
-    return {
-        "join_leave_log_channel_id": channel_id,
-        "join_leave_channel_id": channel_id,
-        "member_join_leave_log_channel_id": channel_id,
-        "member_lifecycle_log_channel_id": channel_id,
-        "member_log_channel_id": channel_id,
-        "member_logs_channel_id": channel_id,
-        "join_log_channel_id": channel_id,
-        "join_exit_log_channel_id": channel_id,
-        "joinlog_channel_id": channel_id,
-        "joinleave_channel_id": channel_id,
-        "welcome_exit_channel_id": channel_id,
-        "welcome_exit_log_channel_id": channel_id,
-        "leave_log_channel_id": channel_id,
-        "leave_channel_id": channel_id,
-        "welcome_leave_channel_id": channel_id,
-    }
+JOIN_LEAVE_LOG_ALIASES = (
+    "join_leave_channel_id", "member_join_leave_log_channel_id",
+    "member_lifecycle_log_channel_id", "member_log_channel_id",
+    "member_logs_channel_id", "join_log_channel_id", "join_exit_log_channel_id",
+    "joinlog_channel_id", "joinleave_channel_id", "leave_log_channel_id",
+)
+
+
+def _join_leave_alias_payload(channel_id: str, *, current: Any) -> Dict[str, Any]:
+    from ..exit_card_runtime import _COMPAT_CHANNEL_KEYS
+    from ..exit_card_service import exit_cards_enabled
+
+    if str(_cfg_value(current, "source", "")).startswith("unavailable:"):
+        raise RuntimeError("Existing lifecycle settings could not be read; nothing was saved.")
+    patch = {key: channel_id for key in ("join_leave_log_channel_id", *JOIN_LEAVE_LOG_ALIASES)}
+    # Legacy exit delivery borrowed log aliases. Pin its current behavior before
+    # changing logs, so a log edit cannot move, enable or disable goodbye cards.
+    if _cfg_value(current, "exit_card_enabled", None) is None:
+        patch["exit_card_enabled"] = exit_cards_enabled(current)
+    if not _cfg_snowflake(current, "exit_card_channel_id"):
+        previous_exit = _cfg_snowflake(current, *_COMPAT_CHANNEL_KEYS)
+        if previous_exit:
+            patch["exit_card_channel_id"] = str(previous_exit)
+    return patch
 
 
 def _normalize_join_leave_warning(text: str) -> str:
@@ -123,10 +131,10 @@ async def _setup_logs_callback(
         "configured_at": _utc_iso(),
     }
 
-    if join_leave_log_channel is not None:
-        updates.update(_join_leave_alias_payload(_channel_value(join_leave_log_channel) or "0"))
-
     try:
+        if join_leave_log_channel is not None:
+            current = await get_guild_config(guild.id, refresh=True)
+            updates.update(_join_leave_alias_payload(_channel_value(join_leave_log_channel) or "0", current=current))
         await _upsert_config(guild.id, updates)
         invalidate_guild_config(guild.id)
         cfg = await get_guild_config(guild.id, refresh=True)

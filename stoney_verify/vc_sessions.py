@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import threading
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
@@ -1253,7 +1254,7 @@ async def start_session(
     staff_id: int,
 ) -> None:
     try:
-        ensure_session(
+        await asyncio.to_thread(ensure_session,
             token=str(token),
             guild_id=int(guild_id),
             ticket_channel_id=int(ticket_channel_id or 0),
@@ -1268,7 +1269,7 @@ async def start_session(
         _log(f"start_session ensure_session failed token={token} err={repr(e)}")
 
     try:
-        mark_started(token=str(token), by_staff_id=int(staff_id))
+        await asyncio.to_thread(mark_started, token=str(token), by_staff_id=int(staff_id))
     except Exception as e:
         _log(f"start_session mark_started failed token={token} err={repr(e)}")
 
@@ -1283,13 +1284,13 @@ async def end_session(
     try:
         norm = _normalize_status(status or "COMPLETED")
         if norm == "COMPLETED":
-            mark_completed(token=str(token), by_staff_id=int(staff_id))
+            await asyncio.to_thread(mark_completed, token=str(token), by_staff_id=int(staff_id))
         elif norm == "CANCELED":
-            mark_canceled(token=str(token), by_staff_id=int(staff_id))
+            await asyncio.to_thread(mark_canceled, token=str(token), by_staff_id=int(staff_id))
         elif norm == "EXPIRED":
-            transition(token=str(token), new_status="EXPIRED", staff_id=int(staff_id))
+            await asyncio.to_thread(transition, token=str(token), new_status="EXPIRED", staff_id=int(staff_id))
         else:
-            transition(token=str(token), new_status=norm, staff_id=int(staff_id))
+            await asyncio.to_thread(transition, token=str(token), new_status=norm, staff_id=int(staff_id))
     except Exception as e:
         _log(f"end_session failed token={token} status={status} err={repr(e)}")
 

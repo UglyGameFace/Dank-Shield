@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import os
 import re
 import urllib.parse
@@ -481,7 +482,7 @@ async def _store_token_best_effort(
             else:
                 return False
 
-        ok = sb_insert_token(
+        ok = await asyncio.to_thread(sb_insert_token,
             token,
             webhook_url=webhook_url,
             expires_at=expires_at,

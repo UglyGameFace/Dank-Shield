@@ -570,7 +570,7 @@ async def _resolve_session_vc_channel(
     session_row: Optional[Dict[str, Any]] = None,
 ) -> Optional[discord.abc.GuildChannel]:
     vc_channel_id = _as_int(
-        (session_row or {}).get("vc_channel_id") or _get_vc_channel_id_from_session(token),
+        (session_row or {}).get("vc_channel_id") or await asyncio.to_thread(_get_vc_channel_id_from_session, token),
         0,
     )
     if vc_channel_id <= 0:
@@ -628,18 +628,18 @@ async def _extend_live_session_expiry(
 ) -> None:
     try:
         if vc_sessions and hasattr(vc_sessions, "extend_expiry"):
-            vc_sessions.extend_expiry(
+            await asyncio.to_thread(vc_sessions.extend_expiry,
                 token=str(token),
                 minutes=_as_int((session_row or {}).get("access_minutes"), 0),
                 reason=reason,
-                by_staff_id=_get_assigned_staff_id(token),
+                by_staff_id=await asyncio.to_thread(_get_assigned_staff_id, token),
             )
     except Exception:
         pass
 
     try:
         if vc_sessions and hasattr(vc_sessions, "touch_watchdog"):
-            vc_sessions.touch_watchdog(str(token))
+            await asyncio.to_thread(vc_sessions.touch_watchdog, str(token))
     except Exception:
         pass
 
@@ -666,7 +666,7 @@ async def _session_notify_ticket_channel(
     token: str,
     text: str,
 ) -> None:
-    ticket_channel_id = _get_ticket_channel_id_from_session(token)
+    ticket_channel_id = await asyncio.to_thread(_get_ticket_channel_id_from_session, token)
     if ticket_channel_id <= 0:
         return
 
@@ -993,7 +993,7 @@ async def vc_unlock_session_participants(
     owner: discord.Member,
     staff_member: discord.Member,
 ) -> Tuple[bool, str]:
-    ok_guard, guard_msg = _session_unlock_guard(
+    ok_guard, guard_msg = await asyncio.to_thread(_session_unlock_guard,
         guild=guild,
         token=token,
         owner=owner,
@@ -1026,7 +1026,7 @@ async def vc_unlock_session_participants(
 
     try:
         if vc_sessions and hasattr(vc_sessions, "mark_unlocked"):
-            vc_sessions.mark_unlocked(
+            await asyncio.to_thread(vc_sessions.mark_unlocked,
                 token=str(token),
                 by_staff_id=int(staff_member.id),
                 guard_reason=guard_msg,
@@ -1043,7 +1043,7 @@ async def vc_unlock_session_participants(
             assigned_staff_id=int(staff_member.id),
             accepted_staff_id=int(staff_member.id),
             accepted_by=int(staff_member.id),
-            vc_channel_id=int(_get_vc_channel_id_from_session(token) or _configured_vc_channel_id()),
+            vc_channel_id=int(await asyncio.to_thread(_get_vc_channel_id_from_session, token) or _configured_vc_channel_id()),
             unlocked_at=_utc_iso(),
         )
     except Exception:
@@ -1058,8 +1058,8 @@ async def vc_relock_session(
     token: str,
     reason: str = "session ended",
 ) -> None:
-    owner_id = _get_owner_id(token)
-    staff_id = _get_assigned_staff_id(token)
+    owner_id = await asyncio.to_thread(_get_owner_id, token)
+    staff_id = await asyncio.to_thread(_get_assigned_staff_id, token)
 
     owner = guild.get_member(owner_id) if owner_id else None
     staff = guild.get_member(staff_id) if staff_id else None
@@ -1108,7 +1108,7 @@ async def vc_relock_session(
 
     try:
         if vc_sessions and hasattr(vc_sessions, "clear_unlock"):
-            vc_sessions.clear_unlock(token=str(token), action_name="relock")
+            await asyncio.to_thread(vc_sessions.clear_unlock, token=str(token), action_name="relock")
     except Exception:
         pass
 
@@ -1128,12 +1128,12 @@ async def vc_session_everyone_left(
     if await _vc_channel_has_active_users(guild, token=token):
         return False
 
-    vc_id = _get_vc_channel_id_from_session(token)
+    vc_id = await asyncio.to_thread(_get_vc_channel_id_from_session, token)
     if vc_id <= 0:
         return False
 
-    owner = guild.get_member(_get_owner_id(token))
-    staff = guild.get_member(_get_assigned_staff_id(token))
+    owner = guild.get_member(await asyncio.to_thread(_get_owner_id, token))
+    staff = guild.get_member(await asyncio.to_thread(_get_assigned_staff_id, token))
 
     owner_in = _member_in_target_vc(owner, vc_id)
     staff_in = _member_in_target_vc(staff, vc_id)
@@ -1186,7 +1186,7 @@ async def vc_move_member_into_verify_vc(
 # ============================================================
 
 async def vc_sweeper_loop(bot_client: discord.Client, *, interval_seconds: int = 120) -> None:
-    if not vc_sessions or not hasattr(vc_sessions, "sb_enabled") or not vc_sessions.sb_enabled():
+    if not vc_sessions or not hasattr(vc_sessions, "sb_enabled") or not await asyncio.to_thread(vc_sessions.sb_enabled):
         return
 
     try:
@@ -1219,14 +1219,14 @@ async def vc_sweeper_loop(bot_client: discord.Client, *, interval_seconds: int =
 
             now_iso = _utcnow().isoformat()
 
-            res = (
+            res = await asyncio.to_thread(lambda: (
                 sb.table("vc_verify_sessions")
                 .select("token,guild_id,owner_id,status,vc_channel_id,revoke_at,access_minutes,meta")
                 .in_("status", ["STAFF_ACCEPTED", "OWNER_CONFIRMED", "READY", "IN_VC", "STARTED", "TAKEN_OVER", "RESTARTED"])
                 .lte("revoke_at", now_iso)
                 .limit(100)
                 .execute()
-            )
+            ))
             rows = getattr(res, "data", None) or []
         except Exception:
             rows = []
@@ -1242,7 +1242,7 @@ async def vc_sweeper_loop(bot_client: discord.Client, *, interval_seconds: int =
                 if not guild:
                     try:
                         if hasattr(vc_sessions, "transition"):
-                            vc_sessions.transition(token=token, new_status="EXPIRED", staff_id=0)
+                            await asyncio.to_thread(vc_sessions.transition, token=token, new_status="EXPIRED", staff_id=0)
                     except Exception:
                         pass
                     continue
@@ -1254,7 +1254,7 @@ async def vc_sweeper_loop(bot_client: discord.Client, *, interval_seconds: int =
                 )
 
                 if live_users_present:
-                    should_notify = not _session_recently_extended(token, within_seconds=300)
+                    should_notify = not await asyncio.to_thread(_session_recently_extended, token, within_seconds=300)
 
                     await _extend_live_session_expiry(
                         token=token,
@@ -1274,7 +1274,7 @@ async def vc_sweeper_loop(bot_client: discord.Client, *, interval_seconds: int =
 
                 try:
                     if hasattr(vc_sessions, "transition"):
-                        vc_sessions.transition(token=token, new_status="EXPIRED", staff_id=0)
+                        await asyncio.to_thread(vc_sessions.transition, token=token, new_status="EXPIRED", staff_id=0)
                 except Exception:
                     pass
 

@@ -10,6 +10,7 @@ import discord
 
 from .guild_config import get_guild_config
 from .welcome_event_services import _cfg_int, _send_ephemeral
+from .ui import DankGuildResourceBrowserView
 
 
 def _channel(guild: discord.Guild, channel_id: int) -> str:
@@ -28,8 +29,12 @@ def _log_channel_id(cfg: object) -> int:
 
 
 def _summary(guild: discord.Guild, cfg: object) -> discord.Embed:
-    join_id = _cfg_int(cfg, "join_welcome_channel_id") or _cfg_int(cfg, "welcome_channel_id")
-    exit_id = _cfg_int(cfg, "goodbye_channel_id") or _cfg_int(cfg, "leave_channel_id")
+    from .welcome_card_runtime import resolve_join_card_channel
+    from .exit_card_runtime import resolve_exit_card_channel
+    join_card, _ = resolve_join_card_channel(guild, cfg)
+    exit_card, _ = resolve_exit_card_channel(guild, cfg)
+    join_id = join_card.id if join_card else 0
+    exit_id = exit_card.id if exit_card else 0
     log_id = _log_channel_id(cfg)
     embed = discord.Embed(
         title="👋 Member Welcome & Activity",
@@ -39,8 +44,8 @@ def _summary(guild: discord.Guild, cfg: object) -> discord.Embed:
     embed.add_field(
         name="Delivery destinations",
         value=(
-            f"🎉 Welcome: {_channel(guild, join_id)}\n"
-            f"👋 Goodbye: {_channel(guild, exit_id)}\n"
+            f"🎉 Welcome card: {_channel(guild, join_id)}\n"
+            f"👋 Goodbye card: {_channel(guild, exit_id)}\n"
             f"📋 Operational log: {_channel(guild, log_id)}"
         ),
         inline=False,
@@ -53,24 +58,34 @@ def _summary(guild: discord.Guild, cfg: object) -> discord.Embed:
         )
     embed.add_field(
         name="Static start-here message",
-        value="Use `/dank welcome set-channel`, `/dank welcome template`, then `/dank welcome post` to update the persistent message.",
+        value="Open **Static Welcome Help** below to choose a channel, edit the text, and post or update the persistent message.",
         inline=False,
     )
     embed.set_footer(text="Staff Modlog remains independent. No historical settings are reset.")
     return embed
 
 
-class OperationalLogSelect(discord.ui.ChannelSelect):
+class OperationalLogButton(discord.ui.Button):
     def __init__(self) -> None:
         super().__init__(
-            placeholder="Choose operational join/leave log channel",
-            channel_types=[discord.ChannelType.text],
-            min_values=1,
-            max_values=1,
+            label="Operational Log Channel", emoji="📋",
+            style=discord.ButtonStyle.secondary,
             row=1,
         )
 
     async def callback(self, interaction: discord.Interaction) -> None:
+        from .commands_ext.public_setup_group import _require_setup_permission
+        if not await _require_setup_permission(interaction):
+            return
+        view = DankGuildResourceBrowserView(
+            guild=interaction.guild, author_id=interaction.user.id,
+            resource_kinds=("text",), on_pick=self.save_channel,
+            custom_id="dank:lifecycle:log", title="Operational Join & Leave Log",
+            on_home=open_member_lifecycle_setup,
+        )
+        await interaction.response.edit_message(embed=view.embed(), view=view)
+
+    async def save_channel(self, interaction: discord.Interaction, channel: discord.TextChannel) -> None:
         from .commands_ext.public_setup_group import _require_setup_permission, _upsert_config
         from .commands_ext.public_setup_logs import _join_leave_alias_payload
         from .guild_config import invalidate_guild_config
@@ -78,10 +93,7 @@ class OperationalLogSelect(discord.ui.ChannelSelect):
         if not await _require_setup_permission(interaction):
             return
         guild = interaction.guild
-        selected = self.values[0] if self.values else None
-        if guild is None or selected is None:
-            return await _send_ephemeral(interaction, "❌ Select a server text channel.")
-        channel = guild.get_channel(int(selected.id))
+        channel = guild.get_channel(int(channel.id)) if guild else None
         if not isinstance(channel, discord.TextChannel):
             return await _send_ephemeral(interaction, "❌ Select a normal server text channel.")
         me = guild.me
@@ -93,7 +105,8 @@ class OperationalLogSelect(discord.ui.ChannelSelect):
         if not interaction.response.is_done():
             await interaction.response.defer()
         try:
-            await _upsert_config(int(guild.id), _join_leave_alias_payload(str(channel.id)))
+            cfg = await get_guild_config(int(guild.id), refresh=True)
+            await _upsert_config(int(guild.id), _join_leave_alias_payload(str(channel.id), current=cfg))
             invalidate_guild_config(int(guild.id))
             cfg = await get_guild_config(int(guild.id), refresh=True)
         except Exception as exc:
@@ -104,9 +117,9 @@ class OperationalLogSelect(discord.ui.ChannelSelect):
 class MemberLifecycleSetupView(discord.ui.View):
     def __init__(self) -> None:
         super().__init__(timeout=300)
-        self.add_item(OperationalLogSelect())
+        self.add_item(OperationalLogButton())
 
-    @discord.ui.button(label="Welcome & Goodbye", emoji="🎉", style=discord.ButtonStyle.primary, row=0)
+    @discord.ui.button(label="Text Announcements", emoji="🎉", style=discord.ButtonStyle.primary, row=0)
     async def cards(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         from .commands_ext.public_setup_group import _require_setup_permission
         from .welcome_event_services import WelcomeEventsCenterView, _build_center_embed
@@ -122,6 +135,11 @@ class MemberLifecycleSetupView(discord.ui.View):
         except Exception:
             return await _send_ephemeral(interaction, "❌ Could not load welcome settings. Try again shortly.")
         await interaction.edit_original_response(embed=_build_center_embed(guild, cfg), view=WelcomeEventsCenterView(guild=guild, cfg=cfg))
+
+    @discord.ui.button(label="Card Design", emoji="🎨", style=discord.ButtonStyle.secondary, row=0)
+    async def card_design(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        from .welcome_setup_ui import open_welcome_setup
+        await open_welcome_setup(interaction, section="join")
 
     @discord.ui.button(label="Check Delivery", emoji="🔎", style=discord.ButtonStyle.secondary, row=0)
     async def health(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -154,7 +172,8 @@ class MemberLifecycleSetupView(discord.ui.View):
         from .commands_ext.public_setup_group import _require_setup_permission
         if not await _require_setup_permission(interaction):
             return
-        await _send_ephemeral(interaction, "Use `/dank welcome set-channel` to choose #start-here, `/dank welcome template` to edit text, then `/dank welcome post` to publish or update without duplicates.")
+        from .welcome_setup_ui import open_welcome_setup
+        await open_welcome_setup(interaction)
 
 
 async def open_member_lifecycle_setup(interaction: discord.Interaction) -> None:
@@ -166,5 +185,8 @@ async def open_member_lifecycle_setup(interaction: discord.Interaction) -> None:
         return await _send_ephemeral(interaction, "This setup is only available inside a server.")
     if not interaction.response.is_done():
         await interaction.response.defer(ephemeral=True)
-    cfg = await get_guild_config(int(guild.id), refresh=True)
+    try:
+        cfg = await get_guild_config(int(guild.id), refresh=True)
+    except Exception:
+        return await _send_ephemeral(interaction, "❌ Could not load welcome and log settings. Try again shortly.")
     await interaction.followup.send(embed=_summary(guild, cfg), view=MemberLifecycleSetupView(), ephemeral=True, allowed_mentions=discord.AllowedMentions.none())

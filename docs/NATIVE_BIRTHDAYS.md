@@ -30,6 +30,13 @@ public birthday wishes enabled.
 - Choose whether February 29 birthdays fall on February 28 or March 1 in nonleap years.
 - Enable celebrations. The feature remains disabled until staff explicitly does so.
 
+Channel and role selection use the shared searchable, paged server-item browser.
+**No Birthday Role** clears the optional server role without deleting member dates
+or preferences. Date submission and preference edits acknowledge before storage I/O;
+the resulting private panel shows the saved state. Opening a date modal performs no
+storage read. The upcoming list shows each member once, ordered by their next
+celebration date, including the configured leap-day rule.
+
 The role is not a self-selected cosmetic role: birthdays are assigned and removed by
 the birthday worker. Existing protected/verification/staff roles are never accepted.
 The worker uses timezone-aware dates including daylight-saving transitions, and stores
@@ -68,6 +75,26 @@ Run `python -m pytest tests/test_native_birthdays.py` and project CI, then test
 with a server role below the bot in a Discord test guild. Verify timezone,
 role grant/revoke, lack of unexpected pings, private opt-ins, restarts,
 February 29, missing permissions, and migration preflight.
+
+`tests/test_production_interaction_stabilization.py` and
+`tests/test_birthday_delivery_and_lifecycle_compatibility.py` cover acknowledgement
+ordering, private responses, full-date edits, preference preservation, exact annual
+leap-day matching, worker reservations, consent rechecks and role-lease recovery.
+
+## Welcome and activity setup
+
+`/dank welcome`, the Home destination and Setup Home open **Member Welcome &
+Activity**. **Card Design** opens the existing Join/Exit studios, **Text Announcements**
+opens the existing text editor, **Operational Log Channel** selects the separate
+record destination, and **Static Welcome Help** opens the persistent-message editor.
+Staff Modlog remains independent.
+
+Legacy channel aliases remain readable. Editing an operational log writes only
+log-specific aliases and pins the server's effective legacy exit-card state and
+destination to their existing explicit settings. It preserves goodbye-text aliases,
+artwork, staff logs and unrelated settings. This is an additive migration within
+the existing config JSON when the manager saves; no SQL migration or reset is needed.
+The obsolete startup patch that replaced the log picker has been removed.
 
 **Do not deploy automatically**: exact-main CI, verified independent off-Discloud
 backup, observed Discloud live SHA, explicit release approval, canary, and tested

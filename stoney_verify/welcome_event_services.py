@@ -387,7 +387,7 @@ def _build_center_embed(guild: discord.Guild, cfg: Any, *, last_action: str | No
     if last_action:
         embed.add_field(name="Last action", value=last_action[:1024], inline=False)
 
-    embed.set_footer(text="/dank welcome join-leave • separate event announcements")
+    embed.set_footer(text="/dank welcome · Text Announcements")
     return embed
 
 
@@ -398,6 +398,7 @@ async def _refresh_center(interaction: discord.Interaction, *, last_action: str 
     if guild is None:
         return await _send_ephemeral(interaction, "This must be used inside a server.")
 
+    await _ack_update(interaction)
     cfg = await get_guild_config(int(guild.id), refresh=True)
     embed = _build_center_embed(guild, cfg, last_action=last_action)
     view = WelcomeEventsCenterView(guild=guild, cfg=cfg)
@@ -476,14 +477,13 @@ async def _set_enabled(interaction: discord.Interaction, *, join: Optional[bool]
     if guild is None:
         return await _send_ephemeral(interaction, "This must be used inside a server.")
 
+    await _ack_update(interaction)
     cfg = await get_guild_config(int(guild.id), refresh=True)
 
     if join is True and not isinstance(_join_channel(guild, cfg), discord.TextChannel):
         return await _send_ephemeral(interaction, "Pick a **Join** channel first, then turn Join Messages ON.")
     if leave is True and not isinstance(_leave_channel(guild, cfg), discord.TextChannel):
         return await _send_ephemeral(interaction, "Pick a **Leave** channel first, then turn Leave Messages ON.")
-
-    await _ack_update(interaction)
 
     patch: dict[str, Any] = {"welcome_events_updated_by_id": str(int(interaction.user.id))}
     actions: list[str] = []
@@ -721,8 +721,9 @@ class WelcomeToggleButton(discord.ui.Button):
 
 
 class WelcomeEditButton(discord.ui.Button):
-    def __init__(self, *, kind: str) -> None:
+    def __init__(self, *, kind: str, cfg: Any) -> None:
         self.kind = kind
+        self.current_title, self.current_body = _templates(cfg, kind=kind)
         super().__init__(
             label=f"Edit {_kind_label(kind)}",
             emoji="✏️",
@@ -733,16 +734,15 @@ class WelcomeEditButton(discord.ui.Button):
 
     async def callback(self, interaction: discord.Interaction) -> None:
         from stoney_verify.commands_ext.public_setup_group import _require_setup_permission
-        from stoney_verify.guild_config import get_guild_config
 
         if not await _require_setup_permission(interaction):
             return
         if interaction.guild is None:
             return await _send_ephemeral(interaction, "This must be used inside a server.")
 
-        cfg = await get_guild_config(int(interaction.guild.id), refresh=True)
-        title, body = _templates(cfg, kind=self.kind)
-        await interaction.response.send_modal(WelcomeEventTemplateModal(kind=self.kind, current_title=title, current_body=body))
+        await interaction.response.send_modal(WelcomeEventTemplateModal(
+            kind=self.kind, current_title=self.current_title, current_body=self.current_body,
+        ))
 
 
 class WelcomePreviewButton(discord.ui.Button):
@@ -763,6 +763,8 @@ class WelcomePreviewButton(discord.ui.Button):
         if interaction.guild is None or member is None:
             return await _send_ephemeral(interaction, "This must be used inside a server.")
 
+        if not interaction.response.is_done():
+            await interaction.response.defer(ephemeral=True, thinking=True)
         cfg = await get_guild_config(int(interaction.guild.id), refresh=True)
         await _send_ephemeral(
             interaction,
@@ -916,7 +918,7 @@ class WelcomeCloseButton(discord.ui.Button):
             except Exception:
                 pass
         try:
-            await interaction.response.edit_message(content="Closed Join & Leave Announcements. Reopen it with `/dank welcome join-leave`.", view=self.view)
+            await interaction.response.edit_message(content="Closed Join & Leave Announcements. Reopen Text Announcements from `/dank welcome`.", view=self.view)
         except Exception:
             await _send_ephemeral(interaction, "Closed Join & Leave Announcements.")
 
@@ -936,8 +938,8 @@ class WelcomeEventsCenterView(discord.ui.View):
         self.add_item(WelcomeToggleButton(kind="join", enabled=join_enabled, has_channel=isinstance(join_channel, discord.TextChannel)))
         self.add_item(WelcomeToggleButton(kind="leave", enabled=leave_enabled, has_channel=isinstance(leave_channel, discord.TextChannel)))
 
-        self.add_item(WelcomeEditButton(kind="join"))
-        self.add_item(WelcomeEditButton(kind="leave"))
+        self.add_item(WelcomeEditButton(kind="join", cfg=cfg))
+        self.add_item(WelcomeEditButton(kind="leave", cfg=cfg))
 
         self.add_item(WelcomePreviewButton(kind="join"))
         self.add_item(WelcomePreviewButton(kind="leave"))
@@ -960,6 +962,8 @@ async def open_welcome_events_center(interaction: discord.Interaction) -> None:
     if guild is None:
         return await _send_ephemeral(interaction, "This must be used inside a server.")
 
+    if not interaction.response.is_done():
+        await interaction.response.defer(ephemeral=True, thinking=True)
     cfg = await get_guild_config(int(guild.id), refresh=True)
     embed = _build_center_embed(guild, cfg)
     view = WelcomeEventsCenterView(guild=guild, cfg=cfg)

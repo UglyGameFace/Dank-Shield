@@ -98,7 +98,7 @@ async def kick_timer_resume_all() -> None:
     bot._kick_timer_resume_ran = True
 
     try:
-        res = sb.table(KICK_TIMER_TABLE).select("*").execute()
+        res = await asyncio.to_thread(lambda: sb.table(KICK_TIMER_TABLE).select("*").execute())
         rows = getattr(res, "data", None) or []
     except Exception as e:
         global KICK_TIMER_PERSIST_AVAILABLE, KICK_TIMER_PERSIST_DISABLED_REASON

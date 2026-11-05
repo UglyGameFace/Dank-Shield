@@ -56,6 +56,22 @@ def _safe_trace_label(value: Any) -> str:
     return re.sub(r"[^a-zA-Z0-9_.-]", "_", str(value or "unknown"))[:64]
 
 
+def _interaction_trace_label(interaction: Any) -> str:
+    """Only command/subcommand names; never arguments, modal fields or tokens."""
+    payload = getattr(interaction, "data", None)
+    if not isinstance(payload, dict) or not payload.get("name"):
+        return _safe_trace_label(getattr(getattr(interaction, "type", None), "name", "unknown"))
+    names = [_safe_trace_label(payload["name"])]
+    for _ in range(2):
+        child = next((item for item in payload.get("options", [])
+                      if isinstance(item, dict) and item.get("type") in (1, 2)), None)
+        if child is None:
+            break
+        names.append(_safe_trace_label(child.get("name")))
+        payload = child
+    return ".".join(names)[:160]
+
+
 def _safe_int(value: Any, default: int = 0) -> int:
     try:
         if value is None or isinstance(value, bool):
@@ -483,8 +499,10 @@ def attach_process_health(bot: Any) -> bool:
     async def _trace_interaction_ack(interaction: Any, label: str) -> None:
         """Observe the Discord acknowledgment deadline without handling the action."""
         started = time.monotonic()
+        created_at = getattr(interaction, "created_at", None)
+        age_at_start = max(0.0, time.time() - created_at.timestamp()) if created_at else 0.0
         for checkpoint in (1.5, 2.5):
-            await asyncio.sleep(max(0.0, checkpoint - (time.monotonic() - started)))
+            await asyncio.sleep(max(0.0, checkpoint - age_at_start - (time.monotonic() - started)))
             try:
                 acknowledged = bool(interaction.response.is_done())
             except Exception:
@@ -493,26 +511,29 @@ def attach_process_health(bot: Any) -> bool:
                 _log(
                     f"INTERACTION_ACK_LATE command={label} "
                     f"elapsed={time.monotonic() - started:.2f}s "
+                    f"interaction_age={age_at_start + time.monotonic() - started:.2f}s "
                     f"checkpoint={checkpoint:.1f}s"
                 )
             else:
                 return
 
     async def _process_health_on_interaction(interaction: Any) -> None:
-        data = getattr(interaction, "data", None)
-        payload = data if isinstance(data, dict) else {}
         kind = getattr(getattr(interaction, "type", None), "name", "unknown")
         _log(
             "INTERACTION_INGRESS "
             f"type={_safe_trace_label(kind)} "
-            f"command={_safe_trace_label(payload.get('name'))}"
+            f"command={_interaction_trace_label(interaction)}"
         )
         try:
-            label = _safe_trace_label(payload.get("name"))
-            asyncio.create_task(_trace_interaction_ack(interaction, label), name="interaction_ack_trace")
+            label = _interaction_trace_label(interaction)
+            if len(ack_tasks) < 64:
+                task = asyncio.create_task(_trace_interaction_ack(interaction, label), name="interaction_ack_trace")
+                ack_tasks.add(task)
+                task.add_done_callback(ack_tasks.discard)
         except RuntimeError:
             pass
 
+    ack_tasks: set[asyncio.Task] = set()
     try:
         if not _READY_LISTENER_ATTACHED:
             bot.add_listener(_process_health_on_ready, "on_ready")

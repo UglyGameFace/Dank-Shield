@@ -432,7 +432,7 @@ def register_verification_admin_commands(bot, tree) -> None:
         await interaction.response.defer(ephemeral=True)
 
         t = (token or "").strip()
-        ti = sb_get_token_info(t)
+        ti = await asyncio.to_thread(sb_get_token_info, t)
         if not ti:
             return await interaction.followup.send("❌ Token not found.", ephemeral=True)
 
