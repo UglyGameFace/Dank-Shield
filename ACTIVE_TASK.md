@@ -1,3 +1,12 @@
+## ACTIVE INTEGRATION AND BRANCH RETIREMENT (2026-11-05 UTC)
+
+- **Verified cleanup completed:** authenticated owner-reviewed workflow preview #42034046321 and delete #42034179422 actually deleted two integrated refs: `feat/birthday-celebrations-native-20261104` (archived SHA `d7e1204b92709327b9fe0cd0c664cc65792983e2`) and `feat/staff-home-refresh` (archived SHA `d05338eb2dffce0e9faa8cca0de2555a3145d9e1`). Both exact-SHA archive tags read back and final 19-branch inventory confirmed. No deployment or database mutation.
+- **New work branch:** `integrate/embed-studio-recurring-main-20261105` starts from `main` `5ab7b3101b6f95941ca3724389db9c51ec911eb6`, currently adds one temporary GitHub branch (19 → 20 until integrated/retired). Reconciles original recurring campaigns migration `202610200034` collision with current asset-budget version by introducing unique `202611050001`, service-role-only bounded, shard-owned claims, runtime, editor controls, PostgreSQL/pytest coverage and rollout documentation. Not yet merged or deployed. Preserve original `feat/embed-studio-recurring-campaigns-20261024` until merged-equivalence and archive-first retirement.
+- **Remaining work:** complete PR CI/migration validation and reconcile other 7 unique feature/repair branches independently before guarded deletion; historical `archive/`, `backup/`, `aaa-` refs and `main` are protected holds. `ACTIVE_TASK.md` historical checkpoints below are snapshots, not current counts.
+- **Release gates unchanged:** Dedicated Supabase `viamriafkbqhquvrsnua` is intended primary; preserve original IdleGrowOp Supabase rollback source. Discloud PostgreSQL is an isolated backup candidate only. Never equate merged `main` with live Discloud SHA. No production deploy, migrations, host-file or credential edits without specific approval and off-Discloud verified backup, canary and tested rollback.
+
+---
+
 ## BRANCH CLEANUP CHECKPOINT (2026-11-04, latest verified)
 
 - **Live branch inventory:** 25 refs including main, verified from GitHub branch listing. Previously retired refs `feat/mod-quick-actions`, `feat/profile-panel-refresh`, `fix/studio-schedule-persisted-form-gate-20261103`, and `fix/exact-merged-cleanup-automatic-retirement-20261103` are absent. **This checkpoint: 0 additional deletions, 0 merges.** Do not confuse earlier deletions with this run.

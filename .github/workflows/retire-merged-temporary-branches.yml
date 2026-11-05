@@ -273,7 +273,9 @@ jobs:
               // The unattended opt-in path remains ancestry-only. Every
               // divergent worktree still requires an exact-head merged PR,
               // changed-path tree equivalence and the owner SHA-bound token.
-              const prefixes = ['feat/', 'fix/', 'hotfix/', 'extract/', 'docs/', 'audit/', 'chore/', 'work/dankshield-'];
+              // Integrate refs qualify ONLY for authenticated owner-reviewed
+              // retirement, after zero-ahead/merge proofs and archive leases.
+              const prefixes = ['feat/', 'fix/', 'hotfix/', 'extract/', 'docs/', 'audit/', 'chore/', 'integrate/', 'work/dankshield-'];
               const heldPrefixes = [
                 'aaa-', 'archive/', 'backup/', 'recovery/', 'integration/',
                 'reconcile/', 'release/', 'deploy/', 'ops/', 'ci/', 'migration/'

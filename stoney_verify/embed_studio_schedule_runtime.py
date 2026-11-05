@@ -118,6 +118,27 @@ async def _loop(bot: Any) -> None:
                     except Exception as exc:
                         print(f"⚠️ studio_schedule finalize unavailable={type(exc).__name__}; no replay")
             await asyncio.gather(*(one(row) for row in due))
+            # Reuse exactly the one-shot sender's safety checks for recurring
+            # campaigns: permissions, no forms/roles, no pings and timeout
+            # ambiguity. PostgreSQL has already advanced the occurrence.
+            from . import embed_studio_campaigns as campaigns
+            if campaigns.campaigns_enabled():
+                campaign_jobs = await campaigns.claim_due(
+                    shard_count=ownership[0], owned_shards=ownership[1])
+                async def one_campaign(job: dict[str, Any]) -> None:
+                    async with semaphore:
+                        claim_id = str(job.get("last_claim_id") or "")
+                        campaign_id = str(job.get("id") or "")
+                        if not claim_id or not campaign_id:
+                            return  # Never publish a claim without a durable lease.
+                        msg_id, error = await _dispatch(bot, job)
+                        try:
+                            await campaigns.finish(
+                                campaign_id, claim_id,
+                                message_id=msg_id, error_code=error)
+                        except Exception as exc:
+                            print(f"⚠️ studio_campaign finalize unavailable={type(exc).__name__}; no replay")
+                await asyncio.gather(*(one_campaign(job) for job in campaign_jobs))
         except asyncio.CancelledError:
             raise
         except Exception as exc:
