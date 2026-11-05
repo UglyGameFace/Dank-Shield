@@ -117,7 +117,7 @@ def test_threads_shortlink_expansion_preserves_original_link_and_size_cap(monkey
     result = asyncio.run(media.resolve_media_url(source, max_bytes=4_000_000))
     assert result.progressive
     assert result.identity == "threads:REALCODE123"
-    assert result.source_url == "https://www.threads.com/share/shortABC/"
+    assert result.source_url == source  # Preserve the member’s original share URL.
     assert calls == [post]
 
     media.reset_media_resolver_state_for_tests()
