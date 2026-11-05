@@ -294,11 +294,6 @@ class StudioDesignTools(_StudioView):
     async def theme(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
         await _themes(interaction, self.session)
 
-    @discord.ui.button(label="Recurring Campaigns", emoji="🔁", style=discord.ButtonStyle.secondary, row=1)
-    async def campaigns(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
-        from .embed_studio_campaign_ui import recurring_campaigns
-        await recurring_campaigns(interaction, self.session)
-
     @discord.ui.button(label="Back to My Post", emoji="◀️", style=discord.ButtonStyle.secondary, row=2)
     async def back(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
         await _home(interaction, self.session)
@@ -400,6 +395,11 @@ class StudioAdvancedTools(_StudioView):
     @discord.ui.button(label="Upcoming Scheduled Posts", emoji="📅", style=discord.ButtonStyle.secondary, row=1)
     async def schedules(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
         await _scheduled_posts(interaction, self.session)
+
+    @discord.ui.button(label="Recurring Campaigns", emoji="🔁", style=discord.ButtonStyle.secondary, row=1)
+    async def campaigns(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        from .embed_studio_campaign_ui import recurring_campaigns
+        await recurring_campaigns(interaction, self.session)
 
     @discord.ui.button(label="Back to My Post", emoji="◀️", style=discord.ButtonStyle.secondary, row=2)
     async def back(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
