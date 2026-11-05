@@ -14,7 +14,7 @@ from .public_self_roles_group import profile_group
 from .public_setup_group import dank_group
 from stoney_verify.birthday_service import (
     BirthdayStorageUnavailable, delete_member, get_guild, get_member,
-    save_guild, save_member, upcoming, valid_date, valid_zone,
+    save_guild, save_member, upcoming, valid_birth_date, valid_zone,
 )
 
 _REGISTERED = False
@@ -77,10 +77,21 @@ def _safe_birthday_role(guild: discord.Guild, role: discord.Role) -> bool:
 def _member_embed(interaction: discord.Interaction, member: dict[str, Any] | None, settings: dict[str, Any] | None) -> discord.Embed:
     embed = discord.Embed(
         title="🎂 My Birthday",
-        description="Your birthday is private by default. Only your month and day are saved, never your birth year.",
+        description="Your full birth date is private. Public celebrations only show the month and day.",
         color=discord.Color.gold(),
     )
-    display = f"{int(member['birth_month']):02d}-{int(member['birth_day']):02d}" if member else "Not set"
+    if member and member.get("birth_year"):
+        display = (
+            f"{int(member['birth_month']):02d}-{int(member['birth_day']):02d}-"
+            f"{int(member['birth_year']):04d}"
+        )
+    elif member:
+        display = (
+            f"{int(member['birth_month']):02d}-{int(member['birth_day']):02d}"
+            " (add birth year)"
+        )
+    else:
+        display = "Not set"
     embed.add_field(name="Saved date", value=display, inline=False)
     preferences = (
         f"📣 Public wishes: {'On ✅' if member and member.get('public_wishes') else 'Off'}\n"
@@ -116,29 +127,34 @@ async def open_member_birthday(interaction: discord.Interaction) -> None:
 
 
 class BirthdayDateModal(discord.ui.Modal, title="🎂 Set My Birthday"):
-    month_day = discord.ui.TextInput(
-        label="Month and day (MM-DD)",
-        placeholder="06-20",
-        min_length=4, max_length=5,
+    full_date = discord.ui.TextInput(
+        label="Birth date (MM-DD-YYYY)",
+        placeholder="06-20-2002",
+        min_length=10, max_length=10,
     )
 
     def __init__(self, original: dict[str, Any] | None) -> None:
         super().__init__()
         self.original = original
-        if original:
-            self.month_day.default = f"{int(original['birth_month']):02d}-{int(original['birth_day']):02d}"
+        if original and original.get("birth_year"):
+            self.full_date.default = (
+                f"{int(original['birth_month']):02d}-{int(original['birth_day']):02d}-"
+                f"{int(original['birth_year']):04d}"
+            )
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         if interaction.guild is None:
             return await _reply(interaction, "Use this inside a server.")
         try:
-            parts = str(self.month_day.value).strip().split("-")
-            if len(parts) != 2:
-                raise ValueError("Use MM-DD, for example 06-20.")
-            month, day = valid_date(int(parts[0]), int(parts[1]))
+            parts = str(self.full_date.value).strip().split("-")
+            if len(parts) != 3 or [len(part) for part in parts] != [2, 2, 4] or not all(
+                part.isascii() and part.isdecimal() for part in parts
+            ):
+                raise ValueError("Use MM-DD-YYYY, for example 06-20-2002.")
+            month, day, year = valid_birth_date(*(int(part) for part in parts))
             old = await get_member(interaction.guild.id, interaction.user.id)
             await save_member(
-                interaction.guild.id, interaction.user.id, month=month, day=day,
+                interaction.guild.id, interaction.user.id, month=month, day=day, year=year,
                 public_wishes=bool((old or {}).get("public_wishes")),
                 birthday_role=bool((old or {}).get("birthday_role")),
                 dm_wishes=bool((old or {}).get("dm_wishes")),
@@ -195,6 +211,8 @@ class MemberBirthdayView(discord.ui.View):
             member = await get_member(guild.id, interaction.user.id)
             if not member:
                 return await _reply(interaction, "Set your birthday first.")
+            if not member.get("birth_year"):
+                return await _reply(interaction, "Add your birth year with Set Birthday first.")
             payload = {
                 "public_wishes": bool(member.get("public_wishes")),
                 "birthday_role": bool(member.get("birthday_role")),
@@ -203,7 +221,7 @@ class MemberBirthdayView(discord.ui.View):
             payload[field] = not payload[field]
             await save_member(
                 guild.id, interaction.user.id, month=int(member["birth_month"]),
-                day=int(member["birth_day"]), **payload,
+                day=int(member["birth_day"]), year=int(member["birth_year"]), **payload,
             )
             if field == "birthday_role" and not payload["birthday_role"]:
                 await self._revoke_lease(interaction)
@@ -265,7 +283,7 @@ def _settings_embed(guild: discord.Guild, row: dict[str, Any] | None) -> discord
         value="March 1" if settings.get("leap_day_policy") == "mar1" else "February 28",
         inline=False,
     )
-    embed.set_footer(text="No birth year collected · celebration is not age verification")
+    embed.set_footer(text="Birth years stay private · celebration is not age verification")
     return embed
 
 
@@ -408,6 +426,13 @@ class BirthdayStaffView(discord.ui.View):
 @birthday_group.command(name="me", description="Set your birthday and choose private or public celebrations.")
 async def birthday_me(interaction: discord.Interaction) -> None:
     await open_member_birthday(interaction)
+
+
+@birthday_group.command(name="set", description="Privately enter your full birth date including year.")
+async def birthday_set(interaction: discord.Interaction) -> None:
+    if interaction.guild is None:
+        return await _reply(interaction, "Open birthdays inside a server.")
+    await interaction.response.send_modal(BirthdayDateModal(None))
 
 
 @birthday_group.command(name="setup", description="Manager: configure birthday channel, schedule, and temporary role.")
