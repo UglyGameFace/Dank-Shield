@@ -352,6 +352,7 @@ _FEATURE_ROUTE_KEYS = frozenset(
         "members_moderation",
         "roles_profiles",
         "profile_builder",
+        "birthdays",
         "community_pings_manager",
         "community_tools",
         "embed_studio",
@@ -561,6 +562,10 @@ async def _route_feature(interaction: discord.Interaction, feature_key: str) -> 
             title="Profile Panel",
             replace_message=True,
         )
+
+    if key == "birthdays":
+        from .public_birthdays import open_member_birthday
+        return await open_member_birthday(interaction)
 
     if key == "community_pings_manager":
         from .public_toke import open_community_ping_setup
@@ -1589,6 +1594,10 @@ def _compact_dank_children(tree: Any) -> int:
 
     from .public_cheers_owner import cheers_group
     dank_group.add_command(cheers_group)
+    # Early birthday registration is removed by compaction: restore its
+    # canonical group before the final Discord command sync.
+    from .public_birthdays import birthday_group
+    dank_group.add_command(birthday_group)
 
     from .public_command_hub import DANK_PAYLOAD_SAFETY_LIMIT, dank_payload_size
     size = dank_payload_size(tree)
@@ -1654,7 +1663,7 @@ def install_compact_public_surface_v2(bot: Any, tree: Any) -> dict[str, Any]:
         )
 
     dank_children = sorted(str(getattr(item, "name", "")) for item in dank_group.commands)
-    expected_children = sorted(["home", "setup", "upload", "cheers"] + [name for name, _, _ in DANK_SHORTCUTS])
+    expected_children = sorted(["home", "setup", "upload", "cheers", "birthdays"] + [name for name, _, _ in DANK_SHORTCUTS])
     if dank_children != expected_children:
         raise RuntimeError(f"compact v2 /dank children mismatch: {dank_children}")
 

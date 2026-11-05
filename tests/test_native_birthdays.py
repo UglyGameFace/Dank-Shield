@@ -16,13 +16,17 @@ def utc(value: str) -> datetime:
     return datetime.fromisoformat(value.replace("Z", "+00:00"))
 
 
-def test_birthday_never_collects_a_year_and_validates_feb_29() -> None:
-    assert service.valid_date(2, 29) == (2, 29)
-    assert service.valid_date(6, 20) == (6, 20)
-    for month, day in ((0, 1), (2, 30), (4, 31), (13, 1), (1, 0)):
+def test_birthday_requires_real_past_year_and_correct_leap_births() -> None:
+    assert service.valid_birth_date(2, 29, 2004, today=date(2026, 11, 4)) == (2, 29, 2004)
+    assert service.valid_birth_date(6, 20, 2002, today=date(2026, 11, 4)) == (6, 20, 2002)
+    for month, day, year in (
+        (0, 1, 2000), (2, 30, 2000), (4, 31, 2000),
+        (13, 1, 2000), (1, 0, 2000), (2, 29, 2003),
+        (6, 20, 1899), (6, 20, 2027), (12, 31, 2026),
+    ):
         with pytest.raises(ValueError):
-            service.valid_date(month, day)
-    assert "year" not in service.MEMBERS
+            service.valid_birth_date(month, day, year, today=date(2026, 11, 4))
+    assert service.valid_date(2, 29) == (2, 29)  # Celebration rule unchanged.
 
 
 def test_feb_29_policy_only_changes_in_non_leap_years() -> None:
@@ -68,14 +72,14 @@ def test_member_record_is_private_and_opt_in_by_default(monkeypatch) -> None:
         return callback(FakeDb())
 
     monkeypatch.setattr(service, "_execute", run)
-    row = asyncio.run(service.save_member(123, 456, month=2, day=29))
+    row = asyncio.run(service.save_member(123, 456, month=2, day=29, year=2004))
     assert row["guild_id"] == "123"
     assert row["user_id"] == "456"
-    assert (row["birth_month"], row["birth_day"]) == (2, 29)
+    assert (row["birth_month"], row["birth_day"], row["birth_year"]) == (2, 29, 2004)
     assert not row["public_wishes"] and not row["birthday_role"] and not row["dm_wishes"]
-    assert "birth_year" not in row and "age" not in row
+    assert "age" not in row  # Self-reported dates are not proof of age.
     with pytest.raises(ValueError):
-        asyncio.run(service.save_member(123, 456, month=2, day=30))
+        asyncio.run(service.save_member(123, 456, month=2, day=30, year=2004))
     assert len(captured) == 1
 
 
@@ -108,7 +112,11 @@ def test_server_is_disabled_by_default_and_requires_a_channel(monkeypatch) -> No
 
 
 def test_command_and_profile_builder_integration_is_discoverable() -> None:
-    assert {command.name for command in ui.birthday_group.commands} == {"me", "setup", "upcoming"}
+    assert {command.name for command in ui.birthday_group.commands} == {"me", "set", "setup", "upcoming"}
+    root = Path(__file__).resolve().parents[1]
+    source = (root / "stoney_verify/commands_ext/public_command_surface_v2.py").read_text()
+    assert "dank_group.add_command(birthday_group)" in source
+    assert '"cheers", "birthdays"' in source
     assert "birthday" not in profiles.PROFILE_CATEGORIES  # Not a self-assignable cosmetic access role.
     assert "birthday" in profiles.PROFILE_COSMETIC_BLOCKED_NAME_PARTS
 
@@ -121,4 +129,9 @@ def test_migration_uses_service_role_and_atomic_claims() -> None:
     assert "for update skip locked" in sql.lower()
     assert "on conflict do nothing" in sql.lower()
     assert "birth_year" not in sql.lower()
-    assert "dank_birthday_role_leases" in sql.lower()
+    assert "dank_birthday_role_leases" in sql
+    extra = (root / "supabase_fresh/migrations/202611040002_dankshield_birth_year.sql").read_text()
+    assert "add column if not exists birth_year" in extra.lower()
+    assert "dank_birthday_valid_year" in extra
+    assert "not null" not in extra.lower()
+    assert "grant " not in extra.lower().lower()

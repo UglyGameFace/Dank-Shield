@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from runpy import run_path
 
 from stoney_verify.command_surface_contract import PUBLIC_DANK_CHILDREN
 
@@ -16,6 +17,14 @@ def test_retired_global_command_cleanup_guards_stay_absent() -> None:
     assert not LEGACY_EPOCH.exists()
 
 
+def test_public_audits_agree_with_final_birthday_command_surface() -> None:
+    assert "birthdays" in PUBLIC_DANK_CHILDREN
+    assert len(PUBLIC_DANK_CHILDREN) == 19
+    for script_name in ("audit_public_command_surface.py", "audit_public_command_friction.py"):
+        audit = run_path(str(ROOT / "tools" / script_name))
+        assert audit["main"]() == 0
+
+
 def test_native_command_tree_owns_sync_policy() -> None:
     assert "class DankCommandTree(app_commands.CommandTree)" in RUNTIME
     assert "DANK_SKIP_UNCHANGED_GLOBAL_SYNC" in RUNTIME
@@ -28,7 +37,7 @@ def test_native_command_tree_owns_sync_policy() -> None:
 
 def test_public_command_contract_is_canonical_and_runtime_pruning_is_disabled_by_default() -> None:
     assert {"home", "purge", "setup", "upload", "protection", "voice-safety", "cheers"} <= PUBLIC_DANK_CHILDREN
-    assert len(PUBLIC_DANK_CHILDREN) == 18
+    assert len(PUBLIC_DANK_CHILDREN) == 19
     assert "PUBLIC_DANK_CHILDREN" in RUNTIME
     assert 'DANK_DISABLE_RUNTIME_COMMAND_PRUNE", True' in COMMANDS_EXT
     assert "def _runtime_command_prune_disabled()" in COMMANDS_EXT

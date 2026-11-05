@@ -119,6 +119,13 @@ HELP_GUIDES: dict[str, HelpGuide] = {
          "Preview the member-facing panel and publish only when the choices are correct."),
         "Members can choose from the approved options made available to them.",
         "Keep staff and protected roles out of self-service cosmetic options."),
+    "birthdays": HelpGuide(
+        "Privately save a full birthday and choose which celebrations you want.",
+        ("Open Birthday Celebrations from Dank Shield Home or use /dank birthdays me.",
+         "Choose Set Birthday and enter the full date as MM-DD-YYYY. Review your saved date privately.",
+         "Turn public wishes, a temporary birthday role, or private DMs on only if you want them. Server managers can use /dank birthdays setup."),
+        "Only opted-in month/day birthdays appear in public celebrations or upcoming lists; the birth year stays private.",
+        "A self-reported birth date does not verify age or identity. Birthday storage must be configured before saving."),
     "community_pings_manager": HelpGuide(
         "Organize opt-in roles for events, sessions and server announcements.",
         ("Open Community & Pings Manager.",

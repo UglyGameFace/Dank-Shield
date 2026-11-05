@@ -33,7 +33,7 @@ PUBLIC_GLOBAL_COMMAND_COUNT = len(PUBLIC_GLOBAL_COMMAND_NAMES)
 # A small set of high-utility direct shortcuts delegates to canonical UI managers.
 PUBLIC_DANK_CHILDREN: frozenset[str] = frozenset({
     "home", "setup", "upload", "purge",
-    "cheers", "community", "design", "diagnostics", "help", "logs", "pings",
+    "birthdays", "cheers", "community", "design", "diagnostics", "help", "logs", "pings",
     "profile", "protection", "share", "stats", "status", "voice-safety", "welcome",
 })
 

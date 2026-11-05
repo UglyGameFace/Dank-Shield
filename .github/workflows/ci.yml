@@ -271,6 +271,8 @@ jobs:
           set -euo pipefail
           psql -v ON_ERROR_STOP=1 -f supabase_fresh/migrations/202611040001_dankshield_native_birthdays.sql
           psql -v ON_ERROR_STOP=1 -f supabase_fresh/migrations/202611040001_dankshield_native_birthdays.sql
+          psql -v ON_ERROR_STOP=1 -f supabase_fresh/migrations/202611040002_dankshield_birth_year.sql
+          psql -v ON_ERROR_STOP=1 -f supabase_fresh/migrations/202611040002_dankshield_birth_year.sql
           psql -v ON_ERROR_STOP=1 <<'SQL'
           do $test$
           declare
@@ -280,6 +282,28 @@ jobs:
               insert into public.dank_birthday_members
                   (guild_id, user_id, birth_month, birth_day, public_wishes)
               values ('birthday-ci', '123', 2, 29, true);
+              if not exists (
+                  select 1 from public.dank_birthday_members
+                  where guild_id='birthday-ci' and user_id='123' and birth_year is null
+              ) then
+                  raise exception 'legacy yearless birthday was not preserved';
+              end if;
+              update public.dank_birthday_members
+                  set birth_year=2004 where guild_id='birthday-ci' and user_id='123';
+              if not exists (
+                  select 1 from public.dank_birthday_members
+                  where guild_id='birthday-ci' and user_id='123'
+                    and birth_month=2 and birth_day=29 and birth_year=2004
+              ) then
+                  raise exception 'valid leap-year DOB was not stored';
+              end if;
+              begin
+                  update public.dank_birthday_members
+                     set birth_year=2003 where guild_id='birthday-ci' and user_id='123';
+                  raise exception 'non-leap February 29 was accepted';
+              exception when check_violation then
+                  null;
+              end;
               begin
                   insert into public.dank_birthday_members
                       (guild_id, user_id, birth_month, birth_day)

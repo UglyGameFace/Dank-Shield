@@ -27,6 +27,25 @@ def valid_date(month: int, day: int) -> tuple[int, int]:
     return int(month), int(day)
 
 
+def valid_birth_date(
+    month: int, day: int, year: int, *, today: date | None = None,
+) -> tuple[int, int, int]:
+    """Require a genuine past birthday. The year is never publicly exposed."""
+    current = today or datetime.now(timezone.utc).date()
+    try:
+        month, day, year = int(month), int(day), int(year)
+        if not 1900 <= year <= current.year:
+            raise ValueError("Birth year is outside the supported range.")
+        birthday = date(year, month, day)
+        if birthday > current:
+            raise ValueError("Birthday cannot be in the future.")
+    except (ValueError, TypeError, OverflowError) as exc:
+        raise ValueError(
+            "Enter a real past birth date as MM-DD-YYYY (for example 06-20-2002)."
+        ) from exc
+    return month, day, year
+
+
 def valid_zone(value: str) -> str:
     name = str(value or "").strip()
     if not name or len(name) > 90:
@@ -114,13 +133,13 @@ async def get_member(guild_id: int, user_id: int) -> dict[str, Any] | None:
 
 
 async def save_member(
-    guild_id: int, user_id: int, *, month: int, day: int,
+    guild_id: int, user_id: int, *, month: int, day: int, year: int,
     public_wishes: bool = False, birthday_role: bool = False, dm_wishes: bool = False,
 ) -> dict[str, Any]:
-    month, day = valid_date(month, day)
+    month, day, year = valid_birth_date(month, day, year)
     payload = {
         "guild_id": _ident(guild_id), "user_id": _ident(user_id),
-        "birth_month": month, "birth_day": day,
+        "birth_month": month, "birth_day": day, "birth_year": year,
         "public_wishes": bool(public_wishes), "birthday_role": bool(birthday_role),
         "dm_wishes": bool(dm_wishes), "updated_at": datetime.now(timezone.utc).isoformat(),
     }

@@ -18,7 +18,7 @@ ROOT = Path(__file__).resolve().parents[1]
 def test_all_registered_features_have_actionable_help_not_just_navigation():
     assert not HELP_GUIDE_ERRORS
     assert set(HELP_GUIDES) == {feature.key for feature in navigation_registry.FEATURES}
-    assert len(HELP_GUIDES) == 36
+    assert len(HELP_GUIDES) == 37
     for feature in navigation_registry.FEATURES:
         guide = HELP_GUIDES[feature.key]
         assert len(guide.steps) >= 2
@@ -34,6 +34,23 @@ def test_all_registered_features_have_actionable_help_not_just_navigation():
             assert "Staff" in embed.footer.text
         if guide.caution:
             assert "**Important**" in embed.description
+
+
+def test_birthday_help_opens_the_existing_private_member_panel(monkeypatch):
+    from stoney_verify.commands_ext import public_birthdays
+
+    feature = navigation_registry.feature_by_key("birthdays")
+    assert feature is not None and not feature.manager_only
+    assert "year stays private" in HELP_GUIDES["birthdays"].outcome
+    visited = []
+
+    async def fake_open(interaction):
+        visited.append(interaction)
+
+    monkeypatch.setattr(public_birthdays, "open_member_birthday", fake_open)
+    interaction = SimpleNamespace(user=SimpleNamespace(id=42))
+    asyncio.run(nav._route_feature(interaction, "birthdays"))
+    assert visited == [interaction]
 
 
 def test_help_entry_is_readable_and_explains_its_guides():
