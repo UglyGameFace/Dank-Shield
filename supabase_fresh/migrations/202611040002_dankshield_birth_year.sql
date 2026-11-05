@@ -13,7 +13,13 @@ begin
     ) then
         alter table public.dank_birthday_members
             add constraint dank_birthday_valid_year
-            check (birth_year is null or birth_year between 1900 and 2100);
+            check (
+                birth_year is null
+                or (birth_year between 1900 and 2100
+                    and birth_day <= extract(day from (
+                        make_date(birth_year, birth_month, 1) + interval '1 month - 1 day'
+                    )))
+            );
     end if;
 end;
 $$;
