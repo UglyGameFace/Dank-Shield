@@ -152,5 +152,7 @@ async def open_member_lifecycle_setup(interaction: discord.Interaction) -> None:
     guild = interaction.guild
     if guild is None:
         return await _send_ephemeral(interaction, "This setup is only available inside a server.")
+    if not interaction.response.is_done():
+        await interaction.response.defer(ephemeral=True)
     cfg = await get_guild_config(int(guild.id), refresh=True)
-    await _send_ephemeral(interaction, embed=_summary(guild, cfg), view=MemberLifecycleSetupView(), allowed_mentions=discord.AllowedMentions.none())
+    await interaction.followup.send(embed=_summary(guild, cfg), view=MemberLifecycleSetupView(), ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
