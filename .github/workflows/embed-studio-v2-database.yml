@@ -369,7 +369,7 @@ jobs:
           $tests$;
           SQL
 
-      - name: Verify recurring campaigns: schema, DST, shard claims, quota and RLS
+      - name: Verify recurring campaigns schema, DST, shard claims, quota and RLS
         run: |
           psql -v ON_ERROR_STOP=1 -f supabase_fresh/migrations/202611050001_dankshield_embed_studio_recurring_campaigns.sql
           psql -v ON_ERROR_STOP=1 -f supabase_fresh/migrations/202611050001_dankshield_embed_studio_recurring_campaigns.sql
