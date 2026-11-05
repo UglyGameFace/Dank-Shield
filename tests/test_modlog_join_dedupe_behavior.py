@@ -139,7 +139,7 @@ def test_router_join_log_is_independent_of_welcome_card_gate(
     assert join_log_calls == [(202, 333)]
 
 
-def test_router_join_log_still_records_when_welcome_card_uses_same_channel(
+def test_router_join_log_skips_when_welcome_card_uses_same_channel(
     monkeypatch,
 ) -> None:
     guild = SimpleNamespace(id=778)
@@ -178,7 +178,7 @@ def test_router_join_log_still_records_when_welcome_card_uses_same_channel(
 
     asyncio.run(router._join_listener(member))
 
-    assert join_log_calls == [(303, 444)]
+    assert join_log_calls == []
 
 
 def test_router_join_log_still_sends_when_welcome_uses_different_channel(
