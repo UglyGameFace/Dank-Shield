@@ -71,6 +71,38 @@ def test_threads_shortlinks_require_verified_target_metadata():
     ) == ""
 
 
+def test_public_threads_shortlink_uses_bounded_crawler_metadata(monkeypatch):
+    class Content:
+        async def read(self, limit):
+            assert limit == 131073
+            return b'<meta property="og:url" content="https://threads.com/@creator/post/REALCODE">'
+
+    class Response:
+        content = Content()
+        def release(self):
+            pass
+
+    class Session:
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *_args):
+            return None
+
+    async def fake_public_get(_session, url, **kwargs):
+        assert url == "https://threads.net/share/shr123/"
+        assert "Googlebot" in kwargs["headers"]["User-Agent"]
+        assert kwargs["max_redirects"] == 4
+        return Response(), url
+
+    monkeypatch.setattr(media.aiohttp, "ClientSession", lambda **kwargs: Session())
+    monkeypatch.setattr(media, "public_tcp_connector", lambda **kwargs: None)
+    monkeypatch.setattr(media, "public_get", fake_public_get)
+    result = asyncio.run(media._expand_short_share_url(
+        "https://threads.net/share/shr123/"
+    ))
+    assert result == "https://www.threads.com/@creator/post/REALCODE"
+
+
 def test_videos_only_never_assumes_any_threads_post_contains_video(monkeypatch):
     msg = SimpleNamespace(
         content="https://threads.com/@creator/post/POST123",
