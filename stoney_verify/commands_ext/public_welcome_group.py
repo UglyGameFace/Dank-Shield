@@ -204,9 +204,9 @@ async def open_join_leave_announcements(interaction: discord.Interaction) -> Non
     if not await _require_setup_permission(interaction):
         return
     try:
-        from stoney_verify import welcome_event_services
+        from stoney_verify.member_lifecycle_setup_center import open_member_lifecycle_setup
 
-        await welcome_event_services.open_welcome_events_center(interaction)
+        await open_member_lifecycle_setup(interaction)
     except Exception as exc:
         await _send(interaction, f"❌ Could not open Join & Leave Announcements: `{type(exc).__name__}: {exc}`")
 
@@ -246,7 +246,7 @@ async def open_welcome_health(interaction: discord.Interaction) -> None:
             else:
                 lines.append("✅ Bot can post/update the welcome message.")
     lines.append("")
-    lines.append("ℹ️ Join and leave announcements are configured separately with `/dank welcome join-leave`.")
+    lines.append("ℹ️ Member welcome cards and activity logs are configured together with `/dank welcome join-leave`.")
     await interaction.followup.send("\n".join(lines), ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
 
 
@@ -443,7 +443,7 @@ async def welcome_card_enabled(
     )
 
 
-@welcome_group.command(name="join-leave", description="Open the separate Join & Leave Announcements setup.")
+@welcome_group.command(name="join-leave", description="Open unified Member Welcome & Activity setup.")
 async def welcome_join_leave(interaction: discord.Interaction) -> None:
     await open_join_leave_announcements(interaction)
 
