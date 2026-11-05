@@ -132,19 +132,22 @@ grant execute on function public.dank_embed_studio_claim_campaigns(integer,integ
 -- Lock per guild to prevent concurrent writers bypassing the quota.
 create or replace function public.dank_embed_studio_campaign_quota()
 returns trigger language plpgsql security invoker set search_path=public,pg_temp
-as $
+as $campaign_quota$
 begin
-    if new.enabled and (tg_op='INSERT' or not old.enabled or
-                        new.guild_id is distinct from old.guild_id) then
+    -- OLD is not populated for INSERT; keep the INSERT path separate.
+    if tg_op='INSERT' then
+        if not new.enabled then return new; end if;
+    elsif not new.enabled or (old.enabled and new.guild_id=old.guild_id) then
+        return new;
+    end if;
         perform pg_advisory_xact_lock(hashtextextended('studio-campaign:'||new.guild_id,0));
         if (select count(*) from public.dank_embed_studio_campaigns
             where guild_id=new.guild_id and enabled and id<>new.id) >= 20 then
             raise exception 'At most 20 recurring campaigns per server';
         end if;
-    end if;
     return new;
 end;
-$;
+$campaign_quota$;
 drop trigger if exists dank_embed_studio_campaign_quota_trigger
     on public.dank_embed_studio_campaigns;
 create trigger dank_embed_studio_campaign_quota_trigger
