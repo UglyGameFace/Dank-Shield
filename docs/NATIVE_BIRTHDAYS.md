@@ -1,13 +1,16 @@
 # Native Birthdays in Dank Shield
 
 Birthdays are an optional **member celebration**, not an age-verification method.
-No birth year, age, identity document, or proof-of-age claim is collected.
+Members privately enter a full birth date including the year. The year is never
+included in public announcements or the upcoming list. A self-reported date
+is **not** proof of age or a Discord age-verification mechanism.
 
 ## Member flow
 
-- Open the existing profile panel and press **My Birthday**, or use
-  `/dank profile birthday` or `/dank birthdays me`.
-- Enter a calendar date as `MM-DD`. All sharing options default **off**.
+- Open the existing Profile Builder and press **My Birthday**, open
+  `/dank birthdays me`, or use `/dank birthdays set` for the private date modal.
+- Enter your full birth date as `MM-DD-YYYY` (for example `06-20-2002`).
+  Valid calendar dates and past years are required. All sharing options default **off**.
 - Individually opt into public wishes, a temporary birthday role, and private DMs.
 - Use **Remove My Birthday** to stop future celebrations and delete the saved date.
   An active role lease is revoked immediately when Discord permissions permit it;
@@ -20,7 +23,8 @@ public birthday wishes enabled.
 ## Server manager flow
 
 - Open the existing Profile Builder and press **Birthday Setup**, or use
-  `/dank birthdays setup`.
+  `/dank birthdays setup`. Members can run `/dank birthdays upcoming` to see
+  only opted-in month/day celebrations, never birth years.
 - Choose the announcement channel, a timezone and daily celebration hour (default 09:00),
   optionally create a permissionless `🎂 Birthday` role or select a safe existing role.
 - Choose whether February 29 birthdays fall on February 28 or March 1 in nonleap years.
@@ -34,13 +38,15 @@ temporary role leases with an expiry at the *next local midnight*.
 ## Storage and deployment
 
 Apply `supabase_fresh/migrations/202611040001_dankshield_native_birthdays.sql`
+then `supabase_fresh/migrations/202611040002_dankshield_birth_year.sql`
 to the **dedicated** Dank Shield Supabase project `viamriafkbqhquvrsnua`
-through its reviewed migration process, then verify service-role access, RLS, claim RPCs,
-and index readback. This PR does **not** apply migrations or change credentials.
+through its reviewed migration process. Verify service-role access, RLS, claim RPCs,
+and index readback. Neither migration runs automatically just because code is merged. This PR does **not** apply migrations or change credentials.
 
 The schema has four service-role-only tables:
 
-- `dank_birthday_members`: yearless, private per-guild dates and explicit opt-ins
+- `dank_birthday_members`: private per-guild full birth dates and explicit opt-ins;
+  pre-existing yearless records stay intact until members enter their year.
 - `dank_birthday_guild_settings`: server setup and indexed next-due celebration slot
 - `dank_birthday_deliveries`: atomic once-per-date per-action reservations
 - `dank_birthday_role_leases`: durable midnight removal and bounded retry claims
