@@ -401,12 +401,12 @@ jobs:
               end if;
               insert into public.dank_embed_studio_campaigns
                   (guild_id,channel_id,scheduled_by,project,frequency,
-                   timezone,local_clock,next_fire_at,max_occurrences)
+                   timezone,local_clock,next_fire_at,max_occurrences,weekday)
               values
                   ('123','456','789','{}','daily','UTC','16:20',
-                    now()-interval '1 minute',3),
+                    now()-interval '1 minute',3,null),
                   ('4194304','456','789','{}','weekly','UTC','16:20',
-                    now()-interval '1 minute',2);
+                    now()-interval '1 minute',2,7);
               select count(*) into foreign_count from
                   public.dank_embed_studio_claim_campaigns(4,2,array[0])
                   where guild_id='4194304';
