@@ -391,7 +391,12 @@ def media_url_identity(value: str) -> str:
             return f"instagram:{match.group(1)}"
 
     if provider == "threads":
-        match = _THREADS_POST_PATH_RE.fullmatch(str(parsed.path or ""))
+        path = str(parsed.path or "")
+        match = _THREADS_POST_PATH_RE.fullmatch(path)
+        if match:
+            return f"threads:{match.group(1)}"
+        # /t/ contains the actual post shortcode, unlike /share/ tokens.
+        match = re.fullmatch(r"/t/([A-Za-z0-9_-]+)/?", path, re.IGNORECASE)
         if match:
             return f"threads:{match.group(1)}"
 
@@ -1132,9 +1137,13 @@ async def resolve_media_url(value: str, *, max_bytes: int) -> MediaResolution:
         if expanded:
             canonical = expanded
             identity = media_url_identity(expanded)
-        elif provider == "threads":
-            # A shortlink with no verified target MUST NOT extract an unrelated
-            # recommendation from the page or be treated as a video.
+        elif provider == "threads" and not re.fullmatch(
+            r"/t/[A-Za-z0-9_-]+/?", str(urlsplit(canonical).path or ""), re.IGNORECASE
+        ):
+            # /share/ tokens do not identify a post. Without an explicit target,
+            # the extractor could accidentally return an unrelated recommendation.
+            # /t/<code>, however, identifies the exact shortcode and the plugin
+            # enforces that code even when the redirect is unavailable.
             return MediaResolution(
                 source_url=source, canonical_url=canonical, identity=identity,
                 provider=provider, delivery="link", reason="short_share_unresolved",
