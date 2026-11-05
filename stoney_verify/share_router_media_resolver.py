@@ -501,7 +501,10 @@ async def _expand_short_share_url(value: str) -> str:
                 session,
                 value,
                 max_redirects=4,
-                headers={"User-Agent": "Mozilla/5.0"},
+                headers={"User-Agent": (
+                    "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)"
+                    if provider == "threads" else "Mozilla/5.0"
+                )},
             )
             try:
                 canonical = canonicalize_media_url(final_url)
