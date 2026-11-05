@@ -10,6 +10,11 @@ on:
       - 'supabase_fresh/migrations/202610200032_dankshield_embed_studio_forms.sql'
       - 'supabase_fresh/migrations/202610200033_dankshield_embed_studio_live_text.sql'
       - 'supabase_fresh/migrations/202610200034_dankshield_embed_studio_asset_budgets.sql'
+      - 'supabase_fresh/migrations/202611050001_dankshield_embed_studio_recurring_campaigns.sql'
+      - 'stoney_verify/embed_studio_campaigns.py'
+      - 'stoney_verify/embed_studio_campaign_ui.py'
+      - 'stoney_verify/embed_studio_schedule_runtime.py'
+      - 'tests/test_embed_studio_recurring_campaigns.py'
       - 'stoney_verify/embed_studio_storage_v2.py'
       - 'tests/test_embed_studio_storage_v2.py'
       - '.github/workflows/embed-studio-v2-database.yml'
@@ -362,4 +367,79 @@ jobs:
               end if;
           end;
           $tests$;
+          SQL
+
+      - name: Verify recurring campaigns: schema, DST, shard claims, quota and RLS
+        run: |
+          psql -v ON_ERROR_STOP=1 -f supabase_fresh/migrations/202611050001_dankshield_embed_studio_recurring_campaigns.sql
+          psql -v ON_ERROR_STOP=1 -f supabase_fresh/migrations/202611050001_dankshield_embed_studio_recurring_campaigns.sql
+          psql -v ON_ERROR_STOP=1 <<'SQL'
+          do $campaigns$
+          declare
+              foreign_count integer;
+              first_count integer;
+              dup_count integer;
+              other_count integer;
+              invalid_refused boolean := false;
+          begin
+              if not (select relrowsecurity from pg_class
+                      where oid='public.dank_embed_studio_campaigns'::regclass) then
+                  raise exception 'Recurring campaign table must use RLS';
+              end if;
+              if has_table_privilege('anon','public.dank_embed_studio_campaigns','select')
+                 or has_function_privilege('authenticated',
+                     'public.dank_embed_studio_claim_campaigns(integer,integer,integer[])','execute')
+                 or not has_function_privilege('service_role',
+                     'public.dank_embed_studio_claim_campaigns(integer,integer,integer[])','execute') then
+                  raise exception 'Campaign permissions are not service-role only';
+              end if;
+              if public.dank_embed_studio_next_campaign_fire(
+                      'America/New_York','weekly',7,'02:30'::time,
+                      '2026-03-07 12:00:00+00'::timestamptz)
+                   <> '2026-03-15 06:30:00+00'::timestamptz then
+                  raise exception 'DST gap scheduling did not skip to the following week';
+              end if;
+              insert into public.dank_embed_studio_campaigns
+                  (guild_id,channel_id,scheduled_by,project,frequency,
+                   timezone,local_clock,next_fire_at,max_occurrences)
+              values
+                  ('123','456','789','{}','daily','UTC','16:20',
+                    now()-interval '1 minute',3),
+                  ('4194304','456','789','{}','weekly','UTC','16:20',
+                    now()-interval '1 minute',2);
+              select count(*) into foreign_count from
+                  public.dank_embed_studio_claim_campaigns(4,2,array[0])
+                  where guild_id='4194304';
+              select count(*) into first_count from
+                  public.dank_embed_studio_campaigns
+                  where guild_id='123' and claimed_count=1 and last_claim_id is not null
+                    and next_fire_at>now();
+              select count(*) into dup_count from
+                  public.dank_embed_studio_claim_campaigns(4,2,array[0]);
+              select count(*) into other_count from
+                  public.dank_embed_studio_claim_campaigns(4,2,array[1]);
+              if foreign_count<>0 or first_count<>1 or dup_count<>0 or other_count<>1 then
+                  raise exception 'Campaign due claims broke shard ownership or at-most-once semantics';
+              end if;
+              insert into public.dank_embed_studio_campaigns
+                  (guild_id,channel_id,scheduled_by,project,frequency,
+                   timezone,local_clock,next_fire_at,max_occurrences)
+              select '999','456','789','{}','daily','UTC','04:20',
+                     now()+interval '1 day',1
+              from generate_series(1,20);
+              begin
+                  insert into public.dank_embed_studio_campaigns
+                      (guild_id,channel_id,scheduled_by,project,frequency,
+                       timezone,local_clock,next_fire_at,max_occurrences)
+                  values('999','456','789','{}','daily','UTC','04:20',
+                         now()+interval '1 day',1);
+              exception when raise_exception then
+                  invalid_refused := true;
+              end;
+              if not invalid_refused or (select count(*) from
+                  public.dank_embed_studio_campaigns where guild_id='999')<>20 then
+                  raise exception 'Per-server campaign limit was bypassed';
+              end if;
+          end;
+          $campaigns$;
           SQL
