@@ -294,6 +294,11 @@ class StudioDesignTools(_StudioView):
     async def theme(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
         await _themes(interaction, self.session)
 
+    @discord.ui.button(label="Recurring Campaigns", emoji="🔁", style=discord.ButtonStyle.secondary, row=1)
+    async def campaigns(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        from .embed_studio_campaign_ui import recurring_campaigns
+        await recurring_campaigns(interaction, self.session)
+
     @discord.ui.button(label="Back to My Post", emoji="◀️", style=discord.ButtonStyle.secondary, row=2)
     async def back(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
         await _home(interaction, self.session)
@@ -2504,6 +2509,12 @@ class StudioReviewView(_StudioView):
         self.preview_channel_id = session.channel_id
         self.preview_post_key = session.post_key
         from .embed_studio_schedules import schedules_enabled
+        from .embed_studio_campaigns import campaigns_enabled
+        self.repeat_post.disabled = (
+            not campaigns_enabled() or bool(session.post_key)
+            or bool(session.project.get("role_actions"))
+            or bool(session.project.get("form"))
+        )
         self.schedule_later.disabled = (
             not schedules_enabled() or bool(session.post_key)
             or bool(session.project.get("role_actions"))
@@ -2548,6 +2559,25 @@ class StudioReviewView(_StudioView):
         if self.session.project.get("form"):
             return await _say(interaction, "Interactive forms require immediate moderator publishing.")
         await interaction.response.send_modal(StudioScheduleModal(
+            self.session, preview=self.preview_project,
+            channel_id=self.preview_channel_id, post_key=self.preview_post_key,
+            review=self,
+        ))
+
+    @discord.ui.button(label="Repeat Daily/Weekly", emoji="🔁", style=discord.ButtonStyle.secondary, row=0)
+    async def repeat_post(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        from .embed_studio_campaigns import campaigns_enabled
+        if not campaigns_enabled():
+            return await _say(interaction, "Recurring campaigns have not been enabled.")
+        if (self.sent or self.session.project != self.preview_project
+                or self.session.channel_id != self.preview_channel_id
+                or self.session.post_key != self.preview_post_key
+                or self.session.post_key):
+            return await _say(interaction, "Preview changed or is already used. Reopen Preview.")
+        if self.session.project.get("role_actions") or self.session.project.get("form"):
+            return await _say(interaction, "Forms and role controls cannot repeat unattended.")
+        from .embed_studio_campaign_ui import StudioCampaignModal
+        await interaction.response.send_modal(StudioCampaignModal(
             self.session, preview=self.preview_project,
             channel_id=self.preview_channel_id, post_key=self.preview_post_key,
             review=self,
