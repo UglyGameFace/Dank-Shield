@@ -498,11 +498,12 @@ RECENT_UPDATES: tuple[RecentFeatureUpdate, ...] = (
         "or search for another channel. Existing permission checks still apply.", "2026-10-25",
     ),
     RecentFeatureUpdate(
-        "embed_studio", "Post Builder supports optional repeat campaigns",
-        "Make announcements in 4 steps. When the owner's separately gated recurring "
-        "scheduler is enabled, staff can create, list or stop daily and weekly "
-        "announcements from the private preview. Existing scheduled posts, media "
-        "storage and JSON backups stay available.", "2026-11-05",
+        "embed_studio", "Post Builder is easier for moderators",
+        "Make an announcement in 4 steps with simple menus. Saved Pictures shows "
+        "image storage usage when uploads are enabled, and JSON backups stay available. "
+        "Optional daily and weekly recurring campaigns have separate owner-gated "
+        "activation; staff may create, view or stop them from private menus only "
+        "when the database migration and scheduler are enabled.", "2026-10-24",
     ),
     RecentFeatureUpdate(
         "share_router", "Share videos from regular channels",
