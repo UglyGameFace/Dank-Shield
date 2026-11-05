@@ -182,8 +182,9 @@ FEATURES: tuple[NavigationFeature, ...] = (
         "Welcome, Join & Exit",
         "👋",
         "access",
-        "Configure join/leave messages, cards, channels, and onboarding presentation.",
-        ("welcome", "join", "leave", "exit", "welcome card", "exit card", "join card"),
+        "Configure welcome and goodbye cards, static start-here messages, and join/leave operational logs.",
+        ("welcome", "join", "leave", "exit", "welcome card", "exit card", "join card",
+         "member welcome activity", "join leave logs", "operational log", "static welcome"),
         True,
     ),
     NavigationFeature(
