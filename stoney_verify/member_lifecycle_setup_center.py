@@ -39,8 +39,8 @@ def _summary(guild: discord.Guild, cfg: object) -> discord.Embed:
     embed.add_field(
         name="Delivery destinations",
         value=(
-            f"🎉 Welcome: {_channel(guild, join_id)}\\n"
-            f"👋 Goodbye: {_channel(guild, exit_id)}\\n"
+            f"🎉 Welcome: {_channel(guild, join_id)}\n"
+            f"👋 Goodbye: {_channel(guild, exit_id)}\n"
             f"📋 Operational log: {_channel(guild, log_id)}"
         ),
         inline=False,
