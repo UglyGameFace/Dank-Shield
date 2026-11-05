@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from runpy import run_path
 
 from stoney_verify.command_surface_contract import PUBLIC_DANK_CHILDREN
 
@@ -14,6 +15,14 @@ LEGACY_EPOCH = ROOT / "stoney_verify/startup_guards/ticket_panel_command_epoch_g
 def test_retired_global_command_cleanup_guards_stay_absent() -> None:
     assert not LEGACY_CLEANUP.exists()
     assert not LEGACY_EPOCH.exists()
+
+
+def test_public_audits_agree_with_final_birthday_command_surface() -> None:
+    assert "birthdays" in PUBLIC_DANK_CHILDREN
+    assert len(PUBLIC_DANK_CHILDREN) == 19
+    for script_name in ("audit_public_command_surface.py", "audit_public_command_friction.py"):
+        audit = run_path(str(ROOT / "tools" / script_name))
+        assert audit["main"]() == 0
 
 
 def test_native_command_tree_owns_sync_policy() -> None:
