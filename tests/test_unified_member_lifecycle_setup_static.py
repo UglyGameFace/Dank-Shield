@@ -5,12 +5,15 @@ center = (ROOT / "stoney_verify/member_lifecycle_setup_center.py").read_text()
 welcome = (ROOT / "stoney_verify/commands_ext/public_welcome_group.py").read_text()
 logs = (ROOT / "stoney_verify/commands_ext/public_setup_logs.py").read_text()
 router = (ROOT / "stoney_verify/startup_guards/member_lifecycle_router_guard.py").read_text()
+setup = (ROOT / "stoney_verify/commands_ext/public_setup_recommend.py").read_text()
 
 
 def test_single_existing_entrypoint() -> None:
     assert 'await open_member_lifecycle_setup(interaction)' in welcome
     assert 'name="join-leave"' in welcome
     assert "open_member_lifecycle_setup" in center
+    assert "await open_member_lifecycle_setup(interaction)" in setup
+    assert "await welcome_setup_ui.open_welcome_setup(interaction)" not in setup
 
 
 def test_canonical_log_aliases_preserved() -> None:
