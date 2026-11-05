@@ -39,6 +39,7 @@ The ninth global application command is the user context menu **View Dank Profil
 The public `/dank` group exposes these direct shortcuts only; deeper actions live in their feature managers:
 
 ```text
+birthdays
 cheers
 community
 design
