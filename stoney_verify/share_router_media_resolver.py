@@ -11,6 +11,7 @@ existing Share Router runtime remains the single route/upload owner.
 """
 
 import asyncio
+from html.parser import HTMLParser
 import os
 import re
 import shutil
@@ -50,6 +51,8 @@ _TRACKING_QUERY_KEYS = {
 _X_STATUS_PATH_RE = re.compile(r"^/([^/]+)/status/(\d+)(?:/.*)?$", re.IGNORECASE)
 _TIKTOK_VIDEO_RE = re.compile(r"/video/(\d+)(?:/|$)", re.IGNORECASE)
 _INSTAGRAM_MEDIA_RE = re.compile(r"/(?:reel|reels|p|tv)/([^/?#]+)", re.IGNORECASE)
+_THREADS_POST_PATH_RE = re.compile(r"^/@[A-Za-z0-9._]+/post/([A-Za-z0-9_-]+)(?:/media)?/?$", re.IGNORECASE)
+_THREADS_SHORT_PATH_RE = re.compile(r"^/(?:t|share)/[A-Za-z0-9_-]+/?$", re.IGNORECASE)
 _REDDIT_POST_RE = re.compile(r"/comments/([^/?#]+)", re.IGNORECASE)
 
 
@@ -68,7 +71,7 @@ def _classify_extraction_failure(error: BaseException) -> str:
     # size, a blocked DM or an allegedly unconfigured HTTPS host.
     if "cannot parse data" in detail:
         return "provider_extractor_incompatible"
-    if "no video formats found" in detail:
+    if "no video formats found" in detail or "no downloadable video" in detail or "no videos (images" in detail:
         return "provider_no_downloadable_formats"
     if "not a bot" in detail or "bot detection" in detail or "captcha" in detail:
         return "provider_bot_verification"
@@ -133,6 +136,7 @@ PROVIDERS: tuple[MediaProvider, ...] = (
     MediaProvider("x", "X / Twitter", ("x.com", "twitter.com")),
     MediaProvider("tiktok", "TikTok", ("tiktok.com", "vm.tiktok.com", "vt.tiktok.com")),
     MediaProvider("instagram", "Instagram / Reels", ("instagram.com",)),
+    MediaProvider("threads", "Threads", ("threads.com", "threads.net")),
     MediaProvider("youtube", "YouTube / Shorts", ("youtube.com", "youtu.be")),
     MediaProvider("reddit", "Reddit", ("reddit.com", "redd.it", "v.redd.it")),
     MediaProvider("twitch", "Twitch", ("twitch.tv", "clips.twitch.tv")),
@@ -277,6 +281,17 @@ def provider_for_url(value: str) -> str:
     return ""
 
 
+def is_threads_post_url(value: str) -> bool:
+    """Only a Threads post or share permalink, never a profile/feed URL."""
+    if provider_for_url(value) != "threads":
+        return False
+    parsed = _parsed_http_url(value)
+    return bool(parsed and (
+        _THREADS_POST_PATH_RE.fullmatch(parsed.path or "")
+        or _THREADS_SHORT_PATH_RE.fullmatch(parsed.path or "")
+    ))
+
+
 def provider_label(provider: str) -> str:
     key = _safe_str(provider).lower()
     if key == "direct":
@@ -329,6 +344,10 @@ def canonicalize_media_url(value: str) -> str:
     netloc = host if not port else f"{host}:{port}"
     path = str(parsed.path or "") or "/"
 
+    if provider == "threads":
+        # Older .net links and newer .com links refer to the same post.
+        netloc = "www.threads.com"
+
     if provider == "x":
         match = _X_STATUS_PATH_RE.match(path)
         if match:
@@ -370,6 +389,11 @@ def media_url_identity(value: str) -> str:
         match = _INSTAGRAM_MEDIA_RE.search(str(parsed.path or ""))
         if match:
             return f"instagram:{match.group(1)}"
+
+    if provider == "threads":
+        match = _THREADS_POST_PATH_RE.fullmatch(str(parsed.path or ""))
+        if match:
+            return f"threads:{match.group(1)}"
 
     if provider == "reddit":
         match = _REDDIT_POST_RE.search(str(parsed.path or ""))
@@ -421,6 +445,40 @@ def _short_share_provider(value: str) -> str:
     elif provider == "pinterest":
         if host == "pin.it" and _SHARE_TOKEN_PATH_RE.fullmatch(path):
             return provider
+    elif provider == "threads":
+        if _THREADS_SHORT_PATH_RE.fullmatch(path):
+            return provider
+    return ""
+
+
+class _ThreadsPostMetadata(HTMLParser):
+    """Only use an explicitly advertised post permalink, not embedded media."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.canonical = ""
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag != "meta":
+            return
+        fields = dict(attrs)
+        if fields.get("property", "").lower() == "og:url":
+            self.canonical = fields.get("content") or ""
+
+
+def _threads_post_from_html(payload: bytes) -> str:
+    if len(payload) > 131072:
+        return ""
+    parser = _ThreadsPostMetadata()
+    try:
+        parser.feed(payload.decode("utf-8", errors="replace"))
+    except (TypeError, ValueError):
+        return ""
+    canonical = canonicalize_media_url(parser.canonical)
+    parsed = _parsed_http_url(canonical)
+    if (parsed and provider_for_url(canonical) == "threads"
+            and _THREADS_POST_PATH_RE.fullmatch(parsed.path or "")):
+        return canonical
     return ""
 
 
@@ -447,6 +505,11 @@ async def _expand_short_share_url(value: str) -> str:
             )
             try:
                 canonical = canonicalize_media_url(final_url)
+                if provider == "threads" and _short_share_provider(canonical):
+                    # Threads /share and /t may expose the canonical post only
+                    # in og:url. Read at most 128 KiB of the public response.
+                    payload = await response.content.read(131073)
+                    canonical = _threads_post_from_html(payload) or canonical
                 # Accept only a supported, non-short permalink from the same
                 # provider. No off-provider or nested shortlink extraction.
                 if (
@@ -454,6 +517,10 @@ async def _expand_short_share_url(value: str) -> str:
                     and provider_for_url(canonical) == provider
                     and not _short_share_provider(canonical)
                 ):
+                    if provider == "threads" and not _THREADS_POST_PATH_RE.fullmatch(
+                        str(_parsed_http_url(canonical).path or "")
+                    ):
+                        return ""
                     if provider == "tiktok":
                         parsed = _parsed_http_url(canonical)
                         if parsed is None or not _TIKTOK_VIDEO_RE.search(str(parsed.path or "")):
@@ -1037,6 +1104,12 @@ async def resolve_media_url(value: str, *, max_bytes: int) -> MediaResolution:
             reason="unsupported_provider",
         )
 
+    if provider == "threads" and not is_threads_post_url(canonical):
+        return MediaResolution(
+            source_url=source, canonical_url=canonical, identity=identity,
+            provider=provider, delivery="link", reason="unsupported_post_url",
+        )
+
     if not provider_allowed(provider):
         _record(provider, "fallback", reason="provider_disabled")
         return MediaResolution(
@@ -1056,6 +1129,13 @@ async def resolve_media_url(value: str, *, max_bytes: int) -> MediaResolution:
         if expanded:
             canonical = expanded
             identity = media_url_identity(expanded)
+        elif provider == "threads":
+            # A shortlink with no verified target MUST NOT extract an unrelated
+            # recommendation from the page or be treated as a video.
+            return MediaResolution(
+                source_url=source, canonical_url=canonical, identity=identity,
+                provider=provider, delivery="link", reason="short_share_unresolved",
+            )
 
     if provider == "direct":
         if is_safe_media_download_url(canonical):
