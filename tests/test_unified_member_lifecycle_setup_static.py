@@ -45,3 +45,10 @@ if __name__ == "__main__":
     ):
         test()
         print("PASS", test.__name__)
+
+
+def test_lifecycle_database_paths_acknowledge_before_io() -> None:
+    # Slash entry, card navigation, log selection, and health all touch config.
+    assert center.count("await interaction.response.defer(") >= 4
+    assert "await interaction.edit_original_response(" in center
+    assert "await interaction.response.edit_message(embed=_summary(guild, cfg)" not in center
