@@ -96,13 +96,14 @@ def test_canonical_runtime_owns_public_join_output() -> None:
     assert "welcome_card_file(image_card_member(member), cfg)" in CARD_RUNTIME
 
 
-def test_operational_log_is_not_suppressed_by_card_studios() -> None:
+def test_operational_log_suppresses_only_successful_same_channel_cards() -> None:
     assert "member join event duplicate suppressed" not in ROUTER
     assert "member leave event duplicate suppressed" not in ROUTER
     assert "await _send_join_log_event(member, join_log_channel)" in ROUTER
     assert "await _send_leave_log_event(member, leave_log_channel)" in ROUTER
-    assert "operational join/leave log is an audit-style event stream" in ROUTER
-    assert "operational join/leave log is separate from Exit Card Studio" in ROUTER
+    assert "card already delivered to same channel" in ROUTER
+    assert "_safe_int(getattr(delivery, \"channel_id\", None)) == int(join_log_channel.id)" in ROUTER
+    assert "_safe_int(getattr(delivery, \"channel_id\", None)) == int(leave_log_channel.id)" in ROUTER
 
 
 def test_staff_join_audit_and_canonical_public_exit_stay_separate() -> None:
@@ -127,7 +128,7 @@ if __name__ == "__main__":
         test_setup_logs_uses_explicit_leave_route,
         test_runtime_hardening_is_loaded_but_does_not_override_router,
         test_canonical_runtime_owns_public_join_output,
-        test_operational_log_is_not_suppressed_by_card_studios,
+        test_operational_log_suppresses_only_successful_same_channel_cards,
         test_staff_join_audit_and_canonical_public_exit_stay_separate,
     ):
         test()
