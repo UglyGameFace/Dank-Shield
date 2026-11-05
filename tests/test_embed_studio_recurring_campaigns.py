@@ -51,6 +51,7 @@ def test_daily_and_weekly_have_explicit_timezone_and_future_occurrence():
     ("daily", "UTC", "12:00", 0),
     ("daily", "UTC", "12:00", 366),
     ("daily", "UTC", "12:00", True),
+    ("weekly Monstr", "UTC", "12:00", 1),
 ])
 def test_invalid_recurrences_fail_closed(freq, zone, clock, count):
     with pytest.raises(schedules.StudioScheduleError):
@@ -156,3 +157,15 @@ def test_schema_is_unique_and_private():
     assert "for offset_days in 0..15 loop" in text
     filenames = [p.name.split("_", 1)[0] for p in MIGRATION.parent.glob("*.sql")]
     assert len(filenames) == len(set(filenames))
+
+
+def test_private_campaign_ui_is_importable_and_has_four_inputs():
+    from stoney_verify.embed_studio_campaign_ui import StudioCampaignModal, StudioCampaignsMenu
+    session = StudioSession(guild_id=123, owner_id=456)
+    review = SimpleNamespace(sent=False)
+    modal = StudioCampaignModal(session, preview=new_project(),
+                                channel_id=789, post_key="", review=review)
+    assert len(modal.children) == 4
+    assert all(child.required for child in modal.children)
+    assert any("No active" in o.label for child in StudioCampaignsMenu(session, []).children
+               if hasattr(child, "options") for o in child.options)
