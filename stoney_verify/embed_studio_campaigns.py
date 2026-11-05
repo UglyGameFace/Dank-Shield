@@ -38,8 +38,11 @@ def parse_campaign(frequency: str, zone_name: str, clock_text: str,
     if len(cadence) == 1 and cadence[0] == "daily":
         kind, weekday = "daily", None
     elif (len(cadence) == 2 and cadence[0] == "weekly"
-          and cadence[1][:3] in WEEKDAYS
-          and len(cadence[1]) in (3, 6, 7, 8, 9)):
+          and cadence[1] in {
+              "mon", "monday", "tue", "tuesday", "wed", "wednesday",
+              "thu", "thursday", "fri", "friday", "sat", "saturday",
+              "sun", "sunday",
+          }):
         kind, weekday = "weekly", WEEKDAYS[cadence[1][:3]]
     else:
         raise StudioScheduleError("Use 'daily' or 'weekly Monday' through 'weekly Sunday'.")
