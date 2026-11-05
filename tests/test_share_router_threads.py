@@ -171,6 +171,29 @@ def test_unresolved_threads_shortlink_never_extracts_someone_elses_video(monkeyp
     assert outcome.reason == "short_share_unresolved"
 
 
+def test_t_shortcode_can_extract_exact_post_when_redirect_is_unavailable(monkeypatch):
+    async def no_redirect(_url):
+        return ""
+
+    extracted = []
+    def extract(url):
+        extracted.append(url)
+        return {"id": "CODE123", "formats": [{
+            "url": "https://scontent.cdninstagram.com/CODE123.mp4",
+            "protocol": "https", "ext": "mp4", "vcodec": "h264",
+            "acodec": "aac", "filesize": 1_000_000,
+        }]}
+
+    monkeypatch.setattr(media, "_expand_short_share_url", no_redirect)
+    monkeypatch.setattr(media, "_extract_info_sync", extract)
+    outcome = asyncio.run(media.resolve_media_url(
+        "https://threads.net/t/CODE123", max_bytes=20_000_000,
+    ))
+    assert outcome.progressive
+    assert outcome.identity == "threads:CODE123"
+    assert extracted == ["https://www.threads.com/t/CODE123"]
+
+
 def _threads_page(posts, *, og_url=None):
     head = f'<meta property="og:url" content="{og_url}">' if og_url else ""
     payload = {"require": [{"thread_items": [{"post": post} for post in posts]}]}
@@ -222,6 +245,15 @@ def test_pinned_threads_extractor_rejects_image_only_and_missing_post(monkeypatc
         _extract_threads_page(monkeypatch, "https://threads.com/@creator/post/IMAGE", html)
     with pytest.raises(ExtractorError):
         _extract_threads_page(monkeypatch, "https://threads.com/@creator/post/MISSING", html)
+
+
+def test_pinned_threads_extractor_matches_t_shortcode_not_unrelated_video(monkeypatch):
+    html = _threads_page([_post("WRONG", video=True), _post("CODE123", video=True)])
+    info = _extract_threads_page(
+        monkeypatch, "https://threads.com/t/CODE123", html
+    )
+    assert info["id"] == "CODE123"
+    assert info["formats"][0]["url"].endswith("CODE123.mp4")
 
 
 def test_pinned_threads_extractor_accepts_verified_short_share_og_url(monkeypatch):
