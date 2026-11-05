@@ -40,9 +40,11 @@ from stoney_verify.share_router_media_titles import (
 from stoney_verify.share_router_media_resolver import (
     canonicalize_media_url,
     media_url_identity,
+    is_threads_post_url,
     provider_for_url,
     provider_label,
     resolve_first_media,
+    resolve_media_url,
     select_media_resolution,
 )
 from stoney_verify.share_router_resources import (
@@ -283,6 +285,21 @@ def _message_explicit_urls(message: discord.Message) -> list[str]:
         if link.startswith(("https://", "http://")):
             values.append(link)
     return values[:30]
+
+
+async def _threads_video_only_match(message: discord.Message, *, max_bytes: int) -> bool:
+    """Inspect only plausible Threads posts before admitting a Videos Only route.
+
+    Threads posts can be text/images; the URL shape alone is not video proof.
+    Reuse the bounded extractor cache for the subsequent native upload. Failed
+    or restricted extraction keeps the source message intact.
+    """
+    candidates = [url for url in _message_explicit_urls(message) if is_threads_post_url(url)]
+    for url in candidates[:3]:
+        resolution = await resolve_media_url(url, max_bytes=max_bytes)
+        if resolution.delivery in {"progressive", "merge", "manifest"}:
+            return True
+    return False
 
 
 def _path_ext(value: str) -> str:
@@ -2131,10 +2148,18 @@ async def route_message(message: discord.Message) -> None:
         # Filter out ordinary conversation before target permissions, media
         # resolution, torrents, destination sending, or proxy cleanup.
         # A miss leaves the original source message untouched.
+        threads_video_probe = False
         if route is not None and not route_content_matches(
             message, route.get("content_filter"),
         ):
-            return
+            # Threads posts are not intrinsically videos. A Videos Only route
+            # may admit them only after safe metadata proves actual video.
+            threads_video_probe = (
+                route.get("content_filter") == "videos"
+                and any(is_threads_post_url(url) for url in _message_explicit_urls(message))
+            )
+            if not threads_video_probe:
+                return
         # An ordinary existing channel may receive webhooks from other bots.
         # Do not relay those to a second channel, creating recursive copies.
         # Temporary proxy sources keep the original webhook share semantics.
@@ -2208,6 +2233,12 @@ async def route_message(message: discord.Message) -> None:
                 target=target,
                 reason=permission_blockers[0],
             )
+            return
+
+        if threads_video_probe and not await _threads_video_only_match(
+            message, max_bytes=_share_video_limit_bytes(guild),
+        ):
+            # No verified video: leave the original intact and send nothing.
             return
 
         text = _message_share_text(message)

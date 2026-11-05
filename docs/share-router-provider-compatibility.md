@@ -58,6 +58,7 @@ oversized files without downloading them unboundedly.
 | X/Twitter | status video and alias URL | one post, normalized status identity |
 | TikTok | public video + short link | redirect, no login requirement |
 | Instagram/Reels | public reel | login gating vs playable media |
+| Threads (.com/.net) | public video post, image/text-only post, /share and /t short URLs | require target-post verification; no guessed video from related posts; preserve link on failure |
 | YouTube/Shorts | public short and normal watch link | combined progressive vs separate audio/video |
 | Reddit | public video post | audio+video merge and canonical post identity |
 | Twitch | public clip or VOD | manifest remux when short/small; live is link-only |

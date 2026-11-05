@@ -103,6 +103,8 @@ _PUBLIC_FAILURE_TEXT = {
     "live_stream_requires_player": "Live video requires an external player.",
     "provider_disabled": "This provider is disabled by the bot's media policy.",
     "unsupported_provider": "This provider is not supported.",
+    "unsupported_post_url": "This link is not a supported video post URL.",
+    "short_share_unresolved": "The provider short link could not be linked to one verified post.",
     "media_transfer_failed": "The selected video could not be fetched within the transfer constraints.",
     "media_remux_failed": "The selected video could not be assembled into a compatible file.",
     "ffmpeg_unavailable": "The server's FFmpeg media processor is unavailable.",

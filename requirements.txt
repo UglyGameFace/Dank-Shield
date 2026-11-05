@@ -19,6 +19,8 @@ justmytype-intl-cjk==0.1.0
 deckr-fonts==0.2.0
 
 yt-dlp[default]==2026.10.21
+# Threads extractor plugin; fixed source commit for reproducible Discloud installs.
+yt-dlp-threads @ git+https://github.com/tribixbite/yt-dlp-threads.git@c4c44141cb10715f94296a808f5d89a0d24dfe94
 
 
 av==17.1.0
