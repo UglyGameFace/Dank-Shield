@@ -40,7 +40,7 @@ def main() -> int:
         )
     if PUBLIC_GLOBAL_COMMAND_NAMES != expected:
         errors.append(f"public global command names drifted: {PUBLIC_GLOBAL_COMMAND_NAMES!r}")
-    if not {"home", "purge", "setup", "upload", "protection", "voice-safety", "diagnostics", "help", "cheers"} <= PUBLIC_DANK_CHILDREN or len(PUBLIC_DANK_CHILDREN) != 18:
+    if not {"home", "purge", "setup", "upload", "protection", "voice-safety", "diagnostics", "help", "cheers", "birthdays"} <= PUBLIC_DANK_CHILDREN or len(PUBLIC_DANK_CHILDREN) != 19:
         errors.append(f"final /dank children drifted: {sorted(PUBLIC_DANK_CHILDREN)!r}")
 
     access = _read("stoney_verify/commands_ext/public_access_control.py")
@@ -74,7 +74,7 @@ def main() -> int:
     required_surface_markers = (
         "install_compact_public_surface_v2",
         'for retired_root in ("ticket-intake", "ticket-category", "ticket-panel")',
-        'expected_children = sorted(["home", "setup", "upload", "cheers"] + [name for name, _, _ in DANK_SHORTCUTS])',
+        'expected_children = sorted(["home", "setup", "upload", "cheers", "birthdays"] + [name for name, _, _ in DANK_SHORTCUTS])',
         'expected_roots = {"captions", "dank", "mod", "role", "ticket", "tickets", "toke", "verify"}',
     )
     for marker in required_surface_markers:
