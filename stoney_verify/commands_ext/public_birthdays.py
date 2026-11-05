@@ -305,6 +305,7 @@ async def open_staff_birthday(interaction: discord.Interaction) -> None:
 async def _save_staff(interaction: discord.Interaction, **changes: Any) -> None:
     if not _manager(interaction):
         return await _reply(interaction, "Manage Server permission is required.")
+    await _defer(interaction)
     try:
         current = await get_guild(interaction.guild.id) or {}
         data = {
