@@ -189,7 +189,7 @@ def test_drift_plan_excludes_live_stats_before_detection_and_preview(monkeypatch
             {"id": "902", "category_id": "", "kind": "text", "name": "gaming-lounge-global"},
         ]
 
-    def fake_category_options(_studio, options, records):
+    def fake_category_options(_studio, options, records, *, saved_rules="authoritative"):
         seen_records.extend(dict(row) for row in records)
         return dict(options), {}
 
