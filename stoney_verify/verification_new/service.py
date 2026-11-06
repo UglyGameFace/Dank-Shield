@@ -348,7 +348,7 @@ async def _refresh_token_info(token: str) -> Optional[Dict[str, Any]]:
         tok = _safe_str(token)
         if not tok:
             return None
-        return sb_get_token_info(tok)
+        return await asyncio.to_thread(sb_get_token_info, tok)
     except Exception:
         return None
 
@@ -574,7 +574,7 @@ async def _mark_decision_safe(
     if not _safe_str(token):
         return
     try:
-        sb_mark_decision(
+        await asyncio.to_thread(sb_mark_decision,
             token,
             decision,
             int(staff_id),
@@ -588,7 +588,7 @@ async def _set_used_safe(token: str, used: bool = True) -> None:
     if not _safe_str(token):
         return
     try:
-        sb_set_used(token, used)
+        await asyncio.to_thread(sb_set_used, token, used)
     except Exception:
         pass
 
@@ -984,7 +984,7 @@ async def resolve_verification_context(
         )
 
     if tok:
-        token_info = sb_get_token_info(tok)
+        token_info = await asyncio.to_thread(sb_get_token_info, tok)
         if not token_info:
             return _result(
                 False,
@@ -1169,7 +1169,7 @@ async def request_resubmission(
             staff_member=staff_member,
             owner=resolved_owner if isinstance(resolved_owner, discord.Member) else None,
         )
-        _sync_member_verification_context(
+        await asyncio.to_thread(_sync_member_verification_context,
             guild=guild,
             owner=resolved_owner if isinstance(resolved_owner, discord.Member) else None,
             channel=resolved_channel,
@@ -1279,7 +1279,7 @@ async def approve_verification(
                 staff_member=staff_member,
                 owner=resolved_owner if isinstance(resolved_owner, discord.Member) else None,
             )
-            _sync_member_verification_context(
+            await asyncio.to_thread(_sync_member_verification_context,
                 guild=guild,
                 owner=resolved_owner if isinstance(resolved_owner, discord.Member) else None,
                 channel=resolved_channel if isinstance(resolved_channel, discord.TextChannel) else None,
@@ -1307,7 +1307,7 @@ async def approve_verification(
                 staff_member=staff_member,
                 owner=resolved_owner if isinstance(resolved_owner, discord.Member) else None,
             )
-            _sync_member_verification_context(
+            await asyncio.to_thread(_sync_member_verification_context,
                 guild=guild,
                 owner=resolved_owner if isinstance(resolved_owner, discord.Member) else None,
                 channel=resolved_channel if isinstance(resolved_channel, discord.TextChannel) else None,
@@ -1359,7 +1359,7 @@ async def approve_verification(
                 staff_member=staff_member,
                 owner=resolved_owner,
             )
-            _sync_member_verification_context(
+            await asyncio.to_thread(_sync_member_verification_context,
                 guild=guild,
                 owner=resolved_owner,
                 channel=resolved_channel if isinstance(resolved_channel, discord.TextChannel) else None,
@@ -1401,7 +1401,7 @@ async def approve_verification(
                 staff_member=staff_member,
                 owner=resolved_owner,
             )
-            _sync_member_verification_context(
+            await asyncio.to_thread(_sync_member_verification_context,
                 guild=guild,
                 owner=resolved_owner,
                 channel=resolved_channel if isinstance(resolved_channel, discord.TextChannel) else None,
@@ -1432,7 +1432,7 @@ async def approve_verification(
             staff_member=staff_member,
             owner=resolved_owner,
         )
-        _sync_member_verification_context(
+        await asyncio.to_thread(_sync_member_verification_context,
             guild=guild,
             owner=resolved_owner,
             channel=resolved_channel if isinstance(resolved_channel, discord.TextChannel) else None,
@@ -1520,7 +1520,7 @@ async def deny_verification(
             staff_member=staff_member,
             owner=resolved_owner if isinstance(resolved_owner, discord.Member) else None,
         )
-        _sync_member_verification_context(
+        await asyncio.to_thread(_sync_member_verification_context,
             guild=guild,
             owner=resolved_owner if isinstance(resolved_owner, discord.Member) else None,
             channel=resolved_channel if isinstance(resolved_channel, discord.TextChannel) else None,

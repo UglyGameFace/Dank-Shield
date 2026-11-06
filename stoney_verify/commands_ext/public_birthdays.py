@@ -2,7 +2,7 @@ from __future__ import annotations
 
 """Native birthday setup inside /dank profile and /dank birthdays."""
 
-from datetime import date, datetime, timezone
+from datetime import datetime, timezone
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -16,6 +16,7 @@ from stoney_verify.birthday_service import (
     BirthdayStorageUnavailable, delete_member, get_guild, get_member,
     save_guild, save_member, upcoming, valid_birth_date, valid_zone,
 )
+from stoney_verify.birthday_runtime import _manageable_role as _safe_birthday_role
 
 _REGISTERED = False
 birthday_group = app_commands.Group(name="birthdays", description="Celebrate birthdays, privately and by choice.")
@@ -41,37 +42,8 @@ async def _defer(interaction: discord.Interaction) -> None:
         await interaction.response.defer(ephemeral=True, thinking=True)
 
 
-async def _update(interaction: discord.Interaction, *, embed: discord.Embed, view: discord.ui.View) -> None:
-    await _defer(interaction)
-    await interaction.edit_original_response(
-        content=None, embed=embed, view=view, attachments=[],
-        allowed_mentions=discord.AllowedMentions.none(),
-    )
-
-
 def _manager(interaction: discord.Interaction) -> bool:
     return interaction.guild is not None and interaction_has_manage_guild_authority(interaction)
-
-
-def _safe_birthday_role(guild: discord.Guild, role: discord.Role) -> bool:
-    me = guild.me
-    if me is None or role.managed or role.is_default() or role >= me.top_role:
-        return False
-    if not (me.guild_permissions.manage_roles or me.guild_permissions.administrator):
-        return False
-    # Never offer an existing access-control / staff / verification role as a birthday perk.
-    name = role.name.lower()
-    if not any(label in name for label in ("birthday", "bday", "🎂")):
-        return False
-    if any(label in name for label in ("verified", "resident", "staff", "admin", "moderator")):
-        return False
-    perms = role.permissions
-    return not any((
-        perms.administrator, perms.manage_guild, perms.manage_roles,
-        perms.manage_channels, perms.manage_messages, perms.ban_members,
-        perms.kick_members, perms.moderate_members, perms.mention_everyone,
-        perms.manage_webhooks, perms.view_audit_log,
-    ))
 
 
 def _member_embed(interaction: discord.Interaction, member: dict[str, Any] | None, settings: dict[str, Any] | None) -> discord.Embed:
@@ -135,7 +107,6 @@ class BirthdayDateModal(discord.ui.Modal, title="🎂 Set My Birthday"):
 
     def __init__(self, original: dict[str, Any] | None) -> None:
         super().__init__()
-        self.original = original
         if original and original.get("birth_year"):
             self.full_date.default = (
                 f"{int(original['birth_month']):02d}-{int(original['birth_day']):02d}-"
@@ -152,6 +123,7 @@ class BirthdayDateModal(discord.ui.Modal, title="🎂 Set My Birthday"):
             ):
                 raise ValueError("Use MM-DD-YYYY, for example 06-20-2002.")
             month, day, year = valid_birth_date(*(int(part) for part in parts))
+            await _defer(interaction)
             old = await get_member(interaction.guild.id, interaction.user.id)
             await save_member(
                 interaction.guild.id, interaction.user.id, month=month, day=day, year=year,
@@ -162,8 +134,8 @@ class BirthdayDateModal(discord.ui.Modal, title="🎂 Set My Birthday"):
         except ValueError as exc:
             return await _reply(interaction, str(exc))
         except BirthdayStorageUnavailable:
-            return await _reply(interaction, "Birthday storage is unavailable. Nothing changed.")
-        await _reply(interaction, "🎂 Birthday saved privately. Open the birthday panel to choose your celebration preferences.")
+            return await _reply(interaction, "Couldn't confirm your birthday save. Reopen My Birthday to check the saved date.")
+        await open_member_birthday(interaction)
 
 
 class MemberBirthdayView(discord.ui.View):
@@ -207,6 +179,7 @@ class MemberBirthdayView(discord.ui.View):
 
     async def _toggle(self, interaction: discord.Interaction, field: str) -> None:
         guild = interaction.guild
+        await _defer(interaction)
         try:
             member = await get_member(guild.id, interaction.user.id)
             if not member:
@@ -226,7 +199,7 @@ class MemberBirthdayView(discord.ui.View):
             if field == "birthday_role" and not payload["birthday_role"]:
                 await self._revoke_lease(interaction)
         except BirthdayStorageUnavailable:
-            return await _reply(interaction, "Birthday storage is unavailable. Nothing changed.")
+            return await _reply(interaction, "Couldn't confirm the update. Reopen My Birthday to check your preferences.")
         await open_member_birthday(interaction)
 
     @discord.ui.button(label="Public Wishes", emoji="📣", row=0)
@@ -243,11 +216,15 @@ class MemberBirthdayView(discord.ui.View):
 
     @discord.ui.button(label="Remove My Birthday", emoji="🗑️", style=discord.ButtonStyle.danger, row=1)
     async def remove(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await _defer(interaction)
         try:
             await delete_member(interaction.guild.id, interaction.user.id)
+        except BirthdayStorageUnavailable:
+            return await _reply(interaction, "Couldn't confirm removal. Reopen My Birthday to check your saved date.")
+        try:
             await self._revoke_lease(interaction)
         except BirthdayStorageUnavailable:
-            return await _reply(interaction, "Storage is unavailable. Nothing was removed.")
+            await _reply(interaction, "Your birthday was removed. Temporary role cleanup will retry when storage is available.")
         await open_member_birthday(interaction)
 
     @discord.ui.button(label="Back to Profile", emoji="↩️", row=1)
@@ -262,7 +239,7 @@ def _settings_embed(guild: discord.Guild, row: dict[str, Any] | None) -> discord
     role = guild.get_role(int(settings.get("role_id") or 0))
     embed = discord.Embed(
         title="🎉 Birthday Server Setup",
-        description="Staff configure this once. Members then opt in through /dank profile birthday.",
+        description="Staff configure this once. Members then opt in through /dank birthdays me.",
         color=discord.Color.blurple(),
     )
     embed.add_field(
@@ -302,7 +279,7 @@ async def open_staff_birthday(interaction: discord.Interaction) -> None:
     )
 
 
-async def _save_staff(interaction: discord.Interaction, **changes: Any) -> None:
+async def _save_staff(interaction: discord.Interaction, *, toggle: str = "", **changes: Any) -> None:
     if not _manager(interaction):
         return await _reply(interaction, "Manage Server permission is required.")
     await _defer(interaction)
@@ -317,9 +294,13 @@ async def _save_staff(interaction: discord.Interaction, **changes: Any) -> None:
             "hour": int(current.get("announce_hour", 9)),
         }
         data.update(changes)
+        if toggle == "enabled":
+            data["enabled"] = not data["enabled"]
+        elif toggle == "leap_policy":
+            data["leap_policy"] = "mar1" if data["leap_policy"] == "feb28" else "feb28"
         await save_guild(interaction.guild.id, **data)
     except (BirthdayStorageUnavailable, ValueError) as exc:
-        return await _reply(interaction, f"Birthday settings weren't changed: {exc}")
+        return await _reply(interaction, f"Couldn't confirm birthday settings. Reopen setup to check them. {exc}")
     await open_staff_birthday(interaction)
 
 
@@ -338,41 +319,30 @@ class BirthdayTimezoneModal(discord.ui.Modal, title="Birthday Announcement Sched
         await _save_staff(interaction, zone_name=zone, hour=hour)
 
 
-class BirthdayChannelSelect(discord.ui.ChannelSelect):
-    def __init__(self) -> None:
-        super().__init__(
-            placeholder="Choose birthday announcement channel", min_values=1, max_values=1,
-            channel_types=[discord.ChannelType.text], row=2,
-        )
-
-    async def callback(self, interaction: discord.Interaction) -> None:
-        channel = self.values[0]
-        if not isinstance(channel, discord.TextChannel):
-            return await _reply(interaction, "Select a normal text channel.")
-        me = interaction.guild.me
-        permissions = channel.permissions_for(me) if me else None
-        if not permissions or not (permissions.view_channel and permissions.send_messages and permissions.embed_links):
-            return await _reply(interaction, "Dank Shield needs View Channel, Send Messages, and Embed Links there.")
-        await _save_staff(interaction, channel_id=channel.id)
+async def _save_birthday_channel(interaction: discord.Interaction, channel: Any) -> None:
+    guild = interaction.guild
+    channel = guild.get_channel(channel.id) if guild else None
+    if not isinstance(channel, discord.TextChannel):
+        return await _reply(interaction, "Select a normal text channel in this server.")
+    me = guild.me
+    permissions = channel.permissions_for(me) if me else None
+    if not permissions or not (permissions.view_channel and permissions.send_messages and permissions.embed_links):
+        return await _reply(interaction, "Dank Shield needs View Channel, Send Messages, and Embed Links there.")
+    await _save_staff(interaction, channel_id=channel.id)
 
 
-class BirthdayRoleSelect(discord.ui.RoleSelect):
-    def __init__(self) -> None:
-        super().__init__(placeholder="Choose an existing birthday-only role", min_values=1, max_values=1, row=3)
-
-    async def callback(self, interaction: discord.Interaction) -> None:
-        role = self.values[0]
-        if not isinstance(role, discord.Role) or not _safe_birthday_role(interaction.guild, role):
-            return await _reply(interaction, "Choose a manageable cosmetic Birthday role, never a staff, verified, or privileged role.")
-        await _save_staff(interaction, role_id=role.id)
+async def _save_birthday_role(interaction: discord.Interaction, role: Any) -> None:
+    guild = interaction.guild
+    role = guild.get_role(role.id) if guild else None
+    if not isinstance(role, discord.Role) or not _safe_birthday_role(guild, role):
+        return await _reply(interaction, "Choose a manageable cosmetic Birthday role, never a staff, verified, or privileged role.")
+    await _save_staff(interaction, role_id=role.id)
 
 
 class BirthdayStaffView(discord.ui.View):
     def __init__(self, *, owner_id: int) -> None:
         super().__init__(timeout=300)
         self.owner_id = int(owner_id)
-        self.add_item(BirthdayChannelSelect())
-        self.add_item(BirthdayRoleSelect())
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.owner_id or not _manager(interaction):
@@ -380,13 +350,38 @@ class BirthdayStaffView(discord.ui.View):
             return False
         return True
 
+    async def _browse(self, interaction: discord.Interaction, *, roles: bool) -> None:
+        from stoney_verify.ui import DankGuildResourceBrowserView
+        if not _manager(interaction):
+            return await _reply(interaction, "Manage Server permission is required.")
+        guild = interaction.guild
+        view = DankGuildResourceBrowserView(
+            guild=guild, author_id=self.owner_id,
+            resource_kinds=("role",) if roles else ("text",),
+            on_pick=_save_birthday_role if roles else _save_birthday_channel,
+            custom_id="dank:birthday:role" if roles else "dank:birthday:channel",
+            title="Birthday Role" if roles else "Birthday Announcement Channel",
+            predicate=(lambda role: _safe_birthday_role(guild, role)) if roles else None,
+            on_home=open_staff_birthday,
+        )
+        await _defer(interaction)
+        await interaction.edit_original_response(embed=view.embed(), view=view)
+
+    @discord.ui.button(label="Announcement Channel", emoji="📣", row=2)
+    async def channel(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await self._browse(interaction, roles=False)
+
+    @discord.ui.button(label="Choose Birthday Role", emoji="🏷️", row=2)
+    async def choose_role(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await self._browse(interaction, roles=True)
+
+    @discord.ui.button(label="No Birthday Role", row=2)
+    async def clear_role(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await _save_staff(interaction, role_id=0)
+
     @discord.ui.button(label="Enable / Disable", emoji="🎂", style=discord.ButtonStyle.primary, row=0)
     async def toggle(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        try:
-            current = await get_guild(interaction.guild.id) or {}
-        except BirthdayStorageUnavailable:
-            return await _reply(interaction, "Birthday storage is unavailable.")
-        await _save_staff(interaction, enabled=not bool(current.get("enabled")))
+        await _save_staff(interaction, toggle="enabled")
 
     @discord.ui.button(label="Timezone & Hour", emoji="🕘", row=0)
     async def timezone(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -394,20 +389,17 @@ class BirthdayStaffView(discord.ui.View):
 
     @discord.ui.button(label="Feb 29 Policy", emoji="📅", row=0)
     async def leap(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        try:
-            current = await get_guild(interaction.guild.id) or {}
-        except BirthdayStorageUnavailable:
-            return await _reply(interaction, "Birthday storage is unavailable.")
-        await _save_staff(
-            interaction, leap_policy="mar1" if current.get("leap_day_policy") != "mar1" else "feb28"
-        )
+        await _save_staff(interaction, toggle="leap_policy")
 
     @discord.ui.button(label="Create Birthday Role", emoji="🏷️", style=discord.ButtonStyle.success, row=1)
     async def make_role(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if not _manager(interaction):
+            return await _reply(interaction, "Manage Server permission is required.")
         guild = interaction.guild
         me = guild.me
         if me is None or not me.guild_permissions.manage_roles:
             return await _reply(interaction, "Dank Shield needs Manage Roles to create a birthday role.")
+        await _defer(interaction)
         role = next(
             (value for value in guild.roles
              if value.name == "🎂 Birthday" and _safe_birthday_role(guild, value)),
@@ -456,18 +448,17 @@ async def birthday_upcoming(interaction: discord.Interaction) -> None:
         rows = await upcoming(guild.id)
     except BirthdayStorageUnavailable:
         return await interaction.edit_original_response(content="Birthday storage is unavailable.")
-    from stoney_verify.birthday_service import celebrated_on
+    from stoney_verify.birthday_service import next_birthday
     results = []
-    for offset in range(367):
-        from datetime import timedelta
-        candidate = today + timedelta(days=offset)
-        for row in rows:
-            if celebrated_on(row["birth_month"], row["birth_day"], candidate, str(settings.get("leap_day_policy") or "feb28")):
-                member = guild.get_member(int(row["user_id"]))
-                if member is not None and not member.bot:
-                    results.append((candidate, member.display_name))
-        if len(results) >= 10:
-            break
+    for row in rows:
+        member = guild.get_member(int(row["user_id"]))
+        if member is not None and not member.bot:
+            candidate = next_birthday(
+                row["birth_month"], row["birth_day"], today,
+                str(settings.get("leap_day_policy") or "feb28"),
+            )
+            results.append((candidate, member.display_name))
+    results.sort(key=lambda item: item[0])
     description = "\n".join(
         f"**{day.strftime('%b %d')}** · {discord.utils.escape_markdown(name)}"
         for day, name in results[:10]

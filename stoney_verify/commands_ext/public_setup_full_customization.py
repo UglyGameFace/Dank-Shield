@@ -20,22 +20,7 @@ import discord
 _REGISTERED = False
 _PATCHED = False
 
-JOIN_LEAVE_LOG_ALIASES: tuple[str, ...] = (
-    "join_leave_channel_id",
-    "member_join_leave_log_channel_id",
-    "member_lifecycle_log_channel_id",
-    "member_log_channel_id",
-    "member_logs_channel_id",
-    "join_log_channel_id",
-    "join_exit_log_channel_id",
-    "joinlog_channel_id",
-    "joinleave_channel_id",
-    "welcome_exit_channel_id",
-    "welcome_exit_log_channel_id",
-    "leave_log_channel_id",
-    "welcome_leave_channel_id",
-    "leave_channel_id",
-)
+from .public_setup_logs import JOIN_LEAVE_LOG_ALIASES
 
 STAFF_LOG_ALIASES: tuple[str, ...] = (
     "raidlog_channel_id",
@@ -126,7 +111,14 @@ async def _save_config(
     from .public_setup_config_writer import upsert_guild_config
     from ..guild_config import invalidate_guild_config
 
+    if not interaction.response.is_done():
+        await interaction.response.defer(ephemeral=True, thinking=True)
     final = dict(payload)
+    if "join_leave_log_channel_id" in final:
+        from .public_setup_logs import _join_leave_alias_payload
+        from ..guild_config import get_guild_config
+        current = await get_guild_config(guild.id, refresh=True)
+        final.update(_join_leave_alias_payload(final["join_leave_log_channel_id"], current=current))
     final.update(
         {
             "__config_write_mode": "explicit_override",

@@ -529,8 +529,8 @@ async def _route_feature(interaction: discord.Interaction, feature_key: str) -> 
         return await open_reminder_settings(interaction, int(interaction.user.id))
 
     if key == "welcome":
-        from stoney_verify.welcome_setup_ui import open_welcome_setup
-        return await open_welcome_setup(interaction)
+        from stoney_verify.member_lifecycle_setup_center import open_member_lifecycle_setup
+        return await open_member_lifecycle_setup(interaction)
 
     if key == "member_setup_manager":
         from .public_member_setup import open_member_setup_admin

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -46,8 +47,14 @@ def test_join_leave_aliases_are_broad_and_consistent() -> None:
     ):
         assert key in ROUTER, f"router missing alias {key}"
         assert key in SETUP, f"setup display missing alias {key}"
-        assert key in SETUP_LOGS, f"setup-logs write missing alias {key}"
-        assert key in HARDENING, f"hardening picker missing alias {key}"
+    aliases = next(
+        ast.literal_eval(node.value) for node in ast.parse(SETUP_LOGS).body
+        if isinstance(node, ast.Assign)
+        and any(isinstance(target, ast.Name) and target.id == "JOIN_LEAVE_LOG_ALIASES" for target in node.targets)
+    )
+    assert "join_leave_channel_id" in aliases and "leave_log_channel_id" in aliases
+    assert not {"leave_channel_id", "welcome_exit_channel_id", "welcome_exit_log_channel_id", "welcome_leave_channel_id"}.intersection(aliases)
+    assert "_patch_setup_join_leave_alias_picker" not in HARDENING
 
 
 def test_ready_logs_resolved_member_lifecycle_routes() -> None:
@@ -69,7 +76,7 @@ def test_old_welcome_member_events_route_is_not_loaded_by_startup() -> None:
 
 def test_setup_logs_uses_explicit_leave_route() -> None:
     assert "join_leave_log_channel" in SETUP_LOGS
-    assert "welcome_exit_channel_id" in SETUP_LOGS
+    assert 'patch["exit_card_channel_id"] = str(previous_exit)' in SETUP_LOGS
     assert SETUP_LOGS.find("join_leave_log_channel) or _channel_value(modlog_channel)") == -1
 
 
@@ -78,7 +85,7 @@ def test_runtime_hardening_is_loaded_but_does_not_override_router() -> None:
     assert "_install_basic_verify_fallback" not in HARDENING
     assert "maybe_handle_basic_verify_interaction" not in HARDENING
     assert "install_basic_verify_runtime" in HARDENING
-    assert "_patch_setup_join_leave_alias_picker" in HARDENING
+    assert "_patch_setup_join_leave_alias_picker" not in HARDENING
     assert "_patch_join_context_schema_fallback" in HARDENING
     assert "_patch_modlog_alias_resolution" in HARDENING
     assert "native router owns no-welcome-leak routing" in HARDENING

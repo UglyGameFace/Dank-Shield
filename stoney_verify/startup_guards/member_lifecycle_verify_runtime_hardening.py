@@ -86,44 +86,6 @@ def _patch_ticket_panel_basic_verify_warning() -> None:
     _log("ticket panel Basic Verify warning hardening active")
 
 
-def _patch_setup_join_leave_alias_picker() -> None:
-    try:
-        from stoney_verify.commands_ext import public_setup_full_customization as full
-    except Exception:
-        return
-    if getattr(full, "_JOIN_LEAVE_ALIAS_PICKER_PATCHED", False):
-        return
-
-    aliases = (
-        "join_leave_channel_id",
-        "member_join_leave_log_channel_id",
-        "member_lifecycle_log_channel_id",
-        "member_log_channel_id",
-        "member_logs_channel_id",
-        "join_log_channel_id",
-        "join_exit_log_channel_id",
-        "joinlog_channel_id",
-        "joinleave_channel_id",
-        "welcome_exit_channel_id",
-        "welcome_exit_log_channel_id",
-        "leave_log_channel_id",
-        "welcome_leave_channel_id",
-        "leave_channel_id",
-    )
-
-    class PatchedLogStatusCustomizationView(full.SetupBackView):  # type: ignore[name-defined]
-        def __init__(self) -> None:
-            super().__init__()
-            self.add_item(full.SaveChannelSelect(placeholder="Ticket transcripts channel", columns=("transcripts_channel_id",), channel_types=[discord.ChannelType.text], row=0, need_files=True))
-            self.add_item(full.SaveChannelSelect(placeholder="Moderation log channel", columns=("modlog_channel_id",), also_same=("raidlog_channel_id", "raid_log_channel_id", "force_verify_log_channel_id", "staff_join_audit_channel_id", "member_audit_log_channel_id", "staff_log_channel_id", "staff_logs_channel_id", "audit_log_channel_id"), channel_types=[discord.ChannelType.text], row=1))
-            self.add_item(full.SaveChannelSelect(placeholder="Join / leave log channel — not welcome", columns=("join_leave_log_channel_id",), also_same=aliases, channel_types=[discord.ChannelType.text], row=2))
-            self.add_item(full.SaveChannelSelect(placeholder="Bot status / uptime channel", columns=("status_channel_id",), also_same=("bot_status_channel_id", "uptime_channel_id"), channel_types=[discord.ChannelType.text], row=3))
-
-    full.LogStatusCustomizationView = PatchedLogStatusCustomizationView
-    full._JOIN_LEAVE_ALIAS_PICKER_PATCHED = True
-    _log("setup Logs + Status join/leave alias picker active")
-
-
 def _patch_member_lifecycle_router() -> None:
     """No-op by design.
 
@@ -211,7 +173,6 @@ def install() -> bool:
     if _INSTALLED:
         return True
     _patch_ticket_panel_basic_verify_warning()
-    _patch_setup_join_leave_alias_picker()
     _patch_member_lifecycle_router()
     _patch_join_context_schema_fallback()
     _patch_modlog_alias_resolution()

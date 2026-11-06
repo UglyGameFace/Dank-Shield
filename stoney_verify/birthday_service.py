@@ -3,6 +3,7 @@ from __future__ import annotations
 """Private opt-in birthday storage and indexed claims via the existing service-role client."""
 
 import asyncio
+import calendar
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Any, Mapping
 from zoneinfo import ZoneInfo
@@ -19,7 +20,7 @@ class BirthdayStorageUnavailable(RuntimeError):
 
 
 def valid_date(month: int, day: int) -> tuple[int, int]:
-    """Year 2000 permits February 29 without ever storing a birth year."""
+    """Validate an annual celebration date, including February 29."""
     try:
         date(2000, int(month), int(day))
     except (ValueError, TypeError, OverflowError) as exc:
@@ -75,14 +76,25 @@ def celebrated_on(month: int, day: int, local_day: date, leap_policy: str = "feb
         return True
     return (
         (month, day) == (2, 29)
-        and local_day.month in (2, 3)
-        and local_day.day == (28 if leap_policy == "feb28" else 1)
-        and not (local_day.year % 4 == 0 and (local_day.year % 100 != 0 or local_day.year % 400 == 0))
+        and (local_day.month, local_day.day) == ((2, 28) if leap_policy == "feb28" else (3, 1))
+        and not calendar.isleap(local_day.year)
     )
 
 
 def birthday_role_expires(zone_name: str, local_day: date) -> datetime:
     return datetime.combine(local_day + timedelta(days=1), time.min, tzinfo=ZoneInfo(valid_zone(zone_name))).astimezone(timezone.utc)
+
+
+def next_birthday(month: int, day: int, today: date, leap_policy: str = "feb28") -> date:
+    month, day = valid_date(month, day)
+    for year in (today.year, today.year + 1):
+        annual = (month, day)
+        if annual == (2, 29) and not calendar.isleap(year):
+            annual = (2, 28) if leap_policy == "feb28" else (3, 1)
+        candidate = date(year, *annual)
+        if candidate >= today:
+            return candidate
+    raise ValueError("No upcoming birthday date")
 
 
 def _execute_sync(label: str, callback):
@@ -224,7 +236,7 @@ async def members_for_day(guild_id: int, local_day: date, leap_policy: str) -> l
     return rows
 
 
-async def upcoming(guild_id: int, *, limit: int = 10) -> list[dict[str, Any]]:
+async def upcoming(guild_id: int) -> list[dict[str, Any]]:
     response = await _execute(
         "read public upcoming birthdays",
         lambda db: db.table(MEMBERS).select("user_id,birth_month,birth_day")

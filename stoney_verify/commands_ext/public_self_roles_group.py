@@ -781,7 +781,9 @@ class ProfileRolePickerBackButton(discord.ui.Button):
         guild = interaction.guild
         if guild is None:
             return await _reply(interaction, "This only works inside the server.", ok=False)
-        await interaction.response.edit_message(
+        if not interaction.response.is_done():
+            await interaction.response.defer()
+        await interaction.edit_original_response(
             embed=await _profile_cosmetic_manager_embed(guild),
             view=ProfileCosmeticRoleManagerView(author_id=int(interaction.user.id)),
             allowed_mentions=discord.AllowedMentions.none(),
@@ -1771,6 +1773,7 @@ class MissingIdentityModal(discord.ui.Modal, title="Missing Identity?"):
         if not clean:
             return await _reply(interaction, "Missing identity label was empty.", ok=False)
 
+        await _ack_profile_action(interaction)
         channel = await _staff_review_channel(guild)
         if not isinstance(channel, discord.TextChannel):
             return await _reply(
@@ -1978,7 +1981,9 @@ class ProfileCosmeticRoleManagerView(discord.ui.View):
         guild = interaction.guild
         if guild is None:
             return await _reply(interaction, "This only works inside the server.", ok=False)
-        await interaction.response.edit_message(
+        if not interaction.response.is_done():
+            await interaction.response.defer()
+        await interaction.edit_original_response(
             embed=await _profile_cosmetic_manager_embed(guild),
             view=ProfileCosmeticRoleManagerView(author_id=self.author_id),
             allowed_mentions=discord.AllowedMentions.none(),
@@ -2108,7 +2113,8 @@ async def _handle_builder_action(interaction: discord.Interaction, action: str) 
     ready, fixable, manual = _profile_builder_status(guild, channel)
 
     if action == "cosmetics":
-        await interaction.response.send_message(
+        await _ack_profile_action(interaction)
+        await interaction.followup.send(
             embed=await _profile_cosmetic_manager_embed(guild),
             view=ProfileCosmeticRoleManagerView(author_id=int(interaction.user.id)),
             ephemeral=True,
@@ -2297,8 +2303,9 @@ async def _handle_profile_interaction(interaction: discord.Interaction) -> bool:
         return True
 
     if suffix == "edit":
+        await _ack_profile_action(interaction)
         setup_review = await _profile_setup_review_notice(member)
-        await interaction.response.send_message(
+        await interaction.followup.send(
             view=ProfileEditorLayout(member, setup_review=setup_review),
             ephemeral=True,
             allowed_mentions=discord.AllowedMentions.none(),

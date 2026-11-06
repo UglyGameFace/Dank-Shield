@@ -277,7 +277,7 @@ async def _mark_session_staff_accepted(token: str, staff_member: discord.Member)
         return
     try:
         if hasattr(_vc_sessions_mod, "set_staff_accepted"):
-            _vc_sessions_mod.set_staff_accepted(
+            await asyncio.to_thread(_vc_sessions_mod.set_staff_accepted,
                 token=str(token),
                 staff_id=int(staff_member.id),
                 staff_name=str(staff_member.display_name),
@@ -291,7 +291,7 @@ async def _mark_session_restarted(token: str, staff_member: discord.Member, reas
         return
     try:
         if hasattr(_vc_sessions_mod, "restart_session"):
-            _vc_sessions_mod.restart_session(
+            await asyncio.to_thread(_vc_sessions_mod.restart_session,
                 token=str(token),
                 by_staff_id=int(staff_member.id),
                 by_staff_name=str(staff_member.display_name),
@@ -306,7 +306,7 @@ async def _mark_session_taken_over(token: str, staff_member: discord.Member, rea
         return
     try:
         if hasattr(_vc_sessions_mod, "takeover_session"):
-            _vc_sessions_mod.takeover_session(
+            await asyncio.to_thread(_vc_sessions_mod.takeover_session,
                 token=str(token),
                 new_staff_id=int(staff_member.id),
                 new_staff_name=str(staff_member.display_name),
@@ -668,7 +668,7 @@ async def _post_staff_vc_request_panel(
 
                 if _vc_sessions_mod and hasattr(_vc_sessions_mod, "set_queue_message"):
                     try:
-                        _vc_sessions_mod.set_queue_message(
+                        await asyncio.to_thread(_vc_sessions_mod.set_queue_message,
                             token=str(token),
                             queue_message_id=int(getattr(msg, "id", 0) or 0),
                         )
@@ -991,7 +991,7 @@ async def _cleanup_stale_vc_request(
 
         if _vc_sessions_mod and hasattr(_vc_sessions_mod, "transition"):
             try:
-                _vc_sessions_mod.transition(
+                await asyncio.to_thread(_vc_sessions_mod.transition,
                     token=str(token),
                     new_status="EXPIRED",
                     staff_id=0,
@@ -1040,7 +1040,7 @@ async def _resolve_vc_ticket_and_owner(
     if not tok:
         return None, None, None
 
-    token_info = sb_get_token_info(tok)
+    token_info = await asyncio.to_thread(sb_get_token_info, tok)
     if not token_info:
         return None, None, None
 
@@ -1190,7 +1190,7 @@ async def create_vc_request_for_ticket(
             },
         )
 
-        _ensure_vc_session_record(
+        await asyncio.to_thread(_ensure_vc_session_record,
             guild=guild,
             token=token,
             ticket_channel_id=int(ticket_channel.id),
@@ -1237,13 +1237,13 @@ async def create_vc_request_for_ticket(
 
         try:
             if _vc_sessions_mod and hasattr(_vc_sessions_mod, "mark_canceled"):
-                _vc_sessions_mod.mark_canceled(
+                await asyncio.to_thread(_vc_sessions_mod.mark_canceled,
                     token=str(token),
                     by_staff_id=int(requested_by_id or 0),
                     reason="staff panel could not be posted",
                 )
             elif _vc_sessions_mod and hasattr(_vc_sessions_mod, "transition"):
-                _vc_sessions_mod.transition(
+                await asyncio.to_thread(_vc_sessions_mod.transition,
                     token=str(token),
                     new_status="CANCELED",
                     staff_id=int(requested_by_id or 0),
@@ -1279,12 +1279,12 @@ async def _vc_lock_channel_for_session(
 
         if ticket_channel_id <= 0:
             try:
-                token_info = sb_get_token_info(str(token)) or {}
+                token_info = await asyncio.to_thread(sb_get_token_info, str(token)) or {}
                 ticket_channel_id = int(str(token_info.get("channel_id") or "0") or 0)
             except Exception:
                 ticket_channel_id = 0
 
-        _ensure_vc_session_record(
+        await asyncio.to_thread(_ensure_vc_session_record,
             guild=guild,
             token=str(token),
             ticket_channel_id=int(ticket_channel_id or 0),
@@ -1405,12 +1405,12 @@ async def _vc_unlock_channel_for_next_session(
 
     try:
         if _vc_sessions_mod and hasattr(_vc_sessions_mod, "mark_completed"):
-            _vc_sessions_mod.mark_completed(
+            await asyncio.to_thread(_vc_sessions_mod.mark_completed,
                 token=str(token),
                 by_staff_id=0,
             )
         elif _vc_sessions_mod and hasattr(_vc_sessions_mod, "transition"):
-            _vc_sessions_mod.transition(
+            await asyncio.to_thread(_vc_sessions_mod.transition,
                 token=str(token),
                 new_status="COMPLETED",
                 staff_id=0,
@@ -1420,7 +1420,7 @@ async def _vc_unlock_channel_for_next_session(
 
     try:
         if _vc_sessions_mod and hasattr(_vc_sessions_mod, "clear_unlock"):
-            _vc_sessions_mod.clear_unlock(token=str(token), action_name="ready_next")
+            await asyncio.to_thread(_vc_sessions_mod.clear_unlock, token=str(token), action_name="ready_next")
     except Exception:
         pass
 
@@ -1501,7 +1501,7 @@ async def _vc_reissue_command(
             ephemeral=True,
         )
 
-    old_info = sb_get_token_info(resolved_token)
+    old_info = await asyncio.to_thread(sb_get_token_info, resolved_token)
     if not old_info:
         return await interaction.followup.send("❌ Token not found in storage.", ephemeral=True)
 

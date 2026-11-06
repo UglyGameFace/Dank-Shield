@@ -252,7 +252,7 @@ except Exception:
         if not tok:
             return None, None, None
 
-        token_info = sb_get_token_info(tok)
+        token_info = await asyncio.to_thread(sb_get_token_info, tok)
         if not token_info:
             return None, None, None
 
@@ -449,7 +449,7 @@ async def _mark_decision_safe(
     approved_user_id: Optional[int] = None,
 ) -> None:
     try:
-        sb_mark_decision(
+        await asyncio.to_thread(sb_mark_decision,
             token,
             decision,
             int(staff_id),
@@ -461,7 +461,7 @@ async def _mark_decision_safe(
 
 async def _set_used_safe(token: str, used: bool = True) -> None:
     try:
-        sb_set_used(token, used)
+        await asyncio.to_thread(sb_set_used, token, used)
     except Exception:
         pass
 
@@ -671,7 +671,7 @@ async def _end_vc_session_record(
 
     try:
         if vc_sessions and hasattr(vc_sessions, "transition"):
-            vc_sessions.transition(
+            await asyncio.to_thread(vc_sessions.transition,
                 token=str(token),
                 new_status=str(status),
                 staff_id=int(staff_id),
@@ -1828,7 +1828,7 @@ async def takeover_vc_request(
 
         try:
             if vc_sessions and hasattr(vc_sessions, "takeover_session"):
-                vc_sessions.takeover_session(
+                await asyncio.to_thread(vc_sessions.takeover_session,
                     token=str(tok),
                     new_staff_id=int(staff_member.id),
                     new_staff_name=str(getattr(staff_member, "display_name", staff_member)),
