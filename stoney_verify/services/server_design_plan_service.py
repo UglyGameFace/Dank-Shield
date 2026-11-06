@@ -9,7 +9,7 @@ precedence, confidence gating, scoped editor repair, and compatibility defaults
 are explicit here.
 """
 
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from typing import Any
 
 from stoney_verify.guild_config import get_guild_config
@@ -23,6 +23,7 @@ from stoney_verify.security_stats import (
 )
 from stoney_verify.services import server_design_majority_layout as majority
 from stoney_verify.services import server_design_repair_confidence as repair_confidence
+from stoney_verify.services import server_design_rule_service as rule_service
 from stoney_verify.services import server_design_studio as studio
 
 _RENAME_SAFE_VISUAL_NAMES = {
@@ -378,12 +379,17 @@ async def build_plan(
     use_live_majority: bool = False,
     strict: bool = True,
     respect_saved_rules: bool = True,
+    saved_rules: str = majority.SAVED_RULES_AUTHORITATIVE,
 ) -> tuple[list[dict[str, Any]], dict[str, Any], dict[str, Any]]:
     """Build one deterministic plan through the native backend.
 
     Smart Auto-Detect remains category-aware. Mixed categories keep their own
-    style rather than being flattened to one server-wide majority, and saved
-    rule precedence remains authoritative.
+    style rather than being flattened to one server-wide majority.
+
+    ``saved_rules`` picks how saved layout locks are treated by Smart
+    Auto-Detect: ``authoritative`` (saved locks always win) or ``advisory``
+    (Scan & Fix: the live server look wins and overruled locks are reported).
+    Exact-name rules and protection are authoritative in both modes.
     """
 
     from stoney_verify.commands_ext import public_design_studio as legacy
@@ -394,11 +400,14 @@ async def build_plan(
 
     if use_live_majority:
         records = _exclude_functional_records(live_records(guild), excluded_ids)
-        inferred, profiles = majority.build_category_aware_options(studio, plan_options, records)
+        inferred, profiles = majority.build_category_aware_options(studio, plan_options, records, saved_rules=saved_rules)
         plan_options = normalize_plan_options(inferred, strict=strict)
         plan_options["__respect_saved_rules"] = bool(respect_saved_rules)
         analysis = {
             "mode": "category_aware",
+            "saved_rules": _text_mode(inferred.get("__saved_rules_mode")),
+            "saved_rule_conflicts": [dict(row) for row in list(inferred.get("__saved_rule_conflicts") or []) if isinstance(row, Mapping)],
+            "saved_fallback_ids": list(inferred.get("__auto_detect_saved_fallback_ids") or []),
             "profiles": dict(profiles) if isinstance(profiles, Mapping) else {},
         }
 
@@ -418,13 +427,91 @@ async def build_saved_design_plan(guild: Any, options: Mapping[str, Any]) -> tup
     return await build_plan(guild, options, use_live_majority=False, strict=True)
 
 
-async def build_drift_repair_plan(guild: Any, options: Mapping[str, Any]) -> tuple[list[dict[str, Any]], dict[str, Any], dict[str, Any]]:
+def _text_mode(value: Any) -> str:
+    text = str(value or "").strip()
+    return text if text in {majority.SAVED_RULES_ADVISORY, majority.SAVED_RULES_AUTHORITATIVE} else majority.SAVED_RULES_AUTHORITATIVE
+
+
+async def build_drift_repair_plan(
+    guild: Any,
+    options: Mapping[str, Any],
+    *,
+    keep_saved_rules: bool = False,
+) -> tuple[list[dict[str, Any]], dict[str, Any], dict[str, Any]]:
+    """Scan & Fix. The live server's established look wins by default.
+
+    Saved layout locks are advisory here: they fill gaps where detection has
+    no safe answer, and every lock the live look overrules is reported so the
+    owner can keep it (``keep_saved_rules=True`` rebuilds with saved locks
+    authoritative) or let Apply update it to match.
+    """
+
     return await build_plan(
         guild,
         options,
         use_live_majority=True,
         strict=True,
-        respect_saved_rules=True,
+        respect_saved_rules=bool(keep_saved_rules),
+        saved_rules=majority.SAVED_RULES_AUTHORITATIVE if keep_saved_rules else majority.SAVED_RULES_ADVISORY,
+    )
+
+
+def settled_item_ids(items: Iterable[Mapping[str, Any]], applied_ids: Iterable[Any] = ()) -> set[str]:
+    """IDs whose live name matches the detected look (already, or after Apply)."""
+
+    settled = {str(value) for value in applied_ids if str(value or "").strip()}
+    for item in items:
+        if str(item.get("status") or "") == "unchanged" and str(item.get("channel_id") or "").strip():
+            settled.add(str(item.get("channel_id")))
+    return settled
+
+
+def sync_overruled_saved_rules(
+    saved_options: Mapping[str, Any],
+    conflicts: Iterable[Mapping[str, Any]],
+    *,
+    settled_ids: Iterable[Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Make overruled saved locks match the live look, using only restart-safe styles."""
+
+    builtin_separators = frozenset(getattr(studio, "BUILTIN_SEPARATOR_IDS", frozenset()))
+    builtin_frames = frozenset(getattr(studio, "BUILTIN_CATEGORY_FRAME_IDS", frozenset()))
+
+    def to_builtin(value: Any, *, library: Mapping[str, Any], builtin: frozenset[str], attr: str) -> str:
+        """Swap a runtime-only spec for a built-in one that renders identically."""
+
+        text = str(value or "").strip()
+        if text in builtin or text not in library:
+            return text
+        rendered = getattr(library[text], attr, None)
+        for candidate in sorted(builtin):
+            spec = library.get(candidate)
+            if spec is not None and getattr(spec, attr, None) == rendered:
+                return candidate
+        return text
+
+    separators = getattr(studio, "SEPARATORS_BY_ID", {})
+    frames = getattr(studio, "CATEGORY_FRAMES_BY_ID", {})
+    mapped: list[dict[str, Any]] = []
+    for raw in conflicts:
+        if not isinstance(raw, Mapping):
+            continue
+        row = dict(raw)
+        detected = dict(row.get("detected")) if isinstance(row.get("detected"), Mapping) else {}
+        if "separator_id" in detected:
+            detected["separator_id"] = to_builtin(detected["separator_id"], library=separators, builtin=builtin_separators, attr="value")
+        if "category_frame_id" in detected:
+            detected["category_frame_id"] = to_builtin(detected["category_frame_id"], library=frames, builtin=builtin_frames, attr="template")
+        row["detected"] = detected
+        mapped.append(row)
+
+    return rule_service.sync_saved_rules_to_detected(
+        saved_options,
+        mapped,
+        settled_ids=settled_ids,
+        persistable_separator_ids=getattr(studio, "BUILTIN_SEPARATOR_IDS", frozenset()),
+        persistable_frame_ids=getattr(studio, "BUILTIN_CATEGORY_FRAME_IDS", frozenset()),
+        persistable_fonts=tuple(getattr(studio, "FONT_STYLES", ("normal",))),
     )
 
 
@@ -489,6 +576,8 @@ def confidence_allows_apply(options: Mapping[str, Any]) -> bool:
 
 __all__ = [
     "build_drift_repair_plan",
+    "settled_item_ids",
+    "sync_overruled_saved_rules",
     "build_plan",
     "build_saved_design_plan",
     "build_scoped_repair_plan",

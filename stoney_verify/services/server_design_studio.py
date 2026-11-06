@@ -210,6 +210,8 @@ SEPARATOR_LIBRARY: tuple[SeparatorSpec, ...] = (
     SeparatorSpec("none", "No Separator", "Minimal", "", template="{emoji}{name}"),
 )
 SEPARATORS_BY_ID = {spec.id: spec for spec in SEPARATOR_LIBRARY}
+# Built-in IDs survive restarts; Smart Auto-Detect may add runtime-only specs.
+BUILTIN_SEPARATOR_IDS: frozenset[str] = frozenset(SEPARATORS_BY_ID)
 
 # Discord string-select menus can expose at most 25 choices. Server-wide design
 # reserves one choice for Theme Default, so this curated catalog intentionally
@@ -375,6 +377,7 @@ CATEGORY_FRAMES: tuple[CategoryFrameSpec, ...] = (
     CategoryFrameSpec("ribbon_heart", "Ribbon Heart", "≪♡ {emoji} {name} ♡≫", safety="decorative", clutter=4),
 )
 CATEGORY_FRAMES_BY_ID = {spec.id: spec for spec in CATEGORY_FRAMES}
+BUILTIN_CATEGORY_FRAME_IDS: frozenset[str] = frozenset(CATEGORY_FRAMES_BY_ID)
 
 # Server-wide frame browsing is grouped so the catalog can grow past Discord's
 # 25-option select limit without hiding choices or silently truncating them.
@@ -872,7 +875,10 @@ def build_styled_name(
         return result
     result.warnings.extend(sep_warnings)
     if kind == "category" and use_category_frame:
-        after = frame_spec.template.format(emoji=emoji, name=name_text).strip()
+        # An empty icon must not leave a double space inside the frame
+        # ("── {emoji} {name} ──" -> "──  name ──").
+        template = frame_spec.template if emoji else frame_spec.template.replace("{emoji} ", "")
+        after = template.format(emoji=emoji, name=name_text).strip()
     elif use_separator:
         after = sep_spec.template.format(emoji=emoji, separator=sep_spec.value, name=name_text).strip()
     elif use_emoji:

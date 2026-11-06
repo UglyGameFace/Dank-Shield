@@ -938,9 +938,9 @@ def _review_embed() -> discord.Embed:
         title="🩺 Check & Fix Names",
         description=(
             "**Scan Saved Design** is read-only and tells you what disagrees with your saved rules.\n"
-            "**Build Smart Repair Preview** learns the established style inside each category, keeps saved narrow rules authoritative, "
-            "and keeps unsafe rows out of Apply while high-confidence Ready repairs can proceed. "
-            "Narrow saved rules always win."
+            "**Build Smart Repair Preview** learns the established style inside each category and fixes what is out of line. "
+            "Your server's live look wins: saved layout rules only fill gaps, and any rule the scan overrules is listed so you can "
+            "keep it or let Apply update it to match. Exact names and protection are always respected."
         ),
         color=discord.Color.blurple(),
     )
@@ -1071,6 +1071,70 @@ def _repair_issue_lines(items: list[dict[str, Any]], classification: str) -> lis
     return rows
 
 
+_SAVED_RULE_SCOPE_LABELS = {"channel": "channel rule", "category": "category rule", "global": "global rule"}
+
+
+def _saved_rule_conflicts(analysis: Mapping[str, Any]) -> list[dict[str, Any]]:
+    if _safe_str(analysis.get("saved_rules")) != "advisory":
+        return []
+    return [dict(row) for row in list(analysis.get("saved_rule_conflicts") or []) if isinstance(row, Mapping)]
+
+
+def _style_text(style: Mapping[str, Any]) -> str:
+    parts = []
+    for key, label in (("font", "font"), ("separator_id", "sep"), ("category_frame_id", "frame")):
+        if key in style:
+            parts.append(f"{label} {_safe_str(style.get(key), 'none').replace('_', ' ')}")
+    return ", ".join(parts) or "default"
+
+
+def _saved_rule_conflict_line(row: Mapping[str, Any]) -> str:
+    scope = _SAVED_RULE_SCOPE_LABELS.get(_safe_str(row.get("scope")), "saved rule")
+    saved = row.get("saved") if isinstance(row.get("saved"), Mapping) else {}
+    detected = row.get("detected") if isinstance(row.get("detected"), Mapping) else {}
+    return (
+        f"• `{_safe_str(row.get('name'), 'unnamed')}` — {scope}: {_style_text(saved)} → live: {_style_text(detected)}"
+    )[:220]
+
+
+async def _sync_overruled_rules_after_apply(
+    interaction: discord.Interaction,
+    payload: Mapping[str, Any],
+    applied: list[apply_service.PreparedRename],
+) -> dict[str, Any] | None:
+    """After an advisory Scan & Fix, bring overruled saved locks in line with the live look."""
+
+    analysis = payload.get("analysis") if isinstance(payload.get("analysis"), Mapping) else {}
+    conflicts = _saved_rule_conflicts(analysis)
+    if not conflicts:
+        return None
+    guild = interaction.guild
+    assert guild is not None
+    settled = plans.settled_item_ids(
+        [dict(item) for item in list(payload.get("items") or [])],
+        [row.channel_id for row in applied],
+    )
+    saved = await _load_design_options(int(guild.id))
+    updated, report = plans.sync_overruled_saved_rules(saved, conflicts, settled_ids=settled)
+    if report.get("updated"):
+        await legacy._save_options(interaction, updated)  # type: ignore[attr-defined]
+    return report
+
+
+def _rule_sync_field_text(report: Mapping[str, Any]) -> str:
+    updated = list(report.get("updated") or [])
+    unresolved = list(report.get("unresolved") or [])
+    lines = [f"Updated **{len(updated)}** saved rule(s) to match the live look."]
+    for row in unresolved[:4]:
+        scope = _SAVED_RULE_SCOPE_LABELS.get(_safe_str(row.get("scope")), "saved rule")
+        names = ", ".join(f"`{name}`" for name in list(row.get("names") or [])[:3])
+        reason = "; ".join(list(row.get("reasons") or []))
+        lines.append(f"• Left {scope} ({names}) as-is: {reason}"[:220])
+    if unresolved:
+        lines.append("Edit or remove those under **Saved Style Exceptions** if you want them gone.")
+    return "\n".join(lines)[:1024]
+
+
 def _repair_preview_embed(
     guild: discord.Guild,
     items: list[dict[str, Any]],
@@ -1079,11 +1143,17 @@ def _repair_preview_embed(
 ) -> discord.Embed:
     state = _repair_plan_state(items)
     confidence = options.get("__repair_confidence_result") if isinstance(options.get("__repair_confidence_result"), Mapping) else {}
+    keep_saved = _safe_str(analysis.get("saved_rules")) != "advisory"
+    rule_line = (
+        "Saved exact/channel/category/global rules win (**Keep Saved Rules** mode)."
+        if keep_saved
+        else "Your server's live look wins over saved layout rules; exact names and protection still win."
+    )
     embed = discord.Embed(
         title="🧭 Smart Repair Preview",
         description=(
             "**Nothing has been renamed.** Smart Repair analyzed each category independently instead of flattening the whole server to one guessed style. "
-            "Saved exact/channel/category/global rules still win. If some rows are unsafe, **Ready repairs can still be applied** while blocked/review rows stay untouched."
+            f"{rule_line} If some rows are unsafe, **Ready repairs can still be applied** while blocked/review rows stay untouched."
         ),
         color=(
             discord.Color.green()
@@ -1125,11 +1195,68 @@ def _repair_preview_embed(
         embed.add_field(name="Apply blocked for safety", value="\n".join(str(line) for line in blocked_lines[:6])[:1024], inline=False)
     if review_lines:
         embed.add_field(name="Needs manual review", value="\n".join(str(line) for line in review_lines[:6])[:1024], inline=False)
+    conflicts = _saved_rule_conflicts(analysis)
+    if conflicts:
+        embed.add_field(
+            name=f"Saved rules overruled ({len(conflicts)})",
+            value=(
+                "\n".join(_saved_rule_conflict_line(row) for row in conflicts[:6])
+                + (f"\n…and {len(conflicts) - 6} more." if len(conflicts) > 6 else "")
+                + "\nApply also updates these rules to match, so Saved Design stops fighting the fix. "
+                "Prefer your rules? Use **Keep Saved Rules**."
+            )[:1024],
+            inline=False,
+        )
+    fallback_count = len(list(analysis.get("saved_fallback_ids") or []))
+    if fallback_count and not keep_saved:
+        embed.add_field(
+            name="Saved rules used",
+            value=f"**{fallback_count}** item(s) had no clear server pattern, so their saved rule decided the style.",
+            inline=False,
+        )
     profiles = analysis.get("profiles") if isinstance(analysis.get("profiles"), Mapping) else {}
     if profiles:
         embed.add_field(name="Detection", value=f"Category-aware profiles analyzed: **{len(profiles)}**", inline=False)
     embed.set_footer(text="Only Ready repairs are applied • blocked/review rows are left unchanged")
     return legacy._clean_design_embed(embed)  # type: ignore[attr-defined]
+
+
+async def _show_smart_repair_preview(interaction: discord.Interaction, *, keep_saved_rules: bool) -> None:
+    """Build, store, and show one Scan & Fix preview (caller has already deferred)."""
+
+    guild = interaction.guild
+    assert guild is not None
+    options = await _load_design_options(int(guild.id))
+    items, plan_options, analysis = await plans.build_drift_repair_plan(
+        guild,
+        options,
+        keep_saved_rules=keep_saved_rules,
+    )
+    items, naming_policy = await search_safe_naming.normalize_design_plan_for_guild(
+        int(guild.id),
+        [dict(item) for item in items],
+    )
+    created_at = legacy._store_pending(  # type: ignore[attr-defined]
+        int(guild.id),
+        int(interaction.user.id),
+        {
+            "items": items,
+            "options": dict(plan_options),
+            "analysis": dict(analysis),
+            "mode": "consistency_check_v2",
+            "naming_policy": dict(naming_policy),
+        },
+    )
+    has_changes = any(item.get("status") == "changed" for item in items)
+    await interaction.edit_original_response(
+        embed=_repair_preview_embed(guild, items, plan_options, analysis),
+        view=ReviewedPreviewView(
+            can_apply=has_changes,
+            pending_created_at=created_at,
+            issue_count=_repair_issue_count(items),
+            saved_rule_conflicts=len(_saved_rule_conflicts(analysis)),
+        ),
+    )
 
 
 class ReviewRepairView(DesignView):
@@ -1154,32 +1281,7 @@ class ReviewRepairView(DesignView):
         guild = interaction.guild
         assert guild is not None
         await interaction.response.defer(ephemeral=True, thinking=True)
-        options = await _load_design_options(int(guild.id))
-        items, plan_options, analysis = await plans.build_drift_repair_plan(guild, options)
-        items, naming_policy = await search_safe_naming.normalize_design_plan_for_guild(
-            int(guild.id),
-            [dict(item) for item in items],
-        )
-        created_at = legacy._store_pending(  # type: ignore[attr-defined]
-            int(guild.id),
-            int(interaction.user.id),
-            {
-                "items": items,
-                "options": dict(plan_options),
-                "analysis": dict(analysis),
-                "mode": "consistency_check_v2",
-                "naming_policy": dict(naming_policy),
-            },
-        )
-        has_changes = any(item.get("status") == "changed" for item in items)
-        await interaction.edit_original_response(
-            embed=_repair_preview_embed(guild, items, plan_options, analysis),
-            view=ReviewedPreviewView(
-                can_apply=has_changes,
-                pending_created_at=created_at,
-                issue_count=_repair_issue_count(items),
-            ),
-        )
+        await _show_smart_repair_preview(interaction, keep_saved_rules=False)
 
     @discord.ui.button(label="Back", emoji="⬅️", style=discord.ButtonStyle.secondary, custom_id="dank_design_v2:review_back", row=4)
     async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -2364,10 +2466,30 @@ class ReviewedPreviewView(DesignView):
         can_apply: bool,
         pending_created_at: float | None = None,
         issue_count: int = 0,
+        saved_rule_conflicts: int = 0,
     ) -> None:
         super().__init__(timeout=900)
         self.pending_created_at = pending_created_at
         self.apply.disabled = not can_apply
+        if int(saved_rule_conflicts) > 0:
+            keep = discord.ui.Button(
+                label="Keep Saved Rules",
+                emoji="🔒",
+                style=discord.ButtonStyle.secondary,
+                custom_id="dank_design_v2:preview_keep_saved_rules",
+                row=2,
+            )
+            keep.callback = self._keep_saved_rules
+            self.add_item(keep)
+            sync = discord.ui.Button(
+                label="Update Rules Only",
+                emoji="🔄",
+                style=discord.ButtonStyle.secondary,
+                custom_id="dank_design_v2:preview_sync_rules",
+                row=2,
+            )
+            sync.callback = self._sync_rules_only
+            self.add_item(sync)
         if int(issue_count) > 0:
             review = discord.ui.Button(
                 label=f"Review Issues ({int(issue_count)})",
@@ -2381,6 +2503,47 @@ class ReviewedPreviewView(DesignView):
 
     async def _review_issues(self, interaction: discord.Interaction) -> None:
         await _open_repair_issues(interaction, self.pending_created_at)
+
+    async def _keep_saved_rules(self, interaction: discord.Interaction) -> None:
+        async def action() -> None:
+            if not await _require_design_permission(interaction):
+                return
+            await interaction.response.defer(ephemeral=True, thinking=True)
+            await _show_smart_repair_preview(interaction, keep_saved_rules=True)
+
+        await _guard_design_v2_action(interaction, "design.v2.preview_keep_saved_rules", action)
+
+    async def _sync_rules_only(self, interaction: discord.Interaction) -> None:
+        async def action() -> None:
+            if not await _require_design_permission(interaction):
+                return
+            guild = interaction.guild
+            assert guild is not None
+            key = legacy._key(int(guild.id), int(interaction.user.id))  # type: ignore[attr-defined]
+            payload = legacy._PENDING.get(key) or {}  # type: ignore[attr-defined]
+            if not legacy._pending_matches(payload, self.pending_created_at):  # type: ignore[attr-defined]
+                await safe_send_interaction(
+                    interaction,
+                    content="❌ This preview is obsolete. Build a fresh preview first.",
+                    ephemeral=True,
+                    action_name="design.v2.preview_sync_rules.stale_preview",
+                )
+                return
+            await interaction.response.defer(ephemeral=True, thinking=False)
+            report = await _sync_overruled_rules_after_apply(interaction, payload, [])
+            legacy._PENDING.pop(key, None)  # type: ignore[attr-defined]
+            embed = discord.Embed(
+                title="🔄 Saved Rules Updated",
+                description=(
+                    "**No channels were renamed.** Saved rules were updated only for items that already match your server's live look. "
+                    "Run Smart Repair again to fix the rest."
+                ),
+                color=discord.Color.green(),
+            )
+            embed.add_field(name="Saved rules", value=_rule_sync_field_text(report or {}), inline=False)
+            await interaction.edit_original_response(content=None, embed=embed, view=DoneView(can_rollback=False))
+
+        await _guard_design_v2_action(interaction, "design.v2.preview_sync_rules", action)
 
     @discord.ui.button(label="Apply Reviewed Changes", emoji="✅", style=discord.ButtonStyle.success, custom_id="dank_design_v2:apply", row=0)
     async def apply(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -2557,6 +2720,15 @@ class ReviewedPreviewView(DesignView):
                     result.applied,
                 )
 
+            rule_sync_report: dict[str, Any] | None = None
+            rule_sync_error = ""
+            if mode == "consistency_check_v2":
+                try:
+                    rule_sync_report = await _sync_overruled_rules_after_apply(interaction, payload, result.applied)
+                except Exception as sync_exc:
+                    # The renames match the server's own look; keep them and report.
+                    rule_sync_error = type(sync_exc).__name__
+
             legacy._PENDING.pop(key, None)  # type: ignore[attr-defined]
 
         if mode == "style_change_separator":
@@ -2577,6 +2749,17 @@ class ReviewedPreviewView(DesignView):
             description=description,
             color=discord.Color.green(),
         )
+        if rule_sync_report:
+            embed.add_field(name="Saved rules", value=_rule_sync_field_text(rule_sync_report), inline=False)
+        elif rule_sync_error:
+            embed.add_field(
+                name="⚠️ Saved rules not updated",
+                value=(
+                    f"The repairs stay applied, but updating the overruled saved rules failed (**{rule_sync_error}**). "
+                    "Saved Design may still flag these items; run Smart Repair again and use **Update Rules Only**."
+                ),
+                inline=False,
+            )
         if snapshot and snapshot_durable:
             embed.add_field(
                 name="Undo ready",

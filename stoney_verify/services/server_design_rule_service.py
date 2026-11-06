@@ -158,6 +158,126 @@ def removal_count(removed: Mapping[str, Any]) -> int:
     return sum(1 for value in removed.values() if bool(value))
 
 
+# Minimum lock strength at which each visible piece actually renders.
+_DIMENSION_MIN_STRENGTH = {"separator_id": 2, "font": 3, "category_frame_id": 4}
+_DIMENSION_LABELS = {"separator_id": "separator", "font": "font", "category_frame_id": "category frame"}
+
+
+def _safe_int(value: Any, default: int) -> int:
+    try:
+        return int(value)
+    except Exception:
+        return default
+
+
+def _hidden_value(dimension: str) -> str:
+    return "plain" if dimension == "category_frame_id" else ("normal" if dimension == "font" else "none")
+
+
+def sync_saved_rules_to_detected(
+    options: Mapping[str, Any],
+    conflicts: Iterable[Mapping[str, Any]],
+    *,
+    settled_ids: Iterable[Any],
+    persistable_separator_ids: Iterable[str],
+    persistable_frame_ids: Iterable[str],
+    persistable_fonts: Iterable[str],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Update saved locks that Scan & Fix overruled so they match the live look.
+
+    Scan & Fix treats saved locks as advisory: the live server's established
+    look wins. Without this step the saved rule keeps disagreeing, so Scan
+    Saved Design flags the repaired items and a saved-design apply would undo
+    the repair. Only items whose live name now matches the detected look
+    (``settled_ids``) are synced.
+
+    One saved rule can style many items (a category rule styles its header and
+    its channels; the global rule styles everything). A dimension is updated
+    only when every settled item governed by that rule agrees on the detected
+    value and that value is a built-in style that survives restarts. Anything
+    else is reported back unchanged so the owner can decide. Exact-name rules
+    and protection are never touched.
+    """
+
+    settled = {_text(value) for value in settled_ids if _text(value)}
+    separators = {_text(value) for value in persistable_separator_ids}
+    frames = {_text(value) for value in persistable_frame_ids}
+    fonts = {_text(value) for value in persistable_fonts}
+
+    groups: dict[tuple[str, str], list[Mapping[str, Any]]] = {}
+    for conflict in conflicts:
+        if not isinstance(conflict, Mapping) or _text(conflict.get("id")) not in settled:
+            continue
+        scope = _text(conflict.get("scope"))
+        if scope not in {"channel", "category", "global"}:
+            continue
+        groups.setdefault((scope, _text(conflict.get("rule_key"))), []).append(conflict)
+
+    out = dict(options)
+    channel_locks = _mapping(out.get("channel_format_locks"))
+    category_locks = _mapping(out.get("category_format_locks"))
+    global_lock = _mapping(out.get("format_lock_global"))
+    updated: list[dict[str, Any]] = []
+    unresolved: list[dict[str, Any]] = []
+
+    for (scope, rule_key), rows in sorted(groups.items()):
+        if scope == "channel":
+            lock = _mapping(channel_locks.get(rule_key))
+        elif scope == "category":
+            lock = _mapping(category_locks.get(rule_key))
+        else:
+            lock = dict(global_lock) if global_lock.get("enabled") else {}
+        if not lock:
+            continue
+
+        names = sorted({_text(row.get("name")) for row in rows if _text(row.get("name"))})
+        wanted: dict[str, set[str]] = {}
+        for row in rows:
+            saved = _mapping(row.get("saved"))
+            detected = _mapping(row.get("detected"))
+            for dimension, value in detected.items():
+                if _text(value) != _text(saved.get(dimension)):
+                    wanted.setdefault(str(dimension), set()).add(_text(value))
+
+        changes: dict[str, str] = {}
+        reasons: list[str] = []
+        for dimension, values in sorted(wanted.items()):
+            label = _DIMENSION_LABELS.get(dimension, dimension)
+            if len(values) != 1:
+                reasons.append(f"items under this rule use different {label}s")
+                continue
+            value = next(iter(values))
+            allowed = separators if dimension == "separator_id" else frames if dimension == "category_frame_id" else fonts
+            if value not in allowed:
+                reasons.append(f"detected {label} is a one-off style, not a saved library style")
+                continue
+            changes[dimension] = value
+
+        if changes:
+            new_lock = dict(lock)
+            strength = _safe_int({**dict(options), **lock}.get("strength"), 2)
+            for dimension, value in changes.items():
+                new_lock[dimension] = value
+                # A non-default piece only renders once strength reaches its tier.
+                if value != _hidden_value(dimension):
+                    strength = max(strength, _DIMENSION_MIN_STRENGTH.get(dimension, strength))
+            new_lock["strength"] = strength
+            if scope == "channel":
+                channel_locks[rule_key] = new_lock
+            elif scope == "category":
+                category_locks[rule_key] = new_lock
+            else:
+                global_lock = new_lock
+            updated.append({"scope": scope, "rule_key": rule_key, "changes": dict(changes), "names": names})
+        if reasons:
+            unresolved.append({"scope": scope, "rule_key": rule_key, "reasons": sorted(set(reasons)), "names": names})
+
+    out["channel_format_locks"] = channel_locks
+    out["category_format_locks"] = category_locks
+    out["format_lock_global"] = global_lock
+    return out, {"updated": updated, "unresolved": unresolved}
+
+
 __all__ = [
     "effective_draft_separator",
     "persist_separator_choice",
@@ -166,4 +286,5 @@ __all__ = [
     "reset_all_overrides",
     "reset_item_overrides",
     "reset_layout_overrides",
+    "sync_saved_rules_to_detected",
 ]
