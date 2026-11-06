@@ -1004,7 +1004,46 @@ jobs:
                 {name:'feat/cinema-rolling-supervised-worker-20261014',
                  sha:'8bccd1ee9a5203cebc7862eec8addd48ba9706a6'},
                 {name:'fix/517-permanent-optout-20261013',
-                 sha:'96117053c1b4c24a9d3e7cf6e914e334c9398a85'}
+                 sha:'96117053c1b4c24a9d3e7cf6e914e334c9398a85'},
+                // Owner-reviewed 2026-11-06: each head below was checked against
+                // full main history. Its work is already in main, was re-done in
+                // main (squash/forward-port or a replacement PR), or is an
+                // abandoned design. The rollback pointer
+                // backup/stoneyverify-stable-7fdc331-20261008 stays protected.,
+                {name:'archive/pr-113-original-20260726',
+                 sha:'a974bed57ab398a9bbac6cbb431807765021898a'},
+                {name:'archive/pr-126-original-20260726',
+                 sha:'4c4037860b587d22d5158efd092bb4ca1378fefa'},
+                {name:'backup/antinuke-runtime-bootstrap-pre-hotfix-sync',
+                 sha:'e46c7b771088e464867ae5cb374cd0e714c30d72'},
+                {name:'backup/broken-command-guards-2026-06-19',
+                 sha:'64e51174fd6871516b2571ecc9c88c23e3415aa5'},
+                {name:'backup/pr-352-pre-c055-reconcile-20260927',
+                 sha:'c75a352b53ea2f97d6f46d7904034de79b5badc4'},
+                {name:'backup/pr315-pre-sync-20260924',
+                 sha:'54404789bfb933c6146839cd3ebacf6e640aec6d'},
+                {name:'backup/stoneyverify-pre-479-480-d7e38e7-20261008',
+                 sha:'d7e38e7595a7de0748a69a7115a9032da74e3656'},
+                {name:'backup/stoneyverify-pre-482-562253c-20261008',
+                 sha:'562253cfe833a8aa5527d8f9541de73c2fbf16b3'},
+                {name:'backup/stoneyverify-pre-audio-track-695d5fc-20261008',
+                 sha:'695d5fc18a619c6c31d04c267f0616e1bf284dc9'},
+                {name:'feat/production-welcome-cards',
+                 sha:'2e319ad70cf7222b08390fb24bff09fc28e41cd2'},
+                {name:'feat/unified-member-lifecycle-setup-20261105',
+                 sha:'df3d9951225ea9c4638517aab310290f6cb53d27'},
+                {name:'fix/antinuke-self-provenance-guard',
+                 sha:'bee5315f133af04ef816ddde8c95b8aee6927f67'},
+                {name:'fix/live-captions-accuracy-20260926',
+                 sha:'6573210f68f38eed4d88fb81fa0163a3ea102fe5'},
+                {name:'fix/live-captions-finalization-no-interrupt-20260927',
+                 sha:'802478d1f3e7b9d1503f34eb166787cc7ed4dba8'},
+                {name:'fix/live-signature-per-user-moderation-safe',
+                 sha:'340ff1ad86904a1b31586a4dd7ef834de12081e3'},
+                {name:'fix/prod-shard-guild-loops-no-batching-20261013',
+                 sha:'267a155aa07c8e8fa76eef4ab9fc9255db1214fe'},
+                {name:'scale/production-readiness-10k',
+                 sha:'e392cd19027fcc1d6dc8ff32e495a6579279c5fe'}
               ];
               const mainSha = (await github.rest.repos.getBranch({owner,repo,branch:'main'})).data.commit.sha;
               const openPRs = await github.paginate(github.rest.pulls.list,
