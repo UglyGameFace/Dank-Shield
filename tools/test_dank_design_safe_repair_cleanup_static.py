@@ -18,10 +18,12 @@ def test_native_design_owns_enhancements_without_runtime_patch_loading() -> None
     assert "server_design_command_module_guard" not in STARTUP
 
 
-def test_fix_mismatched_names_copy_mentions_saved_rules_win() -> None:
-    assert "Narrow saved rules always win" in V2
-    assert "keeps saved narrow rules authoritative" in V2
-    assert "respect_saved_rules=True" in PLAN
+def test_fix_mismatched_names_copy_explains_saved_rule_handling() -> None:
+    # Scan & Fix treats saved layout rules as advisory (live look wins) and
+    # offers Keep Saved Rules; behavior is covered in tests/.
+    assert "Exact names and protection are always respected" in V2
+    assert "Keep Saved Rules" in V2
+    assert "SAVED_RULES_ADVISORY" in PLAN
     assert "build_category_aware_options" in PLAN
     assert "copies the live server style" not in V2
     assert "ignores saved rules" not in V2
@@ -59,7 +61,7 @@ def test_active_public_flow_has_one_explicit_legacy_compatibility_boundary() -> 
 if __name__ == "__main__":
     for test in (
         test_native_design_owns_enhancements_without_runtime_patch_loading,
-        test_fix_mismatched_names_copy_mentions_saved_rules_win,
+        test_fix_mismatched_names_copy_explains_saved_rule_handling,
         test_native_plan_preserves_category_aware_auto_detect_and_strict_matching,
         test_smart_auto_detect_apply_fails_closed_on_low_confidence,
         test_active_public_flow_has_one_explicit_legacy_compatibility_boundary,

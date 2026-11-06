@@ -160,6 +160,7 @@ def test_legacy_recovery_guidance_uses_canonical_public_route() -> None:
 
 
 def test_plan_service_uses_native_saved_rule_authority() -> None:
-    assert "respect_saved_rules=True" in PLAN
+    # Saved-rule precedence per flow is asserted behaviorally in
+    # test_design_studio_consolidation_032.py.
     assert "build_category_aware_options" in PLAN
     assert "evaluate_repair_plan" in PLAN

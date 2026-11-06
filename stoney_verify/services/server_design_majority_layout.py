@@ -1067,60 +1067,439 @@ def _auto_channel_lock(
     }
 
 
+# ---------------------------------------------------------------------------
+# Server-wide consensus ("how does the rest of the server look?")
+# ---------------------------------------------------------------------------
+
+UNCATEGORIZED_KEY = "__uncategorized__"
+
+SAVED_RULES_AUTHORITATIVE = "authoritative"
+SAVED_RULES_ADVISORY = "advisory"
+
+CONSENSUS_DIMENSIONS: tuple[str, ...] = (
+    "header_frame",
+    "header_font",
+    "separator",
+    "channel_font",
+    "leading_emoji",
+)
+
+CONSENSUS_DIMENSION_LABELS: dict[str, str] = {
+    "header_frame": "Category frame",
+    "header_font": "Category font",
+    "separator": "Channel separator",
+    "channel_font": "Channel font",
+    "leading_emoji": "Channel emoji",
+}
+
+_CHANNEL_DIMENSIONS = frozenset({"separator", "channel_font", "leading_emoji"})
+
+
+def _font_label(font_id: str) -> str:
+    font_id = _text(font_id, "normal")
+    return "normal" if font_id == "normal" else font_id.replace("_", " ")
+
+
+def _category_signature(
+    studio: Any,
+    header_name: str,
+    analysis: Mapping[str, Any] | None,
+) -> dict[str, dict[str, Any]]:
+    """Return one category's vote for every consensus dimension.
+
+    A dimension maps to ``{"key", "label", "example"}``. A missing dimension
+    means the category abstains (its channels are internally mixed, or it has
+    no channels at all).
+    """
+
+    signature: dict[str, dict[str, Any]] = {}
+
+    frame = detect_category_frame(studio, header_name)
+    frame_kind = _text(frame.get("kind"), "plain")
+    # Line frames vote as a family (char) so "── a ──" and "─── b ───" agree.
+    frame_key = f"{frame_kind}:{_text(frame.get('char'))}" if frame_kind in {"line", "heavy_line", "dash_line"} else frame_kind
+    signature["header_frame"] = {
+        "key": frame_key,
+        "label": _text(frame.get("label"), frame_kind),
+        "example": dict(frame),
+    }
+    header_font = detect_font_id(studio, header_name)
+    signature["header_font"] = {"key": header_font, "label": _font_label(header_font), "example": header_font}
+
+    if not isinstance(analysis, Mapping) or not _safe_int(analysis.get("text_total"), 0):
+        return signature
+
+    separator = analysis.get("separator") if isinstance(analysis.get("separator"), Mapping) else {}
+    spacing = _text(separator.get("spacing"), "unknown")
+    if not separator.get("mixed") and spacing in {"compact", "spaced", "none", "wrapped"}:
+        key = _separator_key(separator)
+        if key != ("", "mixed"):
+            signature["separator"] = {
+                "key": key,
+                "label": _text(separator.get("label"), _separator_label(_text(separator.get("token")), spacing)),
+                "example": dict(separator),
+            }
+
+    font = analysis.get("font") if isinstance(analysis.get("font"), Mapping) else {}
+    if not font.get("mixed") and _text(font.get("id")):
+        font_id = _text(font.get("id"))
+        signature["channel_font"] = {"key": font_id, "label": _font_label(font_id), "example": font_id}
+
+    emoji = analysis.get("leading_emoji") if isinstance(analysis.get("leading_emoji"), Mapping) else {}
+    if not emoji.get("mixed") and emoji.get("enabled") is not None:
+        enabled = bool(emoji.get("enabled"))
+        signature["leading_emoji"] = {"key": enabled, "label": "yes" if enabled else "no", "example": enabled}
+
+    return signature
+
+
+def infer_server_consensus(studio: Any, records: Iterable[Any]) -> dict[str, Any]:
+    """Compare every category against the rest of the server.
+
+    Each real category casts ONE vote per dimension (a category with 30
+    channels does not outvote five small ones). A dimension has a clear
+    consensus when at least two categories agree and they are a strict
+    majority of the categories that voted. Categories that disagree with a
+    clear consensus are outliers and should be aligned to it. When no
+    category is an outlier the server is ``consistent`` and the owner should be
+    asked to confirm the detected format instead of silently enforcing it.
+
+    Uncategorized channels never vote: they are usually rules/welcome style
+    landing channels that intentionally look different.
+    """
+
+    rows = [dict(row) if isinstance(row, Mapping) else row for row in records]
+    profiles = infer_category_local_layouts(studio, rows)
+    groups = profiles.get("channel_groups") if isinstance(profiles.get("channel_groups"), Mapping) else {}
+    names = profiles.get("category_names") if isinstance(profiles.get("category_names"), Mapping) else {}
+
+    signatures: dict[str, dict[str, dict[str, Any]]] = {}
+    for category_id, header_name in sorted(names.items(), key=lambda item: str(item[0])):
+        signatures[str(category_id)] = _category_signature(studio, _text(header_name), groups.get(category_id))
+
+    dimensions: dict[str, dict[str, Any]] = {}
+    for dimension in CONSENSUS_DIMENSIONS:
+        votes: Counter[Any] = Counter()
+        examples: dict[Any, dict[str, Any]] = {}
+        for signature in signatures.values():
+            vote = signature.get(dimension)
+            if not vote:
+                continue
+            votes[vote["key"]] += 1
+            examples.setdefault(vote["key"], vote)
+        voters = sum(votes.values())
+        if not votes:
+            dimensions[dimension] = {"clear": False, "voters": 0, "votes": 0, "label": "unknown"}
+            continue
+        top_count = max(votes.values())
+        top_keys = sorted((key for key, count in votes.items() if count == top_count), key=repr)
+        clear = len(top_keys) == 1 and top_count >= 2 and top_count * 2 > voters
+        winner = examples[top_keys[0]]
+        dimensions[dimension] = {
+            "clear": clear,
+            "key": winner["key"] if clear else None,
+            "label": winner["label"] if clear else "mixed",
+            "example": winner["example"] if clear else None,
+            "votes": top_count,
+            "voters": voters,
+        }
+
+    categories: dict[str, dict[str, Any]] = {}
+    outliers: list[str] = []
+    for category_id, signature in signatures.items():
+        has_channels = isinstance(groups.get(category_id), Mapping)
+        differs: list[str] = []
+        for dimension in CONSENSUS_DIMENSIONS:
+            consensus = dimensions[dimension]
+            if not consensus.get("clear"):
+                continue
+            if dimension in _CHANNEL_DIMENSIONS and not has_channels:
+                continue
+            vote = signature.get(dimension)
+            # An internally mixed category (abstained) is also out of line
+            # with a server that clearly agrees on this dimension.
+            if not vote or vote["key"] != consensus["key"]:
+                differs.append(dimension)
+        status = "outlier" if differs else "matches"
+        if not any(dimensions[d].get("clear") for d in CONSENSUS_DIMENSIONS):
+            status = "undetermined"
+        categories[category_id] = {
+            "name": _text(names.get(category_id)),
+            "status": status,
+            "differs": differs,
+        }
+        if differs:
+            outliers.append(category_id)
+
+    clear_dimensions = [d for d in CONSENSUS_DIMENSIONS if dimensions[d].get("clear")]
+    return {
+        "category_count": len(signatures),
+        "dimensions": dimensions,
+        "categories": categories,
+        "outlier_category_ids": outliers,
+        "clear_dimensions": clear_dimensions,
+        "consistent": bool(clear_dimensions) and not outliers,
+        "summary": {d: _text(dimensions[d].get("label"), "mixed") for d in CONSENSUS_DIMENSIONS},
+    }
+
+
+def consensus_target_analysis(
+    local: Mapping[str, Any] | None,
+    consensus: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    """Return a category's channel target: local style + clear server consensus."""
+
+    if not isinstance(local, Mapping):
+        return None
+    target = dict(local)
+    dimensions = consensus.get("dimensions") if isinstance(consensus.get("dimensions"), Mapping) else {}
+
+    separator = dimensions.get("separator") if isinstance(dimensions.get("separator"), Mapping) else {}
+    if separator.get("clear") and isinstance(separator.get("example"), Mapping):
+        target["separator"] = {**dict(separator["example"]), "mixed": False}
+
+    font = dimensions.get("channel_font") if isinstance(dimensions.get("channel_font"), Mapping) else {}
+    if font.get("clear"):
+        font_id = _text(font.get("example"), "normal")
+        target["font"] = {"id": font_id, "label": _font_label(font_id), "mixed": False}
+
+    emoji = dimensions.get("leading_emoji") if isinstance(dimensions.get("leading_emoji"), Mapping) else {}
+    if emoji.get("clear"):
+        enabled = bool(emoji.get("example"))
+        target["leading_emoji"] = {"enabled": enabled, "label": "yes" if enabled else "no", "mixed": False}
+
+    return target
+
+
+def _header_target(
+    studio: Any,
+    header_name: str,
+    consensus: Mapping[str, Any],
+) -> tuple[dict[str, Any], str]:
+    """Return (frame, font) a category header should have under the consensus."""
+
+    dimensions = consensus.get("dimensions") if isinstance(consensus.get("dimensions"), Mapping) else {}
+    frame_dim = dimensions.get("header_frame") if isinstance(dimensions.get("header_frame"), Mapping) else {}
+    font_dim = dimensions.get("header_font") if isinstance(dimensions.get("header_font"), Mapping) else {}
+    frame = dict(frame_dim["example"]) if frame_dim.get("clear") and isinstance(frame_dim.get("example"), Mapping) else dict(detect_category_frame(studio, header_name))
+    font = _text(font_dim.get("example")) if font_dim.get("clear") else detect_font_id(studio, header_name)
+    return frame, font or "normal"
+
+
+def _auto_header_lock(
+    studio: Any,
+    frame: Mapping[str, Any],
+    font: str,
+    options: Mapping[str, Any],
+) -> dict[str, Any]:
+    return {
+        "scope": "auto_category_header",
+        "theme_id": _text(options.get("theme_id"), "gothic_clean"),
+        # Strength 4 is the lowest strength that applies a category frame.
+        "strength": 4,
+        "font": font,
+        "category_frame_id": ensure_category_frame_spec(studio, frame),
+        "icon_mode": "keep_existing",
+        "emoji_override": "",
+        "exact_match": True,
+        "__auto_detect": True,
+        "__target_frame": dict(frame),
+    }
+
+
+def _saved_lock_for(
+    options: Mapping[str, Any],
+    *,
+    channel_id: str,
+    category_id: str,
+) -> tuple[str, str, dict[str, Any] | None]:
+    """Resolve the saved lock that would style one item: (scope, rule_key, lock)."""
+
+    channel_locks = options.get("channel_format_locks") if isinstance(options.get("channel_format_locks"), Mapping) else {}
+    category_locks = options.get("category_format_locks") if isinstance(options.get("category_format_locks"), Mapping) else {}
+    global_lock = options.get("format_lock_global") if isinstance(options.get("format_lock_global"), Mapping) else {}
+    if channel_id and isinstance(channel_locks.get(channel_id), Mapping):
+        return "channel", channel_id, dict(channel_locks[channel_id])
+    if category_id and isinstance(category_locks.get(category_id), Mapping):
+        return "category", category_id, dict(category_locks[category_id])
+    if global_lock.get("enabled"):
+        return "global", "global", dict(global_lock)
+    return "", "", None
+
+
+def _visible_style(lock: Mapping[str, Any], options: Mapping[str, Any], *, kind: str) -> dict[str, str]:
+    """Return the visible pieces a lock would actually render at its strength."""
+
+    effective = {**dict(options), **{k: v for k, v in dict(lock).items() if v is not None}}
+    strength = _safe_int(effective.get("strength"), 2)
+    font = _text(effective.get("font"), "normal") if strength >= 3 else "normal"
+    if kind == "category":
+        frame = _text(effective.get("category_frame_id"), "line") if strength >= 4 else "plain"
+        return {"font": font, "category_frame_id": frame}
+    separator = _text(effective.get("separator_id"), "none") if strength >= 2 else "none"
+    return {"font": font, "separator_id": separator}
+
+
+def _frame_ids_equivalent(studio: Any, left: str, right: str) -> bool:
+    if left == right:
+        return True
+    specs = getattr(studio, "CATEGORY_FRAMES_BY_ID", {})
+    left_spec = specs.get(left)
+    right_spec = specs.get(right)
+    if left_spec is None or right_spec is None:
+        return False
+    return detect_category_frame(studio, left_spec.template.format(emoji="", name="x")).get("kind") == detect_category_frame(
+        studio, right_spec.template.format(emoji="", name="x")
+    ).get("kind")
+
+
+def _styles_conflict(studio: Any, saved: Mapping[str, str], detected: Mapping[str, str]) -> bool:
+    if _text(saved.get("font"), "normal") != _text(detected.get("font"), "normal"):
+        return True
+    if "separator_id" in detected and _text(saved.get("separator_id"), "none") != _text(detected.get("separator_id"), "none"):
+        return True
+    if "category_frame_id" in detected and not _frame_ids_equivalent(
+        studio, _text(saved.get("category_frame_id"), "plain"), _text(detected.get("category_frame_id"), "plain")
+    ):
+        return True
+    return False
+
+
 def build_category_aware_options(
     studio: Any,
     options: Mapping[str, Any],
     records: Iterable[Mapping[str, Any]],
+    *,
+    saved_rules: str = SAVED_RULES_AUTHORITATIVE,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    """Create ephemeral per-channel rules from each category's own majority.
+    """Create ephemeral per-item rules from the live server's own look.
 
-    Saved channel/category/global locks always win and are never overwritten.
-    Category headers without an explicit saved rule are preserved as-is.  When a
-    category is too mixed to infer safely, only dimensions with a clear majority
-    are changed and uncertain dimensions keep each channel's current style.
+    Targets are the category's own channel majority, overridden by any
+    dimension the whole server clearly agrees on. A category whose header or
+    channels differ from that server consensus is aligned to it; everything
+    else keeps its current look.
+
+    ``saved_rules``:
+
+    * ``authoritative`` (Category/Channel editor repair): saved channel,
+      category and global locks always win and are never overwritten.
+    * ``advisory`` (Scan & Fix): the live server look wins. Saved locks are
+      only used where detection has no safe target, and every saved lock that
+      disagrees with the detected look is reported in
+      ``__saved_rule_conflicts`` so the owner can choose. Exact-name rules and
+      protection are never touched in either mode.
     """
 
+    advisory = saved_rules == SAVED_RULES_ADVISORY
     rows = [dict(row) for row in records]
     profiles = infer_category_local_layouts(studio, rows)
-    analyses = profiles.get("channel_groups") if isinstance(profiles.get("channel_groups"), Mapping) else {}
+    local_analyses = profiles.get("channel_groups") if isinstance(profiles.get("channel_groups"), Mapping) else {}
+    consensus = infer_server_consensus(studio, rows)
 
+    analyses: dict[str, Any] = {}
+    for category_id, local in local_analyses.items():
+        if str(category_id) == UNCATEGORIZED_KEY:
+            analyses[category_id] = dict(local)
+        else:
+            analyses[category_id] = consensus_target_analysis(local, consensus)
+
+    outliers = set(consensus.get("outlier_category_ids") or [])
     out = dict(options)
     saved_channel_locks = dict(options.get("channel_format_locks")) if isinstance(options.get("channel_format_locks"), Mapping) else {}
-    merged_channel_locks = dict(saved_channel_locks)
+    channel_locks: dict[str, Any] = {} if advisory else dict(saved_channel_locks)
+    category_locks: dict[str, Any] = {} if advisory else (
+        dict(options.get("category_format_locks")) if isinstance(options.get("category_format_locks"), Mapping) else {}
+    )
     ephemeral_ids: list[str] = []
+    header_ids: list[str] = []
     preserve_ids: list[str] = []
+    saved_fallback_ids: list[str] = []
+    conflicts: list[dict[str, Any]] = []
+
+    def note_conflict(record: Mapping[str, Any], *, kind: str, scope: str, rule_key: str, lock: Mapping[str, Any], detected: Mapping[str, str]) -> None:
+        saved_style = _visible_style(lock, options, kind=kind)
+        if not _styles_conflict(studio, saved_style, detected):
+            return
+        conflicts.append(
+            {
+                "id": _record_id(record),
+                "kind": kind,
+                "name": _record_name(record),
+                "scope": scope,
+                "rule_key": rule_key,
+                "saved": saved_style,
+                "detected": dict(detected),
+            }
+        )
 
     for record in rows:
-        channel_id = _record_id(record)
+        item_id = _record_id(record)
         kind = _record_kind(record)
-        category_id = channel_id if kind == "category" else (_record_category_id(record) or "__uncategorized__")
-        saved_scope = _saved_lock_scope(options, channel_id=channel_id, category_id=(channel_id if kind == "category" else _record_category_id(record)))
-        if saved_scope:
-            continue
-        if kind == "category":
-            if channel_id:
-                preserve_ids.append(channel_id)
-            continue
-        analysis = analyses.get(category_id)
-        if not isinstance(analysis, Mapping):
-            if channel_id:
-                preserve_ids.append(channel_id)
-            continue
-        lock = _auto_channel_lock(studio, record, analysis, options)
-        if lock is None:
-            if channel_id:
-                preserve_ids.append(channel_id)
-            continue
-        merged_channel_locks[channel_id] = lock
-        ephemeral_ids.append(channel_id)
+        is_category = kind == "category"
+        parent_id = item_id if is_category else _record_category_id(record)
+        group_key = item_id if is_category else (parent_id or UNCATEGORIZED_KEY)
+        scope, rule_key, saved_lock = _saved_lock_for(options, channel_id=item_id, category_id=parent_id)
 
-    out["channel_format_locks"] = merged_channel_locks
+        if scope and not advisory:
+            continue
+
+        if is_category:
+            frame, font = _header_target(studio, _record_name(record), consensus)
+            detected = {"font": font, "category_frame_id": ensure_category_frame_spec(studio, frame)}
+            header_known = consensus.get("categories", {}).get(item_id, {}).get("status") in {"matches", "outlier"}
+            header_out_of_line = item_id in outliers and bool(
+                {"header_frame", "header_font"} & set(consensus["categories"][item_id]["differs"])
+            )
+            if header_out_of_line and item_id:
+                category_locks[item_id] = _auto_header_lock(studio, frame, font, options)
+                header_ids.append(item_id)
+            elif advisory and scope and not header_known and saved_lock is not None:
+                # No server-wide answer for headers: the saved rule fills the gap.
+                category_locks[item_id] = {**saved_lock, "scope": f"saved_{scope}"}
+                saved_fallback_ids.append(item_id)
+                continue
+            elif item_id:
+                preserve_ids.append(item_id)
+            if advisory and scope and saved_lock is not None and header_known:
+                note_conflict(record, kind="category", scope=scope, rule_key=rule_key, lock=saved_lock, detected=detected)
+            continue
+
+        analysis = analyses.get(group_key)
+        lock = _auto_channel_lock(studio, record, analysis, options) if isinstance(analysis, Mapping) else None
+        if lock is None:
+            if advisory and scope and saved_lock is not None:
+                channel_locks[item_id] = {**saved_lock, "scope": f"saved_{scope}"}
+                saved_fallback_ids.append(item_id)
+            elif item_id:
+                preserve_ids.append(item_id)
+            continue
+        if advisory and scope and saved_lock is not None:
+            note_conflict(
+                record,
+                kind="text",
+                scope=scope,
+                rule_key=rule_key,
+                lock=saved_lock,
+                detected={"font": _text(lock.get("font"), "normal"), "separator_id": _text(lock.get("separator_id"), "none")},
+            )
+        channel_locks[item_id] = lock
+        ephemeral_ids.append(item_id)
+
+    out["channel_format_locks"] = channel_locks
+    out["category_format_locks"] = category_locks
+    if advisory:
+        out["format_lock_global"] = {}
+    out["__saved_rules_mode"] = SAVED_RULES_ADVISORY if advisory else SAVED_RULES_AUTHORITATIVE
     out["__category_aware_auto_detect"] = True
     out["__auto_detect_ephemeral_channel_ids"] = sorted(set(ephemeral_ids))
+    out["__auto_detect_header_ids"] = sorted(set(header_ids))
     out["__auto_detect_preserve_ids"] = sorted(set(preserve_ids))
+    out["__auto_detect_saved_fallback_ids"] = sorted(set(saved_fallback_ids))
     out["__auto_detect_category_analyses"] = dict(sorted(analyses.items(), key=lambda item: str(item[0])))
     out["__auto_detect_category_profiles"] = dict(profiles.get("summaries") or {})
-    out["__auto_detect_saved_rules_respected"] = _lock_counts(options)
+    out["__auto_detect_saved_rules_respected"] = {} if advisory else _lock_counts(options)
+    out["__server_consensus"] = consensus
+    out["__saved_rule_conflicts"] = conflicts
     return out, profiles
 
 
@@ -1131,14 +1510,30 @@ def annotate_category_aware_plan_items(
 ) -> list[dict[str, Any]]:
     analyses = options.get("__auto_detect_category_analyses") if isinstance(options.get("__auto_detect_category_analyses"), Mapping) else {}
     ephemeral = {str(value) for value in list(options.get("__auto_detect_ephemeral_channel_ids") or [])}
+    headers = {str(value) for value in list(options.get("__auto_detect_header_ids") or [])}
     preserve = {str(value) for value in list(options.get("__auto_detect_preserve_ids") or [])}
     saved_counts = options.get("__auto_detect_saved_rules_respected") if isinstance(options.get("__auto_detect_saved_rules_respected"), Mapping) else {}
     saved_total = sum(_safe_int(saved_counts.get(key), 0) for key in ("global", "categories", "channels"))
+    consensus = options.get("__server_consensus") if isinstance(options.get("__server_consensus"), Mapping) else {}
+    outliers = {str(value) for value in list(consensus.get("outlier_category_ids") or [])}
+    category_locks = options.get("category_format_locks") if isinstance(options.get("category_format_locks"), Mapping) else {}
+    advisory = _text(options.get("__saved_rules_mode")) == SAVED_RULES_ADVISORY
+    saved_fallback = {str(value) for value in list(options.get("__auto_detect_saved_fallback_ids") or [])}
+    overruled: dict[str, dict[str, Any]] = {}
+    if advisory:
+        for conflict in list(options.get("__saved_rule_conflicts") or []):
+            if isinstance(conflict, Mapping) and _text(conflict.get("id")):
+                overruled.setdefault(_text(conflict.get("id")), dict(conflict))
 
     for item in items:
         channel_id = _text(item.get("channel_id"))
-        category_id = _text(item.get("category_id")) or "__uncategorized__"
+        category_id = _text(item.get("category_id")) or UNCATEGORIZED_KEY
         kind = _text(item.get("kind"), "text")
+
+        if channel_id in overruled:
+            item["saved_rule_overruled"] = overruled[channel_id]
+        if advisory and channel_id in saved_fallback:
+            item["format_lock_scope"] = "saved_fallback"
 
         if channel_id in preserve:
             item["after"] = item.get("before")
@@ -1150,6 +1545,16 @@ def annotate_category_aware_plan_items(
             item["auto_detect_preserved"] = True
             continue
 
+        if kind == "category" and channel_id in headers:
+            lock = category_locks.get(channel_id) if isinstance(category_locks.get(channel_id), Mapping) else {}
+            frame = lock.get("__target_frame") if isinstance(lock.get("__target_frame"), Mapping) else {}
+            target = {"category_frame": dict(frame), "font": {"id": _text(lock.get("font"), "normal")}}
+            validate_majority_repair_items(studio, [item], target)
+            if item.get("status") == "changed" and not _font_matches_expected(studio, _text(item.get("after")), target):
+                _fail_repair_item(item, "Repair safety stopped this category because the preview did not match the server's category font.")
+            item["format_lock_scope"] = "auto_category_header"
+            item["server_consensus_aligned"] = True
+
         if channel_id in ephemeral:
             analysis = analyses.get(category_id)
             if isinstance(analysis, Mapping):
@@ -1157,6 +1562,8 @@ def annotate_category_aware_plan_items(
                 item["majority_layout"] = _summary_text(analysis)
             item["format_lock_scope"] = "auto_category"
             item["auto_detect_category_id"] = category_id
+            if category_id in outliers:
+                item["server_consensus_aligned"] = True
 
         if saved_total:
             item["auto_detect_saved_rules_respected"] = saved_total
@@ -1211,6 +1618,12 @@ __all__ = [
     "infer_live_majority_layout",
     "infer_category_local_layouts",
     "infer_target_layout",
+    "infer_server_consensus",
+    "consensus_target_analysis",
+    "CONSENSUS_DIMENSIONS",
+    "CONSENSUS_DIMENSION_LABELS",
+    "SAVED_RULES_ADVISORY",
+    "SAVED_RULES_AUTHORITATIVE",
     "build_category_aware_options",
     "annotate_category_aware_plan_items",
     "install_separator_safe_parser",

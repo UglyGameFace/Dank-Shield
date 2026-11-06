@@ -24,7 +24,6 @@ def test_smart_auto_detect_recommendation_is_category_aware() -> None:
     assert "build_category_aware_options" in PLAN
     assert "annotate_category_aware_plan_items" in PLAN
     assert "Mixed categories keep their own" in PLAN
-    assert "respect_saved_rules=True" in PLAN
 
 
 def test_native_repair_services_are_names_only_not_permission_or_config_repair() -> None:
