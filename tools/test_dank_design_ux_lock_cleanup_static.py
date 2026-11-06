@@ -74,9 +74,9 @@ def test_compact_home_preserves_manage_channels_design_authority() -> None:
 
 
 def test_safe_repair_audit_tracks_current_authority_contract() -> None:
-    assert "Narrow saved rules always win" in SAFE_TEST
-    assert "keeps saved narrow rules authoritative" in SAFE_TEST
-    assert "respect_saved_rules=True" in SAFE_TEST
+    assert "Exact names and protection are always respected" in SAFE_TEST
+    assert "Keep Saved Rules" in SAFE_TEST
+    assert "SAVED_RULES_ADVISORY" in SAFE_TEST
     assert "reviews saved rules first" not in SAFE_TEST
 
 

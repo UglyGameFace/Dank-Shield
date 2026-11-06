@@ -940,7 +940,8 @@ def _review_embed() -> discord.Embed:
             "**Scan Saved Design** is read-only and tells you what disagrees with your saved rules.\n"
             "**Build Smart Repair Preview** learns the established style inside each category and fixes what is out of line. "
             "Your server's live look wins: saved layout rules only fill gaps, and any rule the scan overrules is listed so you can "
-            "keep it or let Apply update it to match. Exact names and protection are always respected."
+            "keep it or let Apply update it to match. Exact names and protection are always respected. "
+            "Smart Repair keeps unsafe rows out of Apply while high-confidence Ready repairs can proceed."
         ),
         color=discord.Color.blurple(),
     )
@@ -1145,7 +1146,7 @@ def _repair_preview_embed(
     confidence = options.get("__repair_confidence_result") if isinstance(options.get("__repair_confidence_result"), Mapping) else {}
     keep_saved = _safe_str(analysis.get("saved_rules")) != "advisory"
     rule_line = (
-        "Saved exact/channel/category/global rules win (**Keep Saved Rules** mode)."
+        "Saved exact/channel/category/global rules still win (**Keep Saved Rules** mode)."
         if keep_saved
         else "Your server's live look wins over saved layout rules; exact names and protection still win."
     )
@@ -1196,27 +1197,28 @@ def _repair_preview_embed(
     if review_lines:
         embed.add_field(name="Needs manual review", value="\n".join(str(line) for line in review_lines[:6])[:1024], inline=False)
     conflicts = _saved_rule_conflicts(analysis)
-    if conflicts:
-        embed.add_field(
-            name=f"Saved rules overruled ({len(conflicts)})",
-            value=(
-                "\n".join(_saved_rule_conflict_line(row) for row in conflicts[:6])
-                + (f"\n…and {len(conflicts) - 6} more." if len(conflicts) > 6 else "")
-                + "\nApply also updates these rules to match, so Saved Design stops fighting the fix. "
-                "Prefer your rules? Use **Keep Saved Rules**."
-            )[:1024],
-            inline=False,
-        )
     fallback_count = len(list(analysis.get("saved_fallback_ids") or []))
+    profiles = analysis.get("profiles") if isinstance(analysis.get("profiles"), Mapping) else {}
+    detection_lines: list[str] = []
+    if profiles:
+        detection_lines.append(f"Category-aware profiles analyzed: **{len(profiles)}**")
     if fallback_count and not keep_saved:
+        detection_lines.append(f"Saved rule decided **{fallback_count}** item(s) with no clear server pattern.")
+    if conflicts:
+        detection_lines.append(f"**Saved rules overruled: {len(conflicts)}**")
+        detection_lines.extend(_saved_rule_conflict_line(row) for row in conflicts[:5])
+        if len(conflicts) > 5:
+            detection_lines.append(f"…and {len(conflicts) - 5} more.")
+        detection_lines.append(
+            "Apply also updates these rules to match, so Saved Design stops fighting the fix. "
+            "Prefer your rules? Use **Keep Saved Rules**."
+        )
+    if detection_lines:
         embed.add_field(
-            name="Saved rules used",
-            value=f"**{fallback_count}** item(s) had no clear server pattern, so their saved rule decided the style.",
+            name="Detection & saved rules" if conflicts or fallback_count else "Detection",
+            value="\n".join(detection_lines)[:1024],
             inline=False,
         )
-    profiles = analysis.get("profiles") if isinstance(analysis.get("profiles"), Mapping) else {}
-    if profiles:
-        embed.add_field(name="Detection", value=f"Category-aware profiles analyzed: **{len(profiles)}**", inline=False)
     embed.set_footer(text="Only Ready repairs are applied • blocked/review rows are left unchanged")
     return legacy._clean_design_embed(embed)  # type: ignore[attr-defined]
 
@@ -2744,22 +2746,18 @@ class ReviewedPreviewView(DesignView):
         else:
             title = "✅ Reviewed Design Applied"
             description = f"Changed **{len(result.applied)}** item(s). Left **{skipped}** reviewed skip(s) untouched. Failed **0**."
+        if rule_sync_report:
+            description += "\n\n**Saved rules:** " + _rule_sync_field_text(rule_sync_report)
+        elif rule_sync_error:
+            description += (
+                f"\n\n⚠️ **Saved rules not updated** ({rule_sync_error}). The repairs stay applied, but Saved Design may still flag "
+                "these items; run Smart Repair again and use **Update Rules Only**."
+            )
         embed = discord.Embed(
             title=title,
-            description=description,
+            description=description[:4096],
             color=discord.Color.green(),
         )
-        if rule_sync_report:
-            embed.add_field(name="Saved rules", value=_rule_sync_field_text(rule_sync_report), inline=False)
-        elif rule_sync_error:
-            embed.add_field(
-                name="⚠️ Saved rules not updated",
-                value=(
-                    f"The repairs stay applied, but updating the overruled saved rules failed (**{rule_sync_error}**). "
-                    "Saved Design may still flag these items; run Smart Repair again and use **Update Rules Only**."
-                ),
-                inline=False,
-            )
         if snapshot and snapshot_durable:
             embed.add_field(
                 name="Undo ready",

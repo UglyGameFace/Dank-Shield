@@ -388,17 +388,42 @@ def test_strict_saved_rule_layers_remain_exact_and_preserve_precedence() -> None
     assert normalized["channel_format_locks"]["20"]["separator_id"] == "bar_thin"
 
 
-def test_category_aware_native_drift_plan_is_called(monkeypatch: pytest.MonkeyPatch) -> None:
-    guild = SimpleNamespace(id=1)
+def _patch_category_aware_plan(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    modes: list[str] = []
+
+    def fake_build(_studio, options, _records, *, saved_rules=plan_service.majority.SAVED_RULES_AUTHORITATIVE):
+        modes.append(saved_rules)
+        return {**dict(options), "__category_aware_auto_detect": True, "__saved_rules_mode": saved_rules}, {"summaries": {}}
+
     monkeypatch.setattr(plan_service, "live_records", lambda _guild: [{"id": "1", "name": "general", "kind": "text", "category_id": ""}])
-    monkeypatch.setattr(plan_service.majority, "build_category_aware_options", lambda _studio, options, _records: ({**dict(options), "__category_aware_auto_detect": True}, {"summaries": {}}))
+    monkeypatch.setattr(plan_service.majority, "build_category_aware_options", fake_build)
     monkeypatch.setattr(plan_service.majority, "annotate_category_aware_plan_items", lambda _studio, items, _options: items)
     monkeypatch.setattr(legacy, "build_design_plan", AsyncMock(return_value=[]))
     monkeypatch.setattr(plan_service.repair_confidence, "evaluate_repair_plan", lambda _items, context: {"apply_allowed": True, "context": context})
+    return modes
+
+
+def test_category_aware_native_drift_plan_is_called(monkeypatch: pytest.MonkeyPatch) -> None:
+    guild = SimpleNamespace(id=1)
+    _patch_category_aware_plan(monkeypatch)
 
     _items, plan_options, _analysis = asyncio.run(plan_service.build_drift_repair_plan(guild, {"theme_id": "gothic_clean"}))
     assert plan_options["__category_aware_auto_detect"] is True
     assert plan_options["__repair_confidence_result"]["context"] == "smart_category_auto_detect"
+
+
+def test_scan_and_fix_treats_saved_rules_as_advisory_unless_owner_keeps_them(monkeypatch: pytest.MonkeyPatch) -> None:
+    guild = SimpleNamespace(id=1)
+    modes = _patch_category_aware_plan(monkeypatch)
+
+    _items, _options, advisory = asyncio.run(plan_service.build_drift_repair_plan(guild, {"theme_id": "gothic_clean"}))
+    _items, _options, kept = asyncio.run(
+        plan_service.build_drift_repair_plan(guild, {"theme_id": "gothic_clean"}, keep_saved_rules=True)
+    )
+
+    assert modes == [plan_service.majority.SAVED_RULES_ADVISORY, plan_service.majority.SAVED_RULES_AUTHORITATIVE]
+    assert advisory["saved_rules"] == plan_service.majority.SAVED_RULES_ADVISORY
+    assert kept["saved_rules"] == plan_service.majority.SAVED_RULES_AUTHORITATIVE
 
 
 def test_low_confidence_drift_plan_fails_closed() -> None:

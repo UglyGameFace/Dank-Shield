@@ -25,13 +25,15 @@ def test_smart_auto_detect_uses_native_confidence_engine() -> None:
         assert phrase in CONFIDENCE
 
 
-def test_smart_auto_detect_is_category_aware_and_saved_rules_remain_authoritative() -> None:
+def test_smart_auto_detect_is_category_aware_and_explains_saved_rule_handling() -> None:
+    # Scan & Fix deliberately treats saved layout rules as advisory; that
+    # behavior is covered in test_server_design_scan_fix_saved_rules.py and
+    # test_design_studio_consolidation_032.py.
     assert "build_category_aware_options" in PLAN
     assert "annotate_category_aware_plan_items" in PLAN
-    assert "respect_saved_rules=True" in PLAN
     assert "mixed categories" in PLAN.lower()
-    assert "Narrow saved rules always win" in V2
-    assert "keeps saved narrow rules authoritative" in V2
+    assert "Exact names and protection are always respected" in V2
+    assert "Keep Saved Rules" in V2
 
 
 def test_low_confidence_plan_is_non_applicable_before_the_ui_renders() -> None:
