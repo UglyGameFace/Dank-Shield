@@ -2,11 +2,9 @@ from __future__ import annotations
 
 """Versioned, independently auditable Voice Safety agreement.
 
-Voice Safety is a membership rule in guilds that enable it: being a member of
-the server constitutes agreement with the disclosed Voice Safety policy, and
-leaving the server is the opt-out. Explicit button agreements (the verify
-panel, the member notice) remain supported and are never overwritten by the
-membership sync; they keep their original source and timestamp.
+Voice audio processing requires an affirmative, disclosed, voice-specific action.
+Historic membership-v2 records may exist but can never authorize the receiver.
+Leaving the server withdraws any explicit voice agreement.
 """
 
 from datetime import datetime, timezone
@@ -16,12 +14,12 @@ VOICE_SAFETY_AGREEMENT_KEY = "voice_safety_agreement_v1"
 VOICE_SAFETY_DISCLOSURE_MARKER = "Dank Shield Voice Safety Agreement v1"
 VOICE_SAFETY_MEMBERSHIP_SOURCE = "server_membership_v2"
 _ALLOWED_AGREEMENT_SOURCES = frozenset(
-    {"basic_verify_v1", "voice_safety_notice_v1", VOICE_SAFETY_MEMBERSHIP_SOURCE}
+    {"basic_verify_v1", "voice_safety_notice_v1"}
 )
 
 
 async def read_voice_safety_agreement(guild_id: int, user_id: int) -> bool:
-    """Storage errors fail closed, never fall back to stale cache."""
+    """Only explicit member actions authorize voice processing; failures deny."""
     from .profile_card_service import get_profile_guild_settings
 
     try:
@@ -61,18 +59,9 @@ async def save_voice_safety_agreement(
 
 
 async def record_membership_agreement(guild_id: int, user_id: int) -> bool:
-    """Affirmative agreement for a current member, keyed to server membership.
-
-    Idempotent: members with an existing affirmative record (explicit button
-    or earlier membership sync) are left untouched so their original source
-    and timestamp are preserved. A stale declined record for a member who is
-    still in the server is re-affirmed, because agreement is required to stay.
-    """
-    if await read_voice_safety_agreement(guild_id, user_id):
-        return True
-    return await save_voice_safety_agreement(
-        guild_id, user_id, True, source=VOICE_SAFETY_MEMBERSHIP_SOURCE
-    )
+    """Legacy API; membership must never manufacture voice-specific consent."""
+    del guild_id, user_id
+    return False
 
 
 async def withdraw_agreement_on_leave(guild_id: int, user_id: int) -> bool:
@@ -85,37 +74,15 @@ async def withdraw_agreement_on_leave(guild_id: int, user_id: int) -> bool:
     if not await read_voice_safety_agreement(guild_id, user_id):
         return False
     await save_voice_safety_agreement(
-        guild_id, user_id, False, source=VOICE_SAFETY_MEMBERSHIP_SOURCE
+        guild_id, user_id, False, source="voice_safety_notice_v1"
     )
     return True
 
 
 async def sync_guild_membership_agreement(guild: Any, *, members: Any = None) -> dict[str, int]:
-    """Grandfather current members into agreement (one-time backfill).
-
-    Iterates the supplied authoritative member snapshot when available (cached
-    members otherwise), skipping bots, and records affirmative
-    membership agreement for anyone lacking one. Explicit button agreements
-    are preserved. Returns counts; never raises -- per-member failures are
-    counted so a retry can pick them up.
-    """
-    recorded = skipped = failed = 0
-    member_list = list(members if members is not None else (getattr(guild, "members", None) or []))
-    for member in member_list:
-        try:
-            if getattr(member, "bot", False):
-                skipped += 1
-                continue
-            if await read_voice_safety_agreement(guild.id, member.id):
-                skipped += 1
-                continue
-            await save_voice_safety_agreement(
-                guild.id, member.id, True, source=VOICE_SAFETY_MEMBERSHIP_SOURCE
-            )
-            recorded += 1
-        except Exception:
-            failed += 1
-    return {"recorded": recorded, "skipped": skipped, "failed": failed}
+    """Legacy compatibility; never auto-grant listening consent to members."""
+    member_list = members if members is not None else (getattr(guild, "members", None) or ())
+    return {"recorded": 0, "skipped": sum(1 for _ in member_list), "failed": 0}
 
 
 def verification_message_discloses_voice_safety(message: Any) -> bool:
