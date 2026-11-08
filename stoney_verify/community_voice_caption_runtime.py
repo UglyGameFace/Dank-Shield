@@ -1248,6 +1248,7 @@ class CommunityVoiceCaptionManager:
                 translator=translator,
                 output_mode=output_mode,
                 global_transcribe_semaphore=self._global_transcribe_semaphore,
+                max_pending_segments=2 if local_voice else 48,
             )
             loop = asyncio.get_running_loop()
             bridge = PerSpeakerFrameBridge(loop, engine.submit)
