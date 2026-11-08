@@ -8,6 +8,7 @@ captions infrastructure; no automated punishment is enabled.
 """
 
 import asyncio
+import os
 
 import discord
 
