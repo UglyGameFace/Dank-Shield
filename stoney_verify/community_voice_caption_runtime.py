@@ -1124,6 +1124,13 @@ class CommunityVoiceCaptionManager:
         capability = voice_receive_capability()
         if not capability.available:
             raise VoiceReceiveUnavailable(capability.reason)
+        if local_voice:
+            from .watch_voice_transcriber import watch_worker_ready
+            if not await watch_worker_ready():
+                raise VoiceReceiveUnavailable(
+                    "Watch Yo Mouf offline Vosk worker is not ready; "
+                    "voice audio was not connected."
+                )
 
         async with self._lock:
             existing = self._sessions.get(sid)
