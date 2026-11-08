@@ -466,6 +466,14 @@ async def _maybe_post_verification_panel(channel: discord.TextChannel, owner: di
         if not await verify_flow._is_unverified_only_member(owner):
             return ""
         cfg = await verify_flow._get_guild_config_safe(channel.guild.id)
+        # The canonical flow returns False for an intentional Basic Verify skip.
+        # Check its authoritative effective-mode resolver before requesting UI.
+        if not verify_flow._should_auto_route_unverified_ticket(channel.guild, cfg):
+            _log(
+                f"verification panel outcome=skipped_not_required "
+                f"guild={channel.guild.id} channel={channel.id} category={_row_slug(row)}"
+            )
+            return ""
         vc_locked, vc_message = await verify_flow._ensure_configured_vc_verify_locked(channel.guild, cfg)
         if not vc_locked:
             return f"Verification panel was not posted because VC verification setup is not safe yet. Reason: {vc_message}."
