@@ -1249,18 +1249,21 @@ class CommunityVoiceCaptionManager:
                 if safety_mode:
                     from .commands_ext.public_voice_safety import VoiceSafetyConsentView
 
+                    provider_disclosure = (
+                        "Consented audio is transcribed locally by Watch Yo Mouf over the "
+                        "private Discloud VLAN, and text is reviewed locally by RivaL Intelligence. "
+                        if local_voice else
+                        "Consented audio is sent to Google Gemini for transcription and conduct "
+                        "review under the operator-confirmed paid data terms. "
+                    )
                     notice_message = await notice_channel.send(
                         f"🛡️ **Voice Safety review is active for <#{voice_channel_id}>.** "
                         "This is an optional AI-assisted staff-alert feature, not a guaranteed content block. "
-                        "Members who accepted the disclosed Voice Safety agreement during verification or on this notice may be monitored automatically in the selected VC. "
-                        ("Consented audio is transcribed locally by Watch Yo Mouf over a private Discloud VLAN; "
-                         "RivaL Intelligence evaluates text locally without a commercial AI API. "
-                         if local_voice else
-                         "Consented audio is sent to Google Gemini, and transcript text is sent to Gemini "
-                         "for conduct classification. The operator confirmed paid no-training Gemini data terms. ")
-                        + "Staff may see an incident notice. The monitored space is restricted to adults. "
+                        "Only members who accepted a disclosed Voice Safety agreement may be monitored. "
+                        f"{provider_disclosure}"
+                        "Staff may see an incident notice. The monitored space is restricted to adults. "
                         "Dank Shield does not retain raw audio; moderation incidents remain in the private staff channel. "
-                        "Press **Opt Out** at any time to revoke ongoing monitoring. Existing members may press **Agree Once** here.",
+                        "Press **Opt Out** at any time to revoke ongoing monitoring. Members may press **Agree Once** here.",
                         view=VoiceSafetyConsentView(),
                         allowed_mentions=discord.AllowedMentions.none(),
                     )
