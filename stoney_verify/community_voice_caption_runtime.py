@@ -125,8 +125,16 @@ def voice_safety_host_checks() -> dict[str, bool]:
 
 def voice_safety_host_enabled() -> bool:
     checks = voice_safety_host_checks()
-    # A configured token or host attestation is NOT live proof of inference.
-    return all(checks.values())
+    # Preserve Gemini's existing operator-attestation predicate; its caption
+    # receiver checks the live-captions switch and API key separately at start.
+    # New local mode requires its independent scoped credentials up front.
+    if os.getenv("DANK_VOICE_SAFETY_BACKEND", "").strip().lower() == "watch":
+        return all(checks.values())
+    return all(checks.get(key, False) for key in (
+        "DANK_VOICE_SAFETY_ENABLED",
+        "DANK_VOICE_SAFETY_GEMINI_PAID_CONFIRMED",
+        "DANK_VOICE_SAFETY_ADULT_ONLY_CONFIRMED",
+    ))
 
 
 
