@@ -1421,6 +1421,11 @@ class CaptionEngine:
 
     def allow_user(self, user_id: int) -> None:
         self._blocked_user_ids.discard(int(user_id))
+        # Local Watch STT invalidates in-flight requests with a per-user
+        # generation on revocation; only an explicit re-admission resets it.
+        accept_user = getattr(self.transcriber, "allow_user", None)
+        if callable(accept_user):
+            accept_user(int(user_id))
 
     async def revoke_user(self, user_id: int) -> None:
         """Revoke one speaker and guarantee their buffered audio cannot publish later."""
