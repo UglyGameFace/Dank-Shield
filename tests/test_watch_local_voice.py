@@ -8,7 +8,7 @@ import time
 import unittest
 from unittest.mock import patch
 
-from aiohttp import ClientSession, web
+from aiohttp import web
 
 from stoney_verify.community_voice_captions import CaptionSegment
 from stoney_verify import rival_voice_advisor, watch_voice_transcriber
@@ -23,7 +23,7 @@ PCM_STEREO = b"\x00\x01\x00\x01" * 24_000
 PCM_MONO = b"\x01\x02" * 8000
 
 
-class _HTTPFixture(unittest.IsolatedAsyncioTestCase):
+class TestWatchLocalVoice(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.environ = patch.dict(os.environ, {
             "DANK_WATCH_AUDIO_SECRET": SECRET,
