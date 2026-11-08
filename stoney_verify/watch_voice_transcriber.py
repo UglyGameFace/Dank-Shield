@@ -30,6 +30,29 @@ def local_voice_enabled() -> bool:
     return os.getenv("DANK_VOICE_SAFETY_BACKEND", "").strip().lower() == "watch"
 
 
+async def watch_worker_ready() -> bool:
+    """Check the actual Vosk model is loaded before admitting any voice audio."""
+    try:
+        timeout = aiohttp.ClientTimeout(total=2.5, connect=0.75)
+        async with aiohttp.ClientSession(timeout=timeout, trust_env=False) as client:
+            async with client.get(
+                "http://watchyomouf:8098/v1/stt-health", allow_redirects=False,
+            ) as response:
+                if response.status != 200 or (
+                    response.content_length is not None
+                    and response.content_length > 256
+                ):
+                    return False
+                raw = await response.content.read(257)
+                if len(raw) > 256:
+                    return False
+                body = json.loads(raw)
+                return body == {"ready": True, "model": "vosk-small-en-us-0.15"}
+    except (aiohttp.ClientError, asyncio.TimeoutError, OSError,
+            ValueError, TypeError):
+        return False
+
+
 class WatchVoiceTranscriber:
     """Opt-in, short-lived client. Each segment is a separate signed request."""
 
