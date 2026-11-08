@@ -1,11 +1,10 @@
 """Regression for ticket creation under Basic Verify (issue #701)."""
+import asyncio
 from types import SimpleNamespace
 import sys
-import pytest
 
 
-@pytest.mark.asyncio
-async def test_basic_verify_ticket_skips_panel_without_warning(monkeypatch):
+def test_basic_verify_ticket_skips_panel_without_warning(monkeypatch):
     from stoney_verify.commands_ext import public_ticket_panel_clean as panel
 
     guild = SimpleNamespace(id=123)
@@ -43,12 +42,11 @@ async def test_basic_verify_ticket_skips_panel_without_warning(monkeypatch):
     monkeypatch.setattr(startup_guards, "unverified_ticket_panel_flow", flow, raising=False)
     monkeypatch.setattr(panel, "_canon", lambda row: "verification")
 
-    assert await panel._maybe_post_verification_panel(channel, owner, {"slug": "verification"}) == ""
+    assert asyncio.run(panel._maybe_post_verification_panel(channel, owner, {"slug": "verification"})) == ""
     assert calls == ["resolve"]
 
 
-@pytest.mark.asyncio
-async def test_advanced_verify_post_failure_still_warns(monkeypatch):
+def test_advanced_verify_post_failure_still_warns(monkeypatch):
     from stoney_verify.commands_ext import public_ticket_panel_clean as panel
     from stoney_verify import startup_guards
 
@@ -74,4 +72,4 @@ async def test_advanced_verify_post_failure_still_warns(monkeypatch):
     monkeypatch.setattr(startup_guards, "unverified_ticket_panel_flow", flow, raising=False)
     monkeypatch.setattr(panel, "_canon", lambda row: "verification")
     channel = SimpleNamespace(id=456, guild=SimpleNamespace(id=123))
-    assert await panel._maybe_post_verification_panel(channel, SimpleNamespace(id=789), {"slug": "verification"}) == "Verification panel failed to post."
+    assert asyncio.run(panel._maybe_post_verification_panel(channel, SimpleNamespace(id=789), {"slug": "verification"})) == "Verification panel failed to post."
