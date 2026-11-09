@@ -87,27 +87,49 @@ def voice_safety_scope_id(guild_id: int) -> str:
 
 
 def voice_safety_host_checks() -> dict[str, bool]:
-    """Operator-readable booleans. Never include secret values or imply attestation was verified."""
+    """Configuration preflight only; never proof that remote engines are healthy."""
     affirmative = {"1", "true", "yes", "on"}
-    flags = (
+    common = (
         "DANK_COMMUNITY_LIVE_CAPTIONS_ENABLED",
         "DANK_VOICE_SAFETY_ENABLED",
-        "DANK_VOICE_SAFETY_GEMINI_PAID_CONFIRMED",
         "DANK_VOICE_SAFETY_ADULT_ONLY_CONFIRMED",
     )
+    if os.getenv("DANK_VOICE_SAFETY_BACKEND", "").strip().lower() == "watch":
+        flags = (*common, "DANK_VOICE_SAFETY_LOCAL_ENABLED")
+        checks = {
+            name: os.getenv(name, "").strip().lower() in affirmative
+            for name in flags
+        }
+        audio = os.getenv("DANK_WATCH_AUDIO_SECRET", "").strip()
+        model = os.getenv("DANK_RIVAL_VOICE_TOKEN", "").strip()
+        forbidden = {
+            os.getenv("DANK_VOICE_BRIDGE_SECRET", ""),
+            os.getenv("GEMINI_API_KEY", ""),
+        }
+        checks["DANK_WATCH_AUDIO_SECRET"] = (
+            32 <= len(audio.encode("utf-8")) <= 512
+            and audio not in forbidden and audio != model
+        )
+        checks["DANK_RIVAL_VOICE_TOKEN"] = (
+            32 <= len(model) <= 256 and model not in forbidden and model != audio
+        )
+        return checks
+    flags = (*common, "DANK_VOICE_SAFETY_GEMINI_PAID_CONFIRMED")
     checks = {
         name: os.getenv(name, "").strip().lower() in affirmative
         for name in flags
     }
-    # A configured key is not proof of valid credentials, billing or model access.
     checks["GEMINI_API_KEY"] = bool(os.getenv("GEMINI_API_KEY", "").strip())
     return checks
 
 
 def voice_safety_host_enabled() -> bool:
-    # The Gemini billing/adult-only values are explicit operator attestations,
-    # not checks against Google's billing or user age systems.
     checks = voice_safety_host_checks()
+    # Preserve Gemini's existing operator-attestation predicate; its caption
+    # receiver checks the live-captions switch and API key separately at start.
+    # New local mode requires its independent scoped credentials up front.
+    if os.getenv("DANK_VOICE_SAFETY_BACKEND", "").strip().lower() == "watch":
+        return all(checks.values())
     return all(checks.get(key, False) for key in (
         "DANK_VOICE_SAFETY_ENABLED",
         "DANK_VOICE_SAFETY_GEMINI_PAID_CONFIRMED",
@@ -1070,7 +1092,11 @@ class CommunityVoiceCaptionManager:
         notice_channel_id = int(session.get("notice_channel_id") or 0) if safety_mode else 0
         if safety_mode and notice_channel_id <= 0:
             raise VoiceReceiveUnavailable("Voice Safety requires a public notice channel.")
-        if not os.getenv("GEMINI_API_KEY", "").strip():
+        local_voice = bool(
+            safety_mode
+            and os.getenv("DANK_VOICE_SAFETY_BACKEND", "").strip().lower() == "watch"
+        )
+        if not local_voice and not os.getenv("GEMINI_API_KEY", "").strip():
             raise VoiceReceiveUnavailable(
                 "Live Captions need GEMINI_API_KEY configured on the Dank Shield host."
             )
@@ -1098,6 +1124,13 @@ class CommunityVoiceCaptionManager:
         capability = voice_receive_capability()
         if not capability.available:
             raise VoiceReceiveUnavailable(capability.reason)
+        if local_voice:
+            from .watch_voice_transcriber import watch_worker_ready
+            if not await watch_worker_ready():
+                raise VoiceReceiveUnavailable(
+                    "Watch Yo Mouf offline Vosk worker is not ready; "
+                    "voice audio was not connected."
+                )
 
         async with self._lock:
             existing = self._sessions.get(sid)
@@ -1155,15 +1188,23 @@ class CommunityVoiceCaptionManager:
                     if perms is None or not (perms.view_channel and perms.send_messages):
                         raise VoiceReceiveUnavailable("Dank Shield needs View Channel and Send Messages in both Voice Safety channels.")
 
-            transcriber = gemini_live_transcriber_from_env(
-                language_codes=language_codes,
-            )
+            if local_voice:
+                from .watch_voice_transcriber import WatchVoiceTranscriber
+                transcriber = WatchVoiceTranscriber(guild_id, voice_channel_id)
+            else:
+                transcriber = gemini_live_transcriber_from_env(
+                    language_codes=language_codes,
+                )
             translator = (
                 gemini_text_translator_from_env()
                 if output_mode in {"english", "bilingual"}
                 else None
             )
-            advisor = VoiceSafetyAdvisor() if safety_mode else None
+            if local_voice:
+                from .rival_voice_advisor import classify_local_voice
+                advisor = VoiceSafetyAdvisor(classify=classify_local_voice)
+            else:
+                advisor = VoiceSafetyAdvisor() if safety_mode else None
 
             async def _publish(user_id: int, text: str, confidence: Optional[float]) -> None:
                 if advisor is not None:
@@ -1214,6 +1255,7 @@ class CommunityVoiceCaptionManager:
                 translator=translator,
                 output_mode=output_mode,
                 global_transcribe_semaphore=self._global_transcribe_semaphore,
+                max_pending_segments=2 if local_voice else 48,
             )
             loop = asyncio.get_running_loop()
             bridge = PerSpeakerFrameBridge(loop, engine.submit)
@@ -1223,15 +1265,21 @@ class CommunityVoiceCaptionManager:
                 if safety_mode:
                     from .commands_ext.public_voice_safety import VoiceSafetyConsentView
 
+                    provider_disclosure = (
+                        "Consented audio is transcribed locally by Watch Yo Mouf over the "
+                        "private Discloud VLAN, and text is reviewed locally by RivaL Intelligence. "
+                        if local_voice else
+                        "Consented audio is sent to Google Gemini for transcription and conduct "
+                        "review under the operator-confirmed paid data terms. "
+                    )
                     notice_message = await notice_channel.send(
                         f"🛡️ **Voice Safety review is active for <#{voice_channel_id}>.** "
                         "This is an optional AI-assisted staff-alert feature, not a guaranteed content block. "
-                        "Members who accepted the disclosed Voice Safety agreement during verification or on this notice may be monitored automatically in the selected VC. "
-                        "Consented audio is sent to Google Gemini, and transcript text is sent to Gemini "
-                        "for conduct classification. Staff may see an incident notice. "
-                        "This operator has confirmed the Gemini project uses paid no-training data terms and the monitored space is restricted to adults. "
+                        "Only members who accepted a disclosed Voice Safety agreement may be monitored. "
+                        f"{provider_disclosure}"
+                        "Staff may see an incident notice. The monitored space is restricted to adults. "
                         "Dank Shield does not retain raw audio; moderation incidents remain in the private staff channel. "
-                        "Press **Opt Out** at any time to revoke ongoing monitoring. Existing members may press **Agree Once** here.",
+                        "Press **Opt Out** at any time to revoke ongoing monitoring. Members may press **Agree Once** here.",
                         view=VoiceSafetyConsentView(),
                         allowed_mentions=discord.AllowedMentions.none(),
                     )

@@ -8,6 +8,7 @@ captions infrastructure; no automated punishment is enabled.
 """
 
 import asyncio
+import os
 
 import discord
 
@@ -83,8 +84,12 @@ def _readiness(guild: discord.Guild, config: dict) -> tuple[bool, str]:
     if missing:
         return False, (
             "Host configuration incomplete: " + ", ".join(missing) + ". "
-            "Enable each only after confirming DAVE receive, paid Gemini API data terms "
-            "and eligible adult-only deployment. API key presence does not prove it works."
+            + (
+                "Verify the private Watch/Vosk worker, RivaL LFM3 authentication, "
+                "individual voice consent, and adult-only deployment."
+                if str(os.getenv("DANK_VOICE_SAFETY_BACKEND", "")).strip().lower() == "watch"
+                else "Verify DAVE receive, paid Gemini data terms and adult-only deployment."
+            ) + " Configuration is not proof that either service works."
         )
     if not voice_safety_host_enabled() or not live_captions_enabled():
         return False, "Voice Safety remains host-locked; review your Discloud environment and restart."
@@ -129,15 +134,19 @@ async def _embed(interaction: discord.Interaction) -> discord.Embed:
     eligible = qualifying_channels(guild, cfg)
     staff = _id(cfg, VOICE_SAFETY_STAFF)
     notice = _id(cfg, VOICE_SAFETY_NOTICE)
+    local_voice = str(os.getenv("DANK_VOICE_SAFETY_BACKEND", "")).strip().lower() == "watch"
+    provider = (
+        "Watch Yo Mouf (local Vosk) and RivaL Intelligence (local LFM3)"
+        if local_voice else "Google Gemini"
+    )
     embed = discord.Embed(
         title="🛡️ Voice Safety · Staff Review",
         description=(
             "AI conduct review of eligible voice channels once two humans join. "
-            "One receiver identity covers only one VC per server at a time; other "
-            "qualifying rooms wait for capacity. Only members with a recorded "
-            "agreement are transcribed. Google Gemini receives "
-            "their voice and text to assess conduct. No automated mutes, kicks or bans. "
-            "Staff must verify every finding. Not a guarantee against already-spoken words."
+            "One Dank Shield DAVE receiver covers one VC per server at a time. "
+            "Only members who explicitly accepted disclosed Voice Safety monitoring "
+            "are transcribed. Provider: " + provider + ". "
+            "No automatic mutes, kicks or bans. Staff must verify every finding."
         ),
         color=discord.Color.blurple(),
     )
@@ -154,11 +163,20 @@ async def _embed(interaction: discord.Interaction) -> discord.Embed:
     )
     checks = voice_safety_host_checks()
     labels = (
-        ("DANK_COMMUNITY_LIVE_CAPTIONS_ENABLED", "DAVE captions switch"),
-        ("DANK_VOICE_SAFETY_ENABLED", "Voice Safety switch"),
-        ("DANK_VOICE_SAFETY_GEMINI_PAID_CONFIRMED", "Gemini paid-project confirmation"),
-        ("DANK_VOICE_SAFETY_ADULT_ONLY_CONFIRMED", "Adult-only usage confirmation"),
-        ("GEMINI_API_KEY", "Gemini API key configured"),
+        (
+            ("DANK_COMMUNITY_LIVE_CAPTIONS_ENABLED", "DAVE captions switch"),
+            ("DANK_VOICE_SAFETY_ENABLED", "Voice Safety switch"),
+            ("DANK_VOICE_SAFETY_LOCAL_ENABLED", "Private local worker explicitly enabled"),
+            ("DANK_VOICE_SAFETY_ADULT_ONLY_CONFIRMED", "Adult-only usage confirmation"),
+            ("DANK_WATCH_AUDIO_SECRET", "Private Watch audio secret configured"),
+            ("DANK_RIVAL_VOICE_TOKEN", "RivaL local moderation token configured"),
+        ) if local_voice else (
+            ("DANK_COMMUNITY_LIVE_CAPTIONS_ENABLED", "DAVE captions switch"),
+            ("DANK_VOICE_SAFETY_ENABLED", "Voice Safety switch"),
+            ("DANK_VOICE_SAFETY_GEMINI_PAID_CONFIRMED", "Gemini paid-project confirmation"),
+            ("DANK_VOICE_SAFETY_ADULT_ONLY_CONFIRMED", "Adult-only usage confirmation"),
+            ("GEMINI_API_KEY", "Gemini API key configured"),
+        )
     )
     embed.add_field(
         name="Host readiness · Discloud",
@@ -221,10 +239,11 @@ class VoiceSafetyConsentView(discord.ui.View):
         if consented:
             return await interaction.followup.send(
                 "✅ Your one-time Voice Safety agreement is saved for this server. "
-                "Your speech in the selected VC may be automatically transcribed by Gemini "
-                "and evaluated for staff-only incident alerts. This is separate from Live Captions consent. "
-                "This agreement remains until you withdraw it, even after you leave the VC. "
-                "Choose Decline & Exit Server to withdraw consent and leave after a 10-second chance to change your mind. This feature requires an operator-confirmed paid Gemini API project and an adult-only monitored space.",
+                "Your speech in the selected VC may be transcribed for staff-only incident review. "
+                "When the server selects Watch Yo Mouf, local Vosk transcribes audio and RivaL Intelligence reviews the text; "
+                "the alternative Gemini provider requires operator-confirmed paid terms. "
+                "This is separate from Live Captions consent and remains active until you withdraw it. "
+                "Leaving the server also withdraws agreement. The monitored space must be adult-only.",
                 ephemeral=True,
             )
         await interaction.followup.send(

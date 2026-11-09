@@ -1373,6 +1373,7 @@ class CaptionEngine:
         low_confidence_threshold: float = 0.72,
         unclear_threshold: float = 0.48,
         global_transcribe_semaphore: Optional[asyncio.Semaphore] = None,
+        max_pending_segments: int = 48,
     ) -> None:
         self.transcriber = transcriber
         self.translator = translator
@@ -1392,6 +1393,7 @@ class CaptionEngine:
         self._closed = False
         self._transcribe_semaphore = asyncio.Semaphore(3)
         self._global_transcribe_semaphore = global_transcribe_semaphore
+        self.max_pending_segments = max(1, min(48, int(max_pending_segments)))
         self.segments_transcribed = 0
         self.segments_published = 0
         self.segments_empty = 0
@@ -1421,6 +1423,11 @@ class CaptionEngine:
 
     def allow_user(self, user_id: int) -> None:
         self._blocked_user_ids.discard(int(user_id))
+        # Local Watch STT invalidates in-flight requests with a per-user
+        # generation on revocation; only an explicit re-admission resets it.
+        accept_user = getattr(self.transcriber, "allow_user", None)
+        if callable(accept_user):
+            accept_user(int(user_id))
 
     async def revoke_user(self, user_id: int) -> None:
         """Revoke one speaker and guarantee their buffered audio cannot publish later."""
@@ -1498,6 +1505,11 @@ class CaptionEngine:
     ) -> None:
         uid = int(segment.user_id)
         if self._closed or not segment.pcm or uid in self._blocked_user_ids:
+            return
+        if len(self._segment_tasks) >= self.max_pending_segments:
+            # CPU-only STT and local LFM3 are serial. Never accumulate
+            # unbounded live speech buffers while an engine is overloaded.
+            self.provider_skipped += 1
             return
         task = asyncio.create_task(
             self._process_segment_safely(segment, sealed_token),

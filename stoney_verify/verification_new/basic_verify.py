@@ -265,13 +265,24 @@ def build_basic_verify_embed(guild: discord.Guild, cfg: Any) -> discord.Embed:
         color=discord.Color.green(),
     )
     if voice_safety:
+        # The disclosure must name the processor members actually agree to.
+        # The local Watch backend transcribes on the private voice worker;
+        # anything else keeps the existing Gemini wording.
+        local_voice = os.getenv("DANK_VOICE_SAFETY_BACKEND", "").strip().lower() == "watch"
+        processing_copy = (
+            "Audio is transcribed locally by the server's private voice worker "
+            "and reviewed by a local advisory model. "
+            if local_voice
+            else "Audio is processed using **Google Gemini**. "
+        )
         embed.add_field(
             name=f"🎙️ {VOICE_SAFETY_DISCLOSURE_MARKER}",
             value=(
                 "Selected voice channels use AI moderation to detect potentially "
                 "**inappropriate, hateful, harassing, lewd, sexually explicit, or offensive comments** "
                 "that may make others uncomfortable or violate server rules.\n\n"
-                "Audio is processed using **Google Gemini**. Staff may receive private "
+                + processing_copy
+                + "Staff may receive private "
                 "safety alerts, but Dank Shield does not store raw audio.\n\n"
                 "By selecting **Agree & Verify**, you consent to monitoring in designated "
                 "channels. If you decline, press **Decline & Exit Server**. Your access roles "

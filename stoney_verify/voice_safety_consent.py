@@ -2,11 +2,19 @@ from __future__ import annotations
 
 """Versioned, independently auditable Voice Safety agreement.
 
-Voice Safety is a membership rule in guilds that enable it: being a member of
-the server constitutes agreement with the disclosed Voice Safety policy, and
-leaving the server is the opt-out. Explicit button agreements (the verify
-panel, the member notice) remain supported and are never overwritten by the
-membership sync; they keep their original source and timestamp.
+Voice audio processing requires an affirmative, disclosed, voice-specific action.
+Historic membership-v2 records may exist but can never authorize the receiver.
+Leaving the server withdraws any explicit voice agreement.
+
+One exception, decided by the server owner: a one-time grandfathering for
+members who were already verified when the disclosed Verify panel arrived.
+Those members joined under the server's stated join agreement (verify, agree
+to voice monitoring, or decline and exit), so the one-time backfill records
+them under their own auditable source, ``membership_grandfather_v1`` — never
+as a Verify click they did not make, and never as the ineligible
+``server_membership_v2`` source. Joining alone still never authorizes the
+receiver afterwards: new members opt in through the Verify click, and the
+backfill never runs a second time.
 """
 
 from datetime import datetime, timezone
@@ -15,13 +23,14 @@ from typing import Any
 VOICE_SAFETY_AGREEMENT_KEY = "voice_safety_agreement_v1"
 VOICE_SAFETY_DISCLOSURE_MARKER = "Dank Shield Voice Safety Agreement v1"
 VOICE_SAFETY_MEMBERSHIP_SOURCE = "server_membership_v2"
+VOICE_SAFETY_GRANDFATHER_SOURCE = "membership_grandfather_v1"
 _ALLOWED_AGREEMENT_SOURCES = frozenset(
-    {"basic_verify_v1", "voice_safety_notice_v1", VOICE_SAFETY_MEMBERSHIP_SOURCE}
+    {"basic_verify_v1", "voice_safety_notice_v1", VOICE_SAFETY_GRANDFATHER_SOURCE}
 )
 
 
 async def read_voice_safety_agreement(guild_id: int, user_id: int) -> bool:
-    """Storage errors fail closed, never fall back to stale cache."""
+    """Only explicit member actions authorize voice processing; failures deny."""
     from .profile_card_service import get_profile_guild_settings
 
     try:
@@ -61,17 +70,61 @@ async def save_voice_safety_agreement(
 
 
 async def record_membership_agreement(guild_id: int, user_id: int) -> bool:
-    """Affirmative agreement for a current member, keyed to server membership.
+    """Legacy API; membership must never manufacture voice-specific consent."""
+    del guild_id, user_id
+    return False
 
-    Idempotent: members with an existing affirmative record (explicit button
-    or earlier membership sync) are left untouched so their original source
-    and timestamp are preserved. A stale declined record for a member who is
-    still in the server is re-affirmed, because agreement is required to stay.
+
+async def _read_agreement_record(guild_id: int, user_id: int) -> dict[str, Any] | None:
+    """Raw stored agreement record, or None; storage errors read as no record."""
+    from .profile_card_service import get_profile_guild_settings
+
+    try:
+        row = await get_profile_guild_settings(int(guild_id), int(user_id), refresh=True)
+        value = (row.get("settings") or {}).get(VOICE_SAFETY_AGREEMENT_KEY)
+        return value if isinstance(value, dict) else None
+    except Exception:
+        return None
+
+
+def _member_has_role(member: Any, role_id: Any) -> bool:
+    """True when the member holds the given role id (config stores it as text)."""
+    try:
+        wanted = int(role_id)
+    except (TypeError, ValueError):
+        return False
+    for role in getattr(member, "roles", None) or []:
+        try:
+            if int(getattr(role, "id", 0)) == wanted:
+                return True
+        except (TypeError, ValueError):
+            continue
+    return False
+
+
+async def record_grandfather_agreement(guild_id: int, user_id: int) -> bool:
+    """One-time grandfathering for an already-verified member.
+
+    Returns True when a voice agreement is in force afterwards. An existing
+    explicit record (Verify click or member notice) is preserved untouched.
+    A declined record is a decision and is never overwritten. A legacy
+    membership-v2 acceptance is converted to the grandfather source, so the
+    audit trail shows how the agreement arose. A member with no record gets a
+    fresh grandfather record.
     """
     if await read_voice_safety_agreement(guild_id, user_id):
         return True
+    existing = await _read_agreement_record(guild_id, user_id)
+    if isinstance(existing, dict) and existing.get("accepted") is True:
+        if existing.get("source") == VOICE_SAFETY_MEMBERSHIP_SOURCE:
+            return await save_voice_safety_agreement(
+                guild_id, user_id, True, source=VOICE_SAFETY_GRANDFATHER_SOURCE
+            )
+        return False
+    if isinstance(existing, dict) and existing.get("accepted") is False:
+        return False
     return await save_voice_safety_agreement(
-        guild_id, user_id, True, source=VOICE_SAFETY_MEMBERSHIP_SOURCE
+        guild_id, user_id, True, source=VOICE_SAFETY_GRANDFATHER_SOURCE
     )
 
 
@@ -85,34 +138,39 @@ async def withdraw_agreement_on_leave(guild_id: int, user_id: int) -> bool:
     if not await read_voice_safety_agreement(guild_id, user_id):
         return False
     await save_voice_safety_agreement(
-        guild_id, user_id, False, source=VOICE_SAFETY_MEMBERSHIP_SOURCE
+        guild_id, user_id, False, source="voice_safety_notice_v1"
     )
     return True
 
 
-async def sync_guild_membership_agreement(guild: Any, *, members: Any = None) -> dict[str, int]:
-    """Grandfather current members into agreement (one-time backfill).
+async def sync_guild_membership_agreement(
+    guild: Any, *, members: Any = None, verified_role_id: Any = None
+) -> dict[str, int]:
+    """One-time grandfathering for already-verified members only.
 
-    Iterates the supplied authoritative member snapshot when available (cached
-    members otherwise), skipping bots, and records affirmative
-    membership agreement for anyone lacking one. Explicit button agreements
-    are preserved. Returns counts; never raises -- per-member failures are
-    counted so a retry can pick them up.
+    ``verified_role_id`` is the guild's configured Verified role; members
+    without it are skipped, as are bots, members with an existing admissible
+    agreement, and members who declined. Without a verified role id the
+    backfill cannot establish who verified, so it records nothing (fail
+    closed). Per-member failures are counted so a retry can pick them up.
     """
     recorded = skipped = failed = 0
-    member_list = list(members if members is not None else (getattr(guild, "members", None) or []))
+    member_list = list(members if members is not None else (getattr(guild, "members", None) or ()))
     for member in member_list:
         try:
             if getattr(member, "bot", False):
                 skipped += 1
                 continue
+            if not _member_has_role(member, verified_role_id):
+                skipped += 1
+                continue
             if await read_voice_safety_agreement(guild.id, member.id):
                 skipped += 1
                 continue
-            await save_voice_safety_agreement(
-                guild.id, member.id, True, source=VOICE_SAFETY_MEMBERSHIP_SOURCE
-            )
-            recorded += 1
+            if await record_grandfather_agreement(guild.id, member.id):
+                recorded += 1
+            else:
+                skipped += 1
         except Exception:
             failed += 1
     return {"recorded": recorded, "skipped": skipped, "failed": failed}
