@@ -206,6 +206,26 @@ def test_voice_safety_agreement_requires_explicit_disclosed_action(monkeypatch) 
     assert BasicVerifyButton().label == "Verify"
 
 
+def test_voice_safety_disclosure_names_local_backend_when_watch(monkeypatch) -> None:
+    from stoney_verify.verification_new.basic_verify import build_basic_verify_embed
+    from stoney_verify.voice_safety_consent import verification_message_discloses_voice_safety
+
+    guild = SimpleNamespace(get_channel=lambda key: None, text_channels=[])
+    monkeypatch.setenv("DANK_VOICE_SAFETY_BACKEND", "watch")
+    configured = build_basic_verify_embed(guild, {"voice_safety_enabled": True})
+    voice_copy = str(configured.fields[0].value)
+    assert "transcribed locally" in voice_copy
+    assert "Google Gemini" not in str(configured.to_dict())
+    assert "private safety alerts" in voice_copy
+    assert "raw audio" in voice_copy
+    assert verification_message_discloses_voice_safety(
+        SimpleNamespace(embeds=[configured])
+    )
+    monkeypatch.delenv("DANK_VOICE_SAFETY_BACKEND", raising=False)
+    default = build_basic_verify_embed(guild, {"voice_safety_enabled": True})
+    assert "Google Gemini" in str(default.fields[0].value)
+
+
 def test_voice_safety_agreement_does_not_infer_from_verified_role(monkeypatch) -> None:
     async def run() -> None:
         import stoney_verify.profile_card_service as profiles
