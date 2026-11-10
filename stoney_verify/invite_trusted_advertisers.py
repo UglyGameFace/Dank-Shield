@@ -104,8 +104,6 @@ def trusted_rule(message: Any, cfg: Any) -> dict[str, Any] | None:
         return None
     if getattr(message, "interaction_metadata", None) is not None:
         return None
-    if getattr(message, "interaction", None) is not None:
-        return None
     bot_id = _id(getattr(author, "id", 0))
     channel_id = _id(getattr(getattr(message, "channel", None), "id", 0))
     app_id = _id(getattr(message, "application_id", 0))
@@ -120,8 +118,6 @@ def trusted_rule(message: Any, cfg: Any) -> dict[str, Any] | None:
 def is_advert_like(message: Any) -> bool:
     """Do not auto-delete bot greetings, commands or casual text."""
     if getattr(message, "interaction_metadata", None) is not None:
-        return False
-    if getattr(message, "interaction", None) is not None:
         return False
     try:
         from .invite_policy_engine import extract_invite_codes_from_message
