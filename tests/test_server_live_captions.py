@@ -479,6 +479,7 @@ def test_receive_transport_recovery_preserves_consent_with_fresh_bridge(monkeypa
         assert old_voice.disconnected is True
         assert state.voice_client is new_voice
         assert state.bridge is not old_bridge
+        assert old_bridge.opted_in_user_ids() == ()
         assert state.bridge.opted_in_user_ids() == (7, 8)
         assert state.receive_recoveries == 1
         assert state.receive_recovery_failures == 0

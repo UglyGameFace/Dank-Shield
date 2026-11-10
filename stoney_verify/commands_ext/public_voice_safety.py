@@ -197,6 +197,22 @@ async def _embed(interaction: discord.Interaction) -> discord.Embed:
         ),
         inline=False,
     )
+    if running:
+        health = status.get("health") if isinstance(status.get("health"), dict) else {}
+        embed.add_field(
+            name="Voice receive health · this session",
+            value=(
+                f"PCM frames: {int(health.get('frames_routed') or 0)} routed"
+                f" • pending: {int(health.get('dispatch_pending') or 0)}"
+                f" • peak: {int(health.get('dispatch_pending_peak') or 0)}\n"
+                f"Backpressure drops: {int(health.get('dispatch_backpressure_drops') or 0)}"
+                f" • queue overflow: {int(status.get('queue_overflow') or 0)}"
+                f" • processing skips: {int(status.get('provider_skipped') or 0)}\n"
+                f"Receive recoveries: {int(status.get('receive_recoveries') or 0)}"
+                f" • failures: {int(status.get('receive_recovery_failures') or 0)}"
+            ),
+            inline=False,
+        )
     embed.set_footer(text="Explicit member consent • staff-only advisory alerts • no stored audio")
     return embed
 
