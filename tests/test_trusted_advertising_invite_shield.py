@@ -74,6 +74,26 @@ def test_exact_bot_channel_and_webhook_cannot_be_impersonated():
     assert trust.clean_rules({trust.CONFIG_KEY: [{}]}) == []
 
 
+
+def test_trusted_adverts_do_not_read_deprecated_interaction_property():
+    class ModernMessage:
+        def __init__(self, message):
+            self.__dict__.update(vars(message))
+            self.__dict__.pop("interaction", None)
+
+        @property
+        def interaction(self):
+            raise AssertionError("deprecated Message.interaction must never be accessed")
+
+    message = ModernMessage(_message())
+    assert trust.trusted_rule(message, _cfg(True)) is not None
+    assert trust.is_advert_like(message)
+
+    message.interaction_metadata = SimpleNamespace(id=1)
+    assert trust.trusted_rule(message, _cfg(True)) is None
+    assert not trust.is_advert_like(message)
+
+
 def test_24_hour_retention_has_safety_buffer_not_early_delete():
     now = datetime.now(timezone.utc)
     msg = _message(created=now)
@@ -251,6 +271,52 @@ def test_process_claim_cancels_revoked_bot_without_discord_fetch(monkeypatch):
     state = asyncio.run(cleanup.process_claim(bot, record))
     assert state == "rule-revoked"
     finish.assert_awaited_once_with(record, "cancelled", error="trusted_rule_revoked")
+
+
+
+def test_process_claim_deletes_expired_advert_without_unsupported_reason(monkeypatch):
+    posted = datetime.now(timezone.utc) - timedelta(hours=26)
+    message = _message(created=posted)
+    calls = []
+
+    async def delete(*, delay=None):
+        calls.append(delay)
+
+    message.delete = delete
+
+    class Channel:
+        id = CHANNEL
+
+        def permissions_for(self, _member):
+            return SimpleNamespace(
+                view_channel=True, read_message_history=True, manage_messages=True,
+            )
+
+        async def fetch_message(self, message_id):
+            assert message_id == message.id
+            return message
+
+    channel = Channel()
+    guild = SimpleNamespace(
+        id=GUILD, me=object(),
+        get_channel=lambda channel_id: channel if channel_id == CHANNEL else None,
+    )
+    bot = SimpleNamespace(get_guild=lambda guild_id: guild if guild_id == GUILD else None)
+    record = {
+        "guild_id": str(GUILD), "channel_id": str(CHANNEL),
+        "message_id": str(message.id), "bot_id": str(BOT),
+        "posted_at": posted.isoformat(), "attempts": 1,
+    }
+    monkeypatch.setattr(cleanup.discord, "TextChannel", Channel)
+    monkeypatch.setattr(cleanup, "get_guild_config", AsyncMock(return_value={
+        "source": "guild_config", **_cfg(True),
+    }))
+    finish = AsyncMock()
+    monkeypatch.setattr(cleanup, "_finish", finish)
+
+    assert asyncio.run(cleanup.process_claim(bot, record)) == "deleted"
+    assert calls == [None]
+    finish.assert_awaited_once_with(record, "done")
 
 
 def test_process_claim_never_deletes_before_post_plus_grace(monkeypatch):
