@@ -35,7 +35,7 @@ jobs:
           opener = urllib.request.build_opener(NoRedirect())
           base = "https://api.discloud.app/v2"
           app = "/app/stoneyverify"
-          target = 1495
+          target = 1200
           original = 756
 
           def call(method, path, data=None):
