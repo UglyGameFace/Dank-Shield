@@ -49,6 +49,10 @@ VOICE_RECV_DAVE_SOURCE = "imayhaveborkedit/discord-ext-voice-recv#58"
 BUNDLED_OPUS_DISTRIBUTION = "opuslib-next-bundled==0.1.1"
 _OPUS_LIBRARY_SOURCE = ""
 _VOICE_RECV_NOISE_FILTER_INTERVAL_SECONDS = 60.0
+# Frame callbacks cross from voice_recv's reader thread into the bot event
+# loop before CaptionEngine's own bounded asyncio queue can apply pressure.
+# A stalled event loop must not retain an unlimited number of PCM frames.
+_MAX_PENDING_FRAME_DISPATCHES = 256
 
 
 class _VoiceRecvBenignNoiseFilter(logging.Filter):
@@ -167,6 +171,9 @@ class VoiceReceiveHealth:
     frames_malformed_pcm: int = 0
     queue_overflow: int = 0
     callback_failures: int = 0
+    dispatch_backpressure_drops: int = 0
+    dispatch_pending: int = 0
+    dispatch_pending_peak: int = 0
 
     def snapshot(self) -> dict[str, int]:
         return {
@@ -184,6 +191,9 @@ class VoiceReceiveHealth:
             "frames_malformed_pcm": self.frames_malformed_pcm,
             "queue_overflow": self.queue_overflow,
             "callback_failures": self.callback_failures,
+            "dispatch_backpressure_drops": self.dispatch_backpressure_drops,
+            "dispatch_pending": self.dispatch_pending,
+            "dispatch_pending_peak": self.dispatch_pending_peak,
         }
 
 
@@ -502,6 +512,7 @@ class PerSpeakerFrameBridge:
         self._consent_generation: dict[int, int] = {}
         self._speaking_callback: Optional[Callable[[int], None]] = None
         self._lock = threading.RLock()
+        self._pending_frame_dispatches = 0
 
     def set_speaking_callback(
         self,
@@ -610,6 +621,19 @@ class PerSpeakerFrameBridge:
             self._increment("frames_malformed_pcm")
             return False
 
+        # The downstream asyncio queue is bounded, but call_soon_threadsafe
+        # queues callbacks before that queue sees a frame. Reserve capacity
+        # while on the reader thread, before retaining a PCM frame/closure.
+        with self._lock:
+            if self._pending_frame_dispatches >= _MAX_PENDING_FRAME_DISPATCHES:
+                self.health.dispatch_backpressure_drops += 1
+                return False
+            self._pending_frame_dispatches += 1
+            self.health.dispatch_pending = self._pending_frame_dispatches
+            self.health.dispatch_pending_peak = max(
+                self.health.dispatch_pending_peak, self._pending_frame_dispatches
+            )
+
         frame = SpeakerPCMFrame(
             user_id=int(source_user_id),
             ssrc=int(ssrc),
@@ -620,36 +644,45 @@ class PerSpeakerFrameBridge:
         )
 
         def _deliver() -> None:
-            with self._lock:
-                consent_still_valid = (
-                    frame.user_id in self._allowed_user_ids
-                    and int(self._consent_generation.get(frame.user_id, 0))
-                    == consent_generation
-                )
-            if not consent_still_valid:
-                self._increment("frames_not_consented")
-                return
             try:
-                self.callback(frame)
-                self._increment("frames_routed")
-            except asyncio.QueueFull:
-                self._increment("queue_overflow")
-            except Exception:
-                self._increment("callback_failures")
-                log.exception(
-                    "Live Captions frame callback failed user=%s ssrc=%s",
-                    frame.user_id,
-                    frame.ssrc,
-                )
+                with self._lock:
+                    consent_still_valid = (
+                        frame.user_id in self._allowed_user_ids
+                        and int(self._consent_generation.get(frame.user_id, 0))
+                        == consent_generation
+                    )
+                if not consent_still_valid:
+                    self._increment("frames_not_consented")
+                    return
+                try:
+                    self.callback(frame)
+                    self._increment("frames_routed")
+                except asyncio.QueueFull:
+                    self._increment("queue_overflow")
+                except Exception:
+                    self._increment("callback_failures")
+                    log.exception(
+                        "Live Captions frame callback failed user=%s ssrc=%s",
+                        frame.user_id,
+                        frame.ssrc,
+                    )
+            finally:
+                # Release on every path: routed, revoked, queue-full, or error.
+                with self._lock:
+                    self._pending_frame_dispatches -= 1
+                    self.health.dispatch_pending = self._pending_frame_dispatches
 
         try:
             self.loop.call_soon_threadsafe(_deliver)
         except RuntimeError:
+            # Closed/stopped event loop: no callback will release its slot.
+            with self._lock:
+                self._pending_frame_dispatches -= 1
+                self.health.dispatch_pending = self._pending_frame_dispatches
             self._increment("callback_failures")
             return False
 
         return True
-
 
 if voice_recv is not None:
 
