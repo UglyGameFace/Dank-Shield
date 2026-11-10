@@ -25,7 +25,7 @@ from .community_voice_captions import (
     normalize_caption_output_mode,
 )
 from .voice_safety_policy import VoiceSafetyAdvisor
-from .voice_safety_consent import read_voice_safety_agreement, save_voice_safety_agreement
+from .voice_safety_consent import has_voice_safety_decline, save_voice_safety_agreement
 from .voice_safety_coverage import (
     SINGLE, MIN_HUMANS, channel_in_scope, coverage_mode,
     human_count, qualifying_channels,
@@ -487,7 +487,8 @@ class CommunityVoiceCaptionManager:
             return
         safety = getattr(state, "scope_kind", "server") == "voice_safety"
         epoch = state.safety_consent_epochs.get(uid, 0) if safety else 0
-        if safety and not await read_voice_safety_agreement(state.guild_id, uid):
+        # Membership is the opt-in: only a standing explicit decline blocks admission.
+        if safety and await has_voice_safety_decline(state.guild_id, uid):
             return
         if len(state.bridge.opted_in_user_ids()) >= self.max_speakers_per_session:
             raise VoiceReceiveUnavailable(
@@ -529,7 +530,7 @@ class CommunityVoiceCaptionManager:
                 self._sessions.get(state.session_id) is not state
                 or epoch != state.safety_consent_epochs.get(uid, 0)
                 or not in_target
-                or not await read_voice_safety_agreement(state.guild_id, uid)
+                or await has_voice_safety_decline(state.guild_id, uid)
             ):
                 return
         state.engine.allow_user(uid)
@@ -606,7 +607,9 @@ class CommunityVoiceCaptionManager:
             if restored >= self.max_speakers_per_session:
                 break
             if getattr(state, "scope_kind", "server") == "voice_safety":
-                consented = await read_voice_safety_agreement(state.guild_id, int(member.id))
+                # Membership is the opt-in: every member present is covered
+                # unless they hold a standing explicit decline.
+                consented = not await has_voice_safety_decline(state.guild_id, int(member.id))
             else:
                 prefs = await self.preferences_for_user(state.guild_id, int(member.id), refresh=True)
                 consented = bool(prefs.get("auto_opt_in"))
@@ -754,7 +757,7 @@ class CommunityVoiceCaptionManager:
             return
 
         if getattr(state, "scope_kind", "server") == "voice_safety":
-            consented = await read_voice_safety_agreement(gid, uid)
+            consented = not await has_voice_safety_decline(gid, uid)
         else:
             prefs = await self.preferences_for_user(gid, uid, refresh=True)
             consented = bool(prefs.get("auto_opt_in"))
@@ -1270,20 +1273,20 @@ class CommunityVoiceCaptionManager:
                     from .commands_ext.public_voice_safety import VoiceSafetyConsentView
 
                     provider_disclosure = (
-                        "Consented audio is transcribed locally by Watch Yo Mouf over the "
+                        "Member audio is transcribed locally by Watch Yo Mouf over the "
                         "private Discloud VLAN, and text is reviewed locally by RivaL Intelligence. "
                         if local_voice else
-                        "Consented audio is sent to Google Gemini for transcription and conduct "
+                        "Member audio is sent to Google Gemini for transcription and conduct "
                         "review under the operator-confirmed paid data terms. "
                     )
                     notice_message = await notice_channel.send(
                         f"🛡️ **Voice Safety review is active for <#{voice_channel_id}>.** "
                         "This is an optional AI-assisted staff-alert feature, not a guaranteed content block. "
-                        "Only members who accepted a disclosed Voice Safety agreement may be monitored. "
+                        "Membership in this server includes Voice Safety monitoring in this voice channel; no action is needed to be covered. "
                         f"{provider_disclosure}"
                         "Staff may see an incident notice. The monitored space is restricted to adults. "
                         "Dank Shield does not retain raw audio; moderation incidents remain in the private staff channel. "
-                        "Press **Opt Out** at any time to revoke ongoing monitoring. Members may press **Agree Once** here.",
+                        "Press **Decline & Exit Server** at any time to leave the server and stop monitoring.",
                         view=VoiceSafetyConsentView(),
                         allowed_mentions=discord.AllowedMentions.none(),
                     )

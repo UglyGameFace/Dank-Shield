@@ -1,5 +1,6 @@
-"""Voice #517: explicit opt-in going forward, one-time grandfathering for
-members who were already verified when the disclosed Verify panel arrived."""
+"""Voice #517: membership is the opt-in; one-time grandfathering remains as
+the audit trail for members who were already verified when the disclosed
+Verify panel arrived."""
 from __future__ import annotations
 
 import asyncio
@@ -89,6 +90,7 @@ async def test_only_explicit_voice_agreement_is_admissible(store):
         "voice_safety_notice_v1",
         "basic_verify_v1",
         consent.VOICE_SAFETY_GRANDFATHER_SOURCE,
+        consent.VOICE_SAFETY_DECLINE_SOURCE,
     ):
         store[(71, 24)] = record(source=source)
         assert await consent.read_voice_safety_agreement(71, 24)
@@ -97,15 +99,25 @@ async def test_only_explicit_voice_agreement_is_admissible(store):
 
 
 @sync_async
-async def test_join_does_not_regrant_declined_or_legacy_member(store):
-    store[(71, 24)] = record(accepted=False)
-    before = dict(store[(71, 24)])
-    assert await consent.record_membership_agreement(71, 24) is False
-    assert store[(71, 24)] == before
-    assert not await consent.read_voice_safety_agreement(71, 24)
+async def test_only_explicit_decline_blocks_membership_admission(store):
+    # No record at all: membership admits (no decline).
+    assert not await consent.has_voice_safety_decline(71, 24)
+    # An affirmative record: no decline.
+    store[(71, 24)] = record(source="basic_verify_v1")
+    assert not await consent.has_voice_safety_decline(71, 24)
+    # A leave withdrawal (notice source): NOT a decline — rejoin re-admits.
+    store[(71, 24)] = record(source="voice_safety_notice_v1", accepted=False)
+    assert not await consent.has_voice_safety_decline(71, 24)
+    # A legacy membership record: not a decline.
     store[(71, 24)] = record(source="server_membership_v2")
-    assert await consent.record_membership_agreement(71, 24) is False
-    assert not await consent.read_voice_safety_agreement(71, 24)
+    assert not await consent.has_voice_safety_decline(71, 24)
+    # A standing explicit decline: blocks.
+    store[(71, 24)] = record(source=consent.VOICE_SAFETY_DECLINE_SOURCE, accepted=False)
+    assert await consent.has_voice_safety_decline(71, 24)
+    # An explicit agreement clears the decline.
+    assert await consent.save_voice_safety_agreement(71, 24, True, source="basic_verify_v1")
+    assert not await consent.has_voice_safety_decline(71, 24)
+    assert await consent.read_voice_safety_agreement(71, 24)
 
 
 @sync_async

@@ -1,16 +1,18 @@
 """Voice Safety membership lifecycle: one-time grandfathering + leave opt-out.
 
-Going forward, only an explicit member action on a disclosed Voice Safety
-control (the Verify click, or the member notice) authorizes speech. Joining
-a guild never authorizes monitoring, and the join listener stays unwired.
+Membership is the opt-in, decided by the server owner: being a member of the
+server authorizes monitoring, and leaving the server ends it. The join
+listener stays unwired because joining needs no record — admission reads
+membership, not a stored agreement.
 
-The single exception is a one-time grandfathering, decided by the server
-owner, for members who were already verified when the disclosed Verify
-panel arrived: they joined under the server's stated join agreement
-(verify, agree to voice monitoring, or decline and exit). The backfill
-records exactly those members — verified-role holders only — under the
-auditable ``membership_grandfather_v1`` source, once per guild, and never
-runs again. Leaving still withdraws any agreement.
+The one-time grandfathering, also decided by the server owner, records
+members who were already verified when the disclosed Verify panel arrived:
+they joined under the server's stated join agreement (verify, agree to voice
+monitoring, or decline and exit). The backfill records exactly those members
+— verified-role holders only — under the auditable
+``membership_grandfather_v1`` source, once per guild, and never runs again.
+Those records are now an audit trail; admission no longer depends on them.
+Leaving still withdraws any agreement.
 """
 from __future__ import annotations
 

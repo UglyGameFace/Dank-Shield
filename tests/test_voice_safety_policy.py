@@ -136,18 +136,69 @@ def test_voice_safety_opt_out_invalidates_in_flight_review() -> None:
     asyncio.run(run())
 
 
-def test_voice_safety_never_reuses_caption_consent_or_restores_from_database(monkeypatch) -> None:
+def test_voice_safety_membership_restores_present_members_without_a_record(monkeypatch) -> None:
     async def run() -> None:
-        import stoney_verify.profile_card_service as profiles
+        import stoney_verify.community_voice_caption_runtime as runtime
 
-        async def fake_prefs(gid, uid, *, refresh=False):
-            return {"settings": {"live_captions_auto_opt_in": True}}
-        monkeypatch.setattr(profiles, "get_profile_guild_settings", fake_prefs)
-        manager = CommunityVoiceCaptionManager(SimpleNamespace())
-        state = SimpleNamespace(guild_id=1, scope_kind="voice_safety", safety_consents=set())
+        member = SimpleNamespace(
+            id=2, voice=SimpleNamespace(channel=SimpleNamespace(id=7)),
+        )
+        guild = SimpleNamespace(get_member=lambda key: member if key == 2 else None)
+        manager = CommunityVoiceCaptionManager(
+            SimpleNamespace(get_guild=lambda key: guild)
+        )
+
+        class FakeBridge:
+            def __init__(self):
+                self.opted = set()
+            def is_opted_in(self, user_id):
+                return int(user_id) in self.opted
+            def opted_in_user_ids(self):
+                return tuple(self.opted)
+            def opt_in(self, user_id):
+                self.opted.add(int(user_id))
+
+        class FakeEngine:
+            def __init__(self):
+                self.transcriber = SimpleNamespace()
+                self.allowed = set()
+            def allow_user(self, user_id):
+                self.allowed.add(int(user_id))
+
+        async def prefs(*args, **kwargs):
+            return {"language_code": ""}
+        manager.preferences_for_user = prefs
+
+        async def no_decline(*args, **kwargs):
+            return False
+        monkeypatch.setattr(runtime, "has_voice_safety_decline", no_decline)
+
+        state = SimpleNamespace(
+            session_id="voice_safety:1", guild_id=1, voice_channel_id=7,
+            scope_kind="voice_safety", bridge=FakeBridge(),
+            engine=FakeEngine(), safety_consent_epochs={},
+            safety_consents=set(),
+        )
+        manager._sessions[state.session_id] = state
         channel = SimpleNamespace(members=[SimpleNamespace(id=2, bot=False)])
-        assert await manager._restore_auto_opt_ins(state, channel) == 0
-        assert state.safety_consents == set()
+        # Membership is the opt-in: present with no stored record at all.
+        assert await manager._restore_auto_opt_ins(state, channel) == 1
+        assert state.safety_consents == {2}
+        assert state.bridge.is_opted_in(2)
+
+        # A standing explicit decline is the only block.
+        async def declined(*args, **kwargs):
+            return True
+        monkeypatch.setattr(runtime, "has_voice_safety_decline", declined)
+        state2 = SimpleNamespace(
+            session_id="voice_safety:2", guild_id=1, voice_channel_id=7,
+            scope_kind="voice_safety", bridge=FakeBridge(),
+            engine=FakeEngine(), safety_consent_epochs={},
+            safety_consents=set(),
+        )
+        manager._sessions[state2.session_id] = state2
+        assert await manager._restore_auto_opt_ins(state2, channel) == 0
+        assert state2.safety_consents == set()
     asyncio.run(run())
 
 
@@ -226,7 +277,7 @@ def test_voice_safety_disclosure_names_local_backend_when_watch(monkeypatch) -> 
     assert "Google Gemini" in str(default.fields[0].value)
 
 
-def test_voice_safety_agreement_does_not_infer_from_verified_role(monkeypatch) -> None:
+def test_voice_safety_agreement_record_still_requires_explicit_action(monkeypatch) -> None:
     async def run() -> None:
         import stoney_verify.profile_card_service as profiles
         from stoney_verify.voice_safety_consent import read_voice_safety_agreement
@@ -276,12 +327,11 @@ def test_voice_safety_ui_is_accessible_from_existing_protection_and_persistent()
     public = VoiceSafetyConsentView()
     assert public.timeout is None
     ended = VoiceSafetyEndedView()
-    assert ended.opt_in.disabled is True
     assert ended.opt_out.disabled is False
     assert {child.custom_id for child in public.children} == {
-        "dank:voice_safety:consent_on:v1",
         "dank:voice_safety:consent_off:v1",
     }
+    assert {child.label for child in public.children} == {"Decline & Exit Server"}
 
 
 def test_staff_readiness_fails_when_host_gates_are_disabled(monkeypatch) -> None:
@@ -327,14 +377,17 @@ def test_voice_safety_manager_end_to_end_consent_and_staff_alert(monkeypatch) ->
         member = SimpleNamespace(
             id=99, bot=False, voice=SimpleNamespace(channel=voice),
         )
-        voice.members = [member, SimpleNamespace(id=100, bot=False)]
+        member100 = SimpleNamespace(
+            id=100, bot=False, voice=SimpleNamespace(channel=voice),
+        )
+        voice.members = [member, member100]
 
         class FakeGuild:
             id = 5
             default_role = "everyone"
             me = "bot"
             def get_member(self, uid):
-                return member if uid == 99 else None
+                return {99: member, 100: member100}.get(uid)
             def get_channel(self, cid):
                 return {71: voice, 72: staff, 73: notice}.get(int(cid))
             def get_thread(self, cid):
@@ -402,10 +455,7 @@ def test_voice_safety_manager_end_to_end_consent_and_staff_alert(monkeypatch) ->
         async def save(gid, uid, enabled, *, source="voice_safety_notice_v1"):
             agreements[(gid, uid)] = bool(enabled)
             return bool(enabled)
-        async def read(gid, uid):
-            return bool(agreements.get((gid, uid), False))
         monkeypatch.setattr(runtime, "save_voice_safety_agreement", save)
-        monkeypatch.setattr(runtime, "read_voice_safety_agreement", read)
         manager = CommunityVoiceCaptionManager(bot)
         async def preferences(*args, **kwargs):
             return {"language_code": ""}
@@ -417,11 +467,11 @@ def test_voice_safety_manager_end_to_end_consent_and_staff_alert(monkeypatch) ->
         assert state.scope_kind == "voice_safety"
         assert state.notice_message_id == 77
         assert len(notice.sent) == 1
-        assert state.bridge.opted_in_user_ids() == ()
-        await state.engine.publish(99, "unwanted explicit remarks directed at a member", 0.98)
-        assert staff.sent == []  # no consent, no alert
-        assert await manager.set_voice_safety_consent(5, 99, True) is True
-        assert state.bridge.is_opted_in(99)
+        # Membership is the opt-in: both members present are admitted at start,
+        # with no stored agreement record and no click.
+        assert set(state.bridge.opted_in_user_ids()) == {99, 100}
+        assert "no action is needed" in notice.sent[0][0]
+        assert "Agree Once" not in notice.sent[0][0]
         await state.engine.publish(99, "unwanted explicit remarks directed at a member", 0.98)
         assert len(staff.sent) == 1
         assert "staff review only" in staff.sent[0][0]
@@ -675,10 +725,7 @@ def test_voice_safety_revocation_during_transcriber_prewarm_cannot_admit_pcm(mon
         manager._sessions[state.session_id] = state
         async def prefs(*args, **kwargs):
             return {"language_code": ""}
-        async def agreement(*args, **kwargs):
-            return True
         monkeypatch.setattr(manager, "preferences_for_user", prefs)
-        monkeypatch.setattr(runtime, "read_voice_safety_agreement", agreement)
         await manager._enable_user_for_state(state, uid)
         assert not state.bridge.opted
         assert not state.engine.allowed

@@ -2,19 +2,21 @@ from __future__ import annotations
 
 """Versioned, independently auditable Voice Safety agreement.
 
-Voice audio processing requires an affirmative, disclosed, voice-specific action.
-Historic membership-v2 records may exist but can never authorize the receiver.
-Leaving the server withdraws any explicit voice agreement.
+Membership is the opt-in, decided by the server owner: being a member of the
+server authorizes Voice Safety monitoring in the monitored voice channel, and
+leaving the server ends it. No per-session click and no stored agreement
+record are required for admission. The only thing that blocks admission for a
+member who is still in the server is a standing explicit decline, recorded
+under ``voice_safety_decline_v1`` by the Decline & Exit flow.
 
-One exception, decided by the server owner: a one-time grandfathering for
-members who were already verified when the disclosed Verify panel arrived.
-Those members joined under the server's stated join agreement (verify, agree
-to voice monitoring, or decline and exit), so the one-time backfill records
-them under their own auditable source, ``membership_grandfather_v1`` — never
-as a Verify click they did not make, and never as the ineligible
-``server_membership_v2`` source. Joining alone still never authorizes the
-receiver afterwards: new members opt in through the Verify click, and the
-backfill never runs a second time.
+Agreement records remain as the audit trail: the Verify click
+(``basic_verify_v1``), a notice agreement (``voice_safety_notice_v1``), and
+the one-time grandfathering for members who were already verified when the
+disclosed Verify panel arrived (``membership_grandfather_v1``). A leave
+writes a withdrawal record, but a leave withdrawal is not a decline —
+rejoining opts the member back in under the membership rule. Historic
+``server_membership_v2`` records never authorize anything on their own and
+are only ever converted to the grandfather source.
 """
 
 from datetime import datetime, timezone
@@ -24,13 +26,18 @@ VOICE_SAFETY_AGREEMENT_KEY = "voice_safety_agreement_v1"
 VOICE_SAFETY_DISCLOSURE_MARKER = "Dank Shield Voice Safety Agreement v1"
 VOICE_SAFETY_MEMBERSHIP_SOURCE = "server_membership_v2"
 VOICE_SAFETY_GRANDFATHER_SOURCE = "membership_grandfather_v1"
+VOICE_SAFETY_DECLINE_SOURCE = "voice_safety_decline_v1"
 _ALLOWED_AGREEMENT_SOURCES = frozenset(
-    {"basic_verify_v1", "voice_safety_notice_v1", VOICE_SAFETY_GRANDFATHER_SOURCE}
+    {"basic_verify_v1", "voice_safety_notice_v1", VOICE_SAFETY_GRANDFATHER_SOURCE, VOICE_SAFETY_DECLINE_SOURCE}
 )
 
 
 async def read_voice_safety_agreement(guild_id: int, user_id: int) -> bool:
-    """Only explicit member actions authorize voice processing; failures deny."""
+    """Report whether a stored explicit agreement record exists.
+
+    This is the audit-trail read used by the decline grace flow; it is NOT
+    the admission gate — membership authorizes admission. Failures read as
+    no record."""
     from .profile_card_service import get_profile_guild_settings
 
     try:
@@ -69,12 +76,6 @@ async def save_voice_safety_agreement(
     return bool(enabled)
 
 
-async def record_membership_agreement(guild_id: int, user_id: int) -> bool:
-    """Legacy API; membership must never manufacture voice-specific consent."""
-    del guild_id, user_id
-    return False
-
-
 async def _read_agreement_record(guild_id: int, user_id: int) -> dict[str, Any] | None:
     """Raw stored agreement record, or None; storage errors read as no record."""
     from .profile_card_service import get_profile_guild_settings
@@ -85,6 +86,24 @@ async def _read_agreement_record(guild_id: int, user_id: int) -> dict[str, Any] 
         return value if isinstance(value, dict) else None
     except Exception:
         return None
+
+
+async def has_voice_safety_decline(guild_id: int, user_id: int) -> bool:
+    """True only when a standing explicit decline blocks admission.
+
+    A decline is a stored record with accepted=False under the decline source
+    (``voice_safety_decline_v1``), written by the Decline & Exit flow. A leave
+    withdrawal uses the notice source and is NOT a decline: rejoining opts the
+    member back in under the membership rule. Storage errors read as no
+    decline — membership authorizes admission, so an unreadable store cannot
+    silently re-impose a click-to-opt-in gate.
+    """
+    record = await _read_agreement_record(guild_id, user_id)
+    return bool(
+        isinstance(record, dict)
+        and record.get("accepted") is False
+        and record.get("source") == VOICE_SAFETY_DECLINE_SOURCE
+    )
 
 
 def _member_has_role(member: Any, role_id: Any) -> bool:
@@ -133,7 +152,9 @@ async def withdraw_agreement_on_leave(guild_id: int, user_id: int) -> bool:
 
     Only writes when an affirmative record exists, so routine leaves for
     never-agreed members do not create storage noise. Returns True when a
-    withdrawal was recorded.
+    withdrawal was recorded. A leave withdrawal uses the notice source, not
+    the decline source, so it never blocks re-admission: rejoining opts the
+    member back in under the membership rule.
     """
     if not await read_voice_safety_agreement(guild_id, user_id):
         return False

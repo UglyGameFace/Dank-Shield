@@ -189,9 +189,9 @@ async def _embed(interaction: discord.Interaction) -> discord.Embed:
     embed.add_field(
         name="Live status",
         value=(
-            f"{'🟢 Reviewing opted-in speakers' if running else '⚪ Not running'}\n"
+            f"{'🟢 Reviewing members' if running else '⚪ Not running'}\n"
             f"{'Another session owns this server receiver.' if status.get('active') and not running else reason}\n"
-            f"Active consented speakers: {len(status.get('opted_in_user_ids') or []) if running else 0}\n"
+            f"Active monitored speakers: {len(status.get('opted_in_user_ids') or []) if running else 0}\n"
             f"Qualifying VCs: {len(eligible)}; waiting: {max(0, len(eligible) - (1 if running else 0))}\n"
             f"Advisory alerts: {status.get('voice_safety_alerts', 0) if running else 0}"
         ),
@@ -213,64 +213,20 @@ async def _embed(interaction: discord.Interaction) -> discord.Embed:
             ),
             inline=False,
         )
-    embed.set_footer(text="Explicit member consent • staff-only advisory alerts • no stored audio")
+    embed.set_footer(text="Membership includes monitoring • staff-only advisory alerts • no stored audio")
     return embed
 
 
 class VoiceSafetyConsentView(discord.ui.View):
-    """Persistent public consent buttons on the posted member notice."""
+    """Persistent public consent button on the posted member notice.
+
+    Membership is the opt-in: no click is needed to be covered. The only
+    button is Decline & Exit Server, which withdraws the member and removes
+    them from the server.
+    """
 
     def __init__(self) -> None:
         super().__init__(timeout=None)
-
-    async def _change(self, interaction: discord.Interaction, enabled: bool) -> None:
-        await interaction.response.defer(ephemeral=True, thinking=True)
-        guild = interaction.guild
-        if guild is None:
-            return await interaction.followup.send("Voice Safety consent only works inside a server.", ephemeral=True)
-        if getattr(interaction.user, "bot", False):
-            return await interaction.followup.send("Bots cannot consent to Voice Safety.", ephemeral=True)
-        if enabled:
-            manager = ensure_community_voice_caption_manager(interaction.client)
-            live = manager.status_for_guild(int(guild.id))
-            if not live.get("active") or live.get("scope_kind") != "voice_safety":
-                return await interaction.followup.send("This Voice Safety notice is no longer active. Staff must start a new review session.", ephemeral=True)
-            if int(live.get("voice_safety_notice_message_id", 0) or 0) != int(
-                getattr(getattr(interaction, "message", None), "id", 0) or 0
-            ):
-                return await interaction.followup.send(
-                    "This is an older review notice. Use Opt In on the current Voice Safety notice.",
-                    ephemeral=True,
-                )
-            cfg = await get_guild_config(int(guild.id), refresh=True)
-            if not bool(cfg.get(VOICE_SAFETY_ENABLED)) or _id(cfg, VOICE_SAFETY_NOTICE) != int(interaction.channel_id):
-                return await interaction.followup.send("This Voice Safety notice is inactive. Ask staff to post a new one.", ephemeral=True)
-            if not (voice_safety_host_enabled() and live_captions_enabled()):
-                return await interaction.followup.send("Voice Safety is currently disabled on this host.", ephemeral=True)
-        manager = ensure_community_voice_caption_manager(interaction.client)
-        try:
-            consented = await manager.set_voice_safety_consent(int(guild.id), int(interaction.user.id), enabled)
-        except VoiceReceiveUnavailable as exc:
-            return await interaction.followup.send(f"❌ {exc}", ephemeral=True)
-        if consented:
-            return await interaction.followup.send(
-                "✅ Your one-time Voice Safety agreement is saved for this server. "
-                "Your speech in the selected VC may be transcribed for staff-only incident review. "
-                "When the server selects Watch Yo Mouf, local Vosk transcribes audio and RivaL Intelligence reviews the text; "
-                "the alternative Gemini provider requires operator-confirmed paid terms. "
-                "This is separate from Live Captions consent and remains active until you withdraw it. "
-                "Leaving the server also withdraws agreement. The monitored space must be adult-only.",
-                ephemeral=True,
-            )
-        await interaction.followup.send(
-            "✅ Your Voice Safety agreement was withdrawn. Active audio admission and queued buffers were revoked if monitoring was active. "
-            "Any incident alerts already delivered to staff must be handled under server retention policy.",
-            ephemeral=True,
-        )
-
-    @discord.ui.button(label="Agree Once: Voice Safety", style=discord.ButtonStyle.success, custom_id="dank:voice_safety:consent_on:v1")
-    async def opt_in(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        await self._change(interaction, True)
 
     @discord.ui.button(label="Decline & Exit Server", emoji="🚪", style=discord.ButtonStyle.secondary, custom_id="dank:voice_safety:consent_off:v1")
     async def opt_out(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -283,11 +239,6 @@ class VoiceSafetyConsentView(discord.ui.View):
 
 class VoiceSafetyEndedView(VoiceSafetyConsentView):
     """Old notices keep opt-out available without advertising a live session."""
-
-    def __init__(self) -> None:
-        super().__init__()
-        self.opt_in.disabled = True
-        self.opt_in.label = "Review ended"
 
 
 _VOICE_SAFETY_CHANNEL_MODES = {

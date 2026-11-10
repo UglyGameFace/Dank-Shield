@@ -177,10 +177,15 @@ async def decline_and_exit(interaction: discord.Interaction, *, from_verify: boo
             )
 
     from stoney_verify.community_voice_caption_runtime import ensure_community_voice_caption_manager
+    from stoney_verify.voice_safety_consent import VOICE_SAFETY_DECLINE_SOURCE
     manager = ensure_community_voice_caption_manager(interaction.client)
     # Consent withdrawal is independent of permissions to remove the member.
+    # The decline source marks a standing explicit decline: it blocks
+    # re-admission while the member stays, unlike a leave withdrawal.
     try:
-        await manager.set_voice_safety_consent(guild.id, user.id, False)
+        await manager.set_voice_safety_consent(
+            guild.id, user.id, False, source=VOICE_SAFETY_DECLINE_SOURCE
+        )
     except Exception:
         return await interaction.followup.send(
             "❌ Agreement withdrawal could not be confirmed. Audio admission was blocked. "
