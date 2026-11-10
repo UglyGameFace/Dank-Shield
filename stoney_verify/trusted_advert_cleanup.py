@@ -7,6 +7,7 @@ worker uses the existing Supabase connection and does not scan guild history.
 """
 
 import asyncio
+import logging
 from datetime import datetime, timezone, timedelta
 from typing import Any
 import discord
@@ -19,6 +20,7 @@ from .guild_config import get_guild_config
 
 TABLE = "dank_trusted_advert_messages"
 _TASK: asyncio.Task | None = None
+_LOG = logging.getLogger(__name__)
 _POLL_SECONDS = 120
 
 
@@ -190,7 +192,7 @@ async def process_claim(bot: Any, record: dict[str, Any]) -> str:
             await _finish(record, "pending", error="message_too_new", due_at=actual_expiry)
             return "message-too-new"
         try:
-            await message.delete(reason="Trusted advertising retention expired (server opt-in)")
+            await message.delete()
         except discord.NotFound:
             pass
         await _finish(record, "done")
@@ -200,7 +202,7 @@ async def process_claim(bot: Any, record: dict[str, Any]) -> str:
         await _finish(record, "pending", error=type(exc).__name__)
         return "discord-error"
     except Exception as exc:
-        print(f"⚠️ trusted_advert: cleanup_failed guild={gid} type={type(exc).__name__}")
+        _LOG.exception("trusted_advert: cleanup_failed guild=%s", gid)
         try:
             await _finish(record, "pending", error=type(exc).__name__)
         except Exception:
