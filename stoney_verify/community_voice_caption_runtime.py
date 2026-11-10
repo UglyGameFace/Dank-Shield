@@ -920,6 +920,10 @@ class CommunityVoiceCaptionManager:
             old_voice_client = state.voice_client
             old_bridge = state.bridge
             old_bridge.set_speaking_callback(None)
+            # The old reader may already have scheduled PCM callbacks. Invalidate
+            # them before disconnect/rejoin so a recovered connection cannot
+            # publish audio retained by the retired receiver.
+            old_bridge.clear_consent()
 
             log.warning(
                 "Live Captions receive transport stalled; rebuilding voice receive session=%s guild=%s channel=%s reason=%s",
