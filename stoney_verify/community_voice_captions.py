@@ -12,6 +12,7 @@ Audio exists only in bounded in-memory buffers and WAV request bodies.
 
 import asyncio
 import base64
+from array import array
 from collections import deque
 import io
 import json
@@ -19,6 +20,7 @@ import logging
 import math
 import os
 import struct
+import sys
 import time
 import wave
 from dataclasses import dataclass, field
@@ -237,14 +239,29 @@ def pcm16_to_wav(pcm: bytes) -> bytes:
     return output.getvalue()
 
 
+def _pcm16_le_array(pcm: bytes) -> array:
+    """Read s16le PCM into compact signed-16 samples, not Python-int tuples."""
+    samples = array("h")
+    samples.frombytes(pcm)
+    if sys.byteorder != "little":
+        samples.byteswap()
+    return samples
+
+
+def _pcm16_le_bytes(samples: array) -> bytes:
+    """Serialize compact s16 samples to the wire's little-endian format."""
+    if sys.byteorder != "little":
+        samples.byteswap()
+    return samples.tobytes()
+
+
 def normalize_pcm16_lossless_timing(pcm: bytes, *, target_peak: int = 26_000) -> bytes:
     """Amplitude-normalize PCM while preserving every sample and its timing."""
 
     if not pcm or len(pcm) % 2:
         return pcm
 
-    count = len(pcm) // 2
-    samples = struct.unpack("<" + ("h" * count), pcm)
+    samples = _pcm16_le_array(pcm)
     peak = max((abs(value) for value in samples), default=0)
     if peak <= 0 or peak >= target_peak:
         return pcm
@@ -253,13 +270,14 @@ def normalize_pcm16_lossless_timing(pcm: bytes, *, target_peak: int = 26_000) ->
     if gain <= 1.05:
         return pcm
 
-    normalized = [
-        max(-32768, min(32767, int(round(value * gain))))
-        for value in samples
-    ]
-    return struct.pack("<" + ("h" * count), *normalized)
-
-
+    normalized = array(
+        "h",
+        (
+            max(-32768, min(32767, int(round(value * gain))))
+            for value in samples
+        ),
+    )
+    return _pcm16_le_bytes(normalized)
 
 def _gemini_text_from_generate_content(payload: dict[str, Any]) -> str:
     candidates = payload.get("candidates")
@@ -369,29 +387,32 @@ class _StreamingPCM48To16Mono:
 
 
 def pcm48_stereo_to_pcm16_mono(pcm: bytes) -> bytes:
-    """Convert Discord 48kHz stereo s16le PCM to Gemini's 16kHz mono s16le.
+    """Convert Discord 48kHz stereo s16le to 16kHz mono s16le with FIR.
 
-    Discord/discord-ext-voice-recv yields decoded 48kHz stereo signed 16-bit
-    PCM. Google Live Transcribe expects raw 16kHz mono signed 16-bit PCM. Downmix
-    first, low-pass below the 8kHz target Nyquist, then decimate by three.
+    A whole utterance can contain hundreds of thousands of stereo samples.
+    Compact arrays prevent large temporary Python-int tuples and lists on
+    each simultaneous Watch worker request, preserving the existing output.
     """
 
     usable = len(pcm) - (len(pcm) % 4)
     if usable <= 0:
         return b""
 
-    samples = struct.unpack("<" + ("h" * (usable // 2)), pcm[:usable])
-    mono = [
-        int(round((int(samples[offset]) + int(samples[offset + 1])) / 2.0))
-        for offset in range(0, len(samples), 2)
-    ]
+    samples = _pcm16_le_array(pcm[:usable])
+    mono = array(
+        "h",
+        (
+            int(round((int(samples[offset]) + int(samples[offset + 1])) / 2.0))
+            for offset in range(0, len(samples), 2)
+        ),
+    )
     if not mono:
         return b""
 
     coeffs = _PCM48_TO_16_FIR
     half = len(coeffs) // 2
     out_count = (len(mono) + 2) // 3
-    out: list[int] = []
+    out = array("h")
     last = len(mono) - 1
 
     for out_index in range(out_count):
@@ -408,8 +429,7 @@ def pcm48_stereo_to_pcm16_mono(pcm: bytes) -> bytes:
             acc += coefficient * float(sample)
         out.append(max(-32768, min(32767, int(round(acc)))))
 
-    return struct.pack("<" + ("h" * len(out)), *out) if out else b""
-
+    return _pcm16_le_bytes(out) if out else b""
 
 def pcm16_rms_dbfs(pcm: bytes) -> float:
     """Return RMS level for signed-16 PCM without retaining audio."""
