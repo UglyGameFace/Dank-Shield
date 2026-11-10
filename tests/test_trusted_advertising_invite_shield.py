@@ -74,7 +74,6 @@ def test_exact_bot_channel_and_webhook_cannot_be_impersonated():
     assert trust.clean_rules({trust.CONFIG_KEY: [{}]}) == []
 
 
-
 def test_trusted_adverts_do_not_read_deprecated_interaction_property():
     class ModernMessage:
         def __init__(self, message):
@@ -271,7 +270,6 @@ def test_process_claim_cancels_revoked_bot_without_discord_fetch(monkeypatch):
     state = asyncio.run(cleanup.process_claim(bot, record))
     assert state == "rule-revoked"
     finish.assert_awaited_once_with(record, "cancelled", error="trusted_rule_revoked")
-
 
 
 def test_process_claim_deletes_expired_advert_without_unsupported_reason(monkeypatch):
