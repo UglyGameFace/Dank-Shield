@@ -1,0 +1,127 @@
+name: Voice incident status (read only)
+on:
+  push:
+    branches: [diagnose/voice-runtime-20261110]
+    paths: [.github/workflows/voice-runtime-incident.yml]
+permissions: {}
+jobs:
+  read-discloud:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Read host state and report known log markers
+        env:
+          INCIDENT_TOKEN: ${{ secrets.DISCLOUD_TOKEN }}
+        run: |
+          python3 - <<'PY'
+          import collections
+          import json
+          import os
+          import re
+          import urllib.error
+          import urllib.request
+
+          token = os.environ.get("INCIDENT_TOKEN", "")
+          if not token:
+              raise SystemExit("Discloud token unavailable to this workflow")
+
+          class NoRedirect(urllib.request.HTTPRedirectHandler):
+              def redirect_request(self, req, fp, code, msg, headers, newurl):
+                  return None
+
+          opener = urllib.request.build_opener(NoRedirect())
+
+          def fetch(suffix, limit=4_000_000):
+              request = urllib.request.Request(
+                  "https://api.discloud.app/v2/app/" + suffix,
+                  headers={"api-token": token, "Accept": "application/json"},
+                  method="GET",
+              )
+              try:
+                  with opener.open(request, timeout=12) as response:
+                      body = response.read(limit + 1)
+                  if len(body) > limit:
+                      print("Discloud response exceeds diagnostic bound")
+                      return None
+                  value = json.loads(body)
+                  if isinstance(value, dict):
+                      return value.get("apps")
+              except urllib.error.HTTPError as exc:
+                  print("Discloud HTTP status:", exc.code)
+              except (OSError, ValueError):
+                  print("Discloud request or JSON parsing failed")
+              return None
+
+          patterns = {
+              "gateway_ready": r"Logged in as|discord.*(?:connected to Gateway|has connected to)|Watch Yo Mouf gateway online",
+              "gateway_resumed": r"discord.*(?:resum|reconnect)",
+              "voice_connect": r"Connecting to voice|Starting voice handshake|Voice connection complete",
+              "voice_disconnected": r"disconnecting from voice|Voice handshake terminated|voice.*connection closed",
+              "voice_transport_rebuild": r"receive transport stalled; rebuilding",
+              "no_decoded_pcm": r"no PCM arrived",
+              "voice_reader_stopped": r"receive reader stopped",
+              "voice_recovery_failed": r"receive transport recovery failed",
+              "voice_autostart_failed": r"Voice Safety auto-start unavailable",
+              "voice_notice_failed": r"could not post the Live Captions privacy notice|failed to roll back voice connection",
+              "voice_watch_not_ready": r"offline Vosk worker is not ready",
+              "stt_ready": r"local STT model ready",
+              "stt_unavailable": r"STT model unavailable|local STT worker not available",
+              "opus_loss": r"OpusError|packets were lost|Error decoding Opus",
+              "voice_dave_error": r"(?:DAVE|MLS).{0,70}(?:fail|error|invalid)|(?:fail|error).{0,70}(?:DAVE|MLS)",
+              "shutdown": r"SIGTERM|shutting down|shutdown initiated|received signal",
+              "oom": r"out of memory|OOMKilled|memory limit exceeded|ramKilled=true",
+              "process_fatal": r"Fatal Python error|Segmentation fault|MemoryError|Uncaught exception",
+              "traceback": r"Traceback \(most recent call last\)",
+          }
+          markers = {key: re.compile(pattern, re.I) for key, pattern in patterns.items()}
+          stamp = re.compile(r"^\[?((?:[A-Z][a-z]{2} \d{2} |\d{4}-\d{2}-\d{2}[T ])?\d{2}:\d{2}:\d{2})\b")
+
+          def report(label, app_id):
+              print("App:", label)
+              info = fetch(app_id)
+              if isinstance(info, dict):
+                  for key in ("online", "ramKilled", "exitCode", "ram", "autoRestart"):
+                      value = info.get(key)
+                      if type(value) in (bool, int):
+                          print(key, value)
+              status = fetch(app_id + "/status")
+              if isinstance(status, dict):
+                  value = status.get("startedAt")
+                  if isinstance(value, str) and re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-]\d{2}:\d{2})", value):
+                      print("startedAt", value)
+              logs = fetch(app_id + "/logs")
+              terminal = logs.get("terminal") if isinstance(logs, dict) else None
+              if not isinstance(terminal, dict):
+                  print("No usable terminal payload")
+                  return
+              raw = terminal.get("big") or terminal.get("small")
+              if not isinstance(raw, str):
+                  print("No usable terminal lines")
+                  return
+              lines = raw.splitlines()[-3000:]
+              counts = collections.Counter()
+              recent = collections.deque(maxlen=36)
+              for line in lines:
+                  matched = [key for key, pattern in markers.items() if pattern.search(line)]
+                  if matched:
+                      counts.update(matched)
+                      time = stamp.search(line)
+                      recent.append((time.group(1) if time else "time-unavailable", matched))
+              print("Terminal lines scanned:", len(lines))
+              print("Known markers:", json.dumps(counts, sort_keys=True))
+              for time, events in recent:
+                  print(time, ", ".join(events))
+
+          report("Dank Shield", "stoneyverify")
+          applications = fetch("all")
+          if isinstance(applications, list):
+              for app in applications:
+                  if not isinstance(app, dict) or app.get("name") != "Watch Yo Mouf":
+                      continue
+                  app_id = app.get("id")
+                  if isinstance(app_id, str) and re.fullmatch(r"[a-zA-Z0-9_-]{1,80}", app_id):
+                      report("Watch Yo Mouf", app_id)
+                      break
+              else:
+                  print("Watch Yo Mouf app name not found")
+          PY
