@@ -117,7 +117,7 @@ def test_member_route_replay_optout_and_storage_failures_fail_closed(monkeypatch
     bridge._USED_NONCES.clear()
 
 
-def test_authoritative_policy_consent_query_is_fail_closed(monkeypatch):
+def test_authoritative_policy_membership_query_admits_members(monkeypatch):
     import stoney_verify.globals as global_state
     import stoney_verify.guild_config as guild_config
     import stoney_verify.voice_safety_consent as consent
@@ -140,10 +140,10 @@ def test_authoritative_policy_consent_query_is_fail_closed(monkeypatch):
     async def fetch(gid, *, refresh=False):
         assert refresh is True
         return config
-    async def consent_read(gid, uid):
-        return uid == MEMBER
+    async def decline_read(gid, uid):
+        return uid == MEMBER + 1
     monkeypatch.setattr(guild_config, "get_guild_config", fetch)
-    monkeypatch.setattr(consent, "read_voice_safety_agreement", consent_read)
+    monkeypatch.setattr(consent, "has_voice_safety_decline", decline_read)
 
     async def check():
         assert await bridge._member_policy_and_consent(GUILD, MEMBER, CHANNEL) == (True, True)

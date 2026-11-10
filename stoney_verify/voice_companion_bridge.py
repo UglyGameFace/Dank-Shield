@@ -46,7 +46,7 @@ async def _member_policy_and_consent(guild_id: int, member_id: int, channel_id: 
     """Consult ONLY the authoritative stores; do not activate any receiver."""
     from .globals import bot
     from .guild_config import get_guild_config
-    from .voice_safety_consent import read_voice_safety_agreement
+    from .voice_safety_consent import has_voice_safety_decline
 
     guild = bot.get_guild(guild_id)
     if guild is None or guild.get_channel(channel_id) is None:
@@ -60,7 +60,8 @@ async def _member_policy_and_consent(guild_id: int, member_id: int, channel_id: 
     )
     if not policy_matches:
         return False, False
-    return bool(await read_voice_safety_agreement(guild_id, member_id)), True
+    # Membership is the opt-in: any member is covered unless explicitly declined.
+    return not await has_voice_safety_decline(guild_id, member_id), True
 
 
 async def member_eligibility(request: web.Request) -> web.Response:

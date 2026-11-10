@@ -139,6 +139,9 @@ async def test_decline_revokes_before_stripping_and_kicks_after_grace(environmen
     interaction = Interaction(guild)
     await decline_exit.decline_and_exit(interaction, from_verify=True)
     assert environment["updates"][0][:3] == (71, 24, False)
+    # An explicit decline is recorded under the decline source, distinct
+    # from a leave withdrawal, so it blocks re-admission while the member stays.
+    assert environment["updates"][0][3] == "voice_safety_decline_v1"
     assert guild.member.edits == [(103,)]
     assert [r.id for r in guild.member.roles] == [103]
     entry = decline_exit._PENDING[(71, 24)]
