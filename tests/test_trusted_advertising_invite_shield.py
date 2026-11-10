@@ -453,9 +453,7 @@ def test_custom_retention_deletes_only_after_selected_hours_plus_grace(monkeypat
             due_at=posted + timedelta(hours=25, minutes=10),
         )
         return
-    advert.delete.assert_awaited_once_with(
-        reason="Trusted advertising retention expired (server opt-in)"
-    )
+    advert.delete.assert_awaited_once_with()
     done.assert_awaited_once_with(row, "done")
     channel.fetch_message.assert_awaited_once_with(advert.id)
 
