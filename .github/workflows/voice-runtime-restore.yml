@@ -54,6 +54,36 @@ jobs:
                       raise SystemExit("Unexpected Discloud response schema")
                   return result
               except urllib.error.HTTPError as exc:
+                  message = ""
+                  try:
+                      error = json.loads(exc.read(4096))
+                      if isinstance(error, dict):
+                          for key in ("statusCode", "code"):
+                              if type(error.get(key)) is int:
+                                  print("Discloud API error code:", error[key])
+                          message = " ".join(str(error.get(key, "")) for key in ("message", "error"))
+                  except (OSError, ValueError):
+                      pass
+                  reasons = {
+                      "cluster capacity": r"(cluster|node|server|servidor).{0,80}(?:ram|memory|mem[oó]ria|capacity|capacidade|resource|recurs)|(?:ram|memory|mem[oó]ria|capacity|capacidade|resource|recurs).{0,80}(cluster|node|server|servidor)",
+                      "quota or plan capacity": r"quota|plano|plan|insufficient|enough|insuficiente|(?:limit|dispon[ií]vel|available).{0,50}(?:ram|memory|mem[oó]ria)",
+                      "offline or container missing": r"offline|not (?:online|running|found|active)|desligad|parad|inativ|container.{0,40}(?:missing|exist|not)|n[aã]o.{0,40}(?:online|ativ|execut|encontr)",
+                      "operation already running": r"in progress|in process|in use|processing|wait|busy|aguard|andamento|processando",
+                      "GitHub integration": r"github|git integration|git sync|auto.?deploy",
+                      "invalid RAM allocation": r"invalid|inv[aá]lid|minimum|m[ií]nimo|maximum|m[aá]ximo|divisible|increment",
+                      "unauthorized": r"permission|access denied|unauthorized|forbidden|permiss|autoriz",
+                  }
+                  matches = [label for label, pattern in reasons.items() if re.search(pattern, message, re.I)]
+                  print("Discloud error categories:", ", ".join(matches) or "unclassified")
+                  if path == app + "/ram":
+                      try:
+                          observed = read_app()
+                          for key in ("online", "ramKilled", "exitCode", "ram"):
+                              value = observed.get(key)
+                              if type(value) in (int, bool):
+                                  print("Readback", key, value)
+                      except SystemExit:
+                          print("Readback failed")
                   raise SystemExit(f"Discloud {method} returned HTTP {exc.code}") from None
               except (OSError, ValueError):
                   raise SystemExit(f"Discloud {method} request or JSON parsing failed") from None
