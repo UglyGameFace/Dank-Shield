@@ -56,6 +56,10 @@ jobs:
               "gateway_ready": r"Logged in as|discord.*(?:connected to Gateway|has connected to)|Watch Yo Mouf gateway online",
               "gateway_resumed": r"discord.*(?:resum|reconnect)",
               "voice_connect": r"Connecting to voice|Starting voice handshake|Voice connection complete",
+              "voice_gateway_closed": r"Voice WebSocket closed|voice.*websocket.*(?:disconnect|clos)|voice.*(?:4014|4015|4017)",
+              "voice_udp_error": r"UDP.*(?:socket|timed out|no response|error)",
+              "consent_restored": r"restored remembered auto-caption speakers",
+              "memory_pressure": r"EVENT_LOOP_LAG|memory pressure",
               "voice_disconnected": r"disconnecting from voice|Voice handshake terminated|voice.*connection closed",
               "voice_transport_rebuild": r"receive transport stalled; rebuilding",
               "no_decoded_pcm": r"no PCM arrived",
@@ -86,6 +90,9 @@ jobs:
                           print(key, value)
               status = fetch(app_id + "/status")
               if isinstance(status, dict):
+                  memory = status.get("memory")
+                  if isinstance(memory, str) and re.fullmatch(r"[0-9., ]{1,22}(?:[kKmMgG][iI]?[bB])(?:\s*/\s*[0-9., ]{1,22}[kKmMgG][iI]?[bB])?", memory):
+                      print("memory", memory)
                   value = status.get("startedAt")
                   if isinstance(value, str) and re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-]\d{2}:\d{2})", value):
                       print("startedAt", value)
