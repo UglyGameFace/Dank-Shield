@@ -348,7 +348,7 @@ def test_voice_safety_ui_is_accessible_from_existing_protection_and_persistent()
     assert "Voice Safety" in labels
     staff = VoiceSafetyStaffView(1)
     assert not any(isinstance(child, discord.ui.ChannelSelect) for child in staff.children)
-    assert {"Monitored Voice Channel", "Private Staff Alerts", "Public Member Notice"} <= {
+    assert {"Monitored Voice Channel", "Private Staff Alerts"} <= {
         child.label for child in staff.children if getattr(child, "label", None)
     }
     assert all(int(getattr(child, "row", 0) or 0) <= 4 for child in staff.children)
@@ -375,7 +375,6 @@ def test_voice_safety_reaction_toggle_cycles_alert_and_silent(monkeypatch) -> No
         cfg = {
             "voice_safety_voice_channel_id": 88,
             "voice_safety_staff_channel_id": 89,
-            "voice_safety_notice_channel_id": 90,
         }
 
         async def config(gid, *, refresh=False):
@@ -486,7 +485,6 @@ def test_voice_safety_manager_end_to_end_consent_and_staff_alert(monkeypatch) ->
 
         voice = FakeVoiceChannel()
         staff = FakeTextChannel(72)
-        notice = FakeTextChannel(73)
         member = SimpleNamespace(
             id=99, bot=False, voice=SimpleNamespace(channel=voice),
         )
@@ -502,7 +500,7 @@ def test_voice_safety_manager_end_to_end_consent_and_staff_alert(monkeypatch) ->
             def get_member(self, uid):
                 return {99: member, 100: member100}.get(uid)
             def get_channel(self, cid):
-                return {71: voice, 72: staff, 73: notice}.get(int(cid))
+                return {71: voice, 72: staff}.get(int(cid))
             def get_thread(self, cid):
                 return None
 
@@ -512,7 +510,6 @@ def test_voice_safety_manager_end_to_end_consent_and_staff_alert(monkeypatch) ->
             "voice_safety_enabled": True,
             "voice_safety_voice_channel_id": 71,
             "voice_safety_staff_channel_id": 72,
-            "voice_safety_notice_channel_id": 73,
         }
         async def get_config(gid, *, refresh=False):
             return cfg
@@ -575,16 +572,14 @@ def test_voice_safety_manager_end_to_end_consent_and_staff_alert(monkeypatch) ->
         manager.preferences_for_user = preferences
 
         state = await manager.start_voice_safety(
-            guild_id=5, voice_channel_id=71, staff_alert_channel_id=72, notice_channel_id=73
+            guild_id=5, voice_channel_id=71, staff_alert_channel_id=72
         )
         assert state.scope_kind == "voice_safety"
-        assert state.notice_message_id == 77
-        assert len(notice.sent) == 1
         # Membership is the opt-in: both members present are admitted at start,
-        # with no stored agreement record and no click.
+        # with no stored agreement record and no click. No public notice is
+        # posted anywhere: the only sends are the staff alert below.
         assert set(state.bridge.opted_in_user_ids()) == {99, 100}
-        assert "no action is needed" in notice.sent[0][0]
-        assert "Agree Once" not in notice.sent[0][0]
+        assert staff.sent == []
         await state.engine.publish(99, "unwanted explicit remarks directed at a member", 0.98)
         assert len(staff.sent) == 1
         assert "staff review only" in staff.sent[0][0]
@@ -599,7 +594,11 @@ def test_voice_safety_manager_end_to_end_consent_and_staff_alert(monkeypatch) ->
         await state.engine.publish(100, "unwanted explicit remarks directed at a member", 0.98)
         assert len(staff.sent) == 1
         await manager.stop(voice_safety_scope_id(5))
-        assert "review ended" in notice.edits[0][1]["content"]
+        # Stopping posts to the private staff channel only; nothing is posted
+        # or edited in any public channel.
+        assert len(staff.sent) == 2
+        assert "Voice Safety stopped" in staff.sent[1][0]
+        assert staff.edits == []
         assert state.safety_consents == set()
 
     asyncio.run(run())
@@ -632,7 +631,6 @@ def test_voice_safety_auto_start_uses_configured_channel_and_single_owner(monkey
             "voice_safety_enabled": True,
             "voice_safety_voice_channel_id": 22,
             "voice_safety_staff_channel_id": 23,
-            "voice_safety_notice_channel_id": 24,
         }
 
         async def get_config(gid, **kwargs):
@@ -947,7 +945,6 @@ def test_voice_safety_picker_rechecks_private_public_and_bot_permissions(monkeyp
     monkeypatch.setattr(ui, "_VOICE_SAFETY_CHANNEL_MODES", {
         "voice": ("voice_safety_voice_channel_id", VoiceChannel, "Voice", ("voice",)),
         "staff": ("voice_safety_staff_channel_id", TextChannel, "Staff", ("text",)),
-        "notice": ("voice_safety_notice_channel_id", TextChannel, "Notice", ("text",)),
     })
     guild = SimpleNamespace(default_role="everyone", me="bot")
     actor = "staff"
@@ -957,9 +954,9 @@ def test_voice_safety_picker_rechecks_private_public_and_bot_permissions(monkeyp
     guild.voice = VoiceChannel()
     guild.selected = public
     assert "publicly visible" in ui._voice_safety_channel_blocker(guild, public, "staff", actor)
-    assert ui._voice_safety_channel_blocker(guild, public, "notice", actor) == ""
+    # The removed "notice" kind is rejected as an unknown channel type.
+    assert "correct channel type" in ui._voice_safety_channel_blocker(guild, public, "notice", actor)
     guild.selected = private
-    assert "hidden from @everyone" in ui._voice_safety_channel_blocker(guild, private, "notice", actor)
     assert ui._voice_safety_channel_blocker(guild, private, "staff", actor) == ""
     no_send = TextChannel(everyone=False, bot_can_send=False)
     guild.selected = no_send

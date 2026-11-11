@@ -42,7 +42,6 @@ from .public_owner_authority import (
 VOICE_SAFETY_ENABLED = "voice_safety_enabled"
 VOICE_SAFETY_VC = "voice_safety_voice_channel_id"
 VOICE_SAFETY_STAFF = "voice_safety_staff_channel_id"
-VOICE_SAFETY_NOTICE = "voice_safety_notice_channel_id"
 _REGISTERED = False
 _RESTORE_TASK: asyncio.Task[None] | None = None
 
@@ -111,20 +110,16 @@ def _readiness(guild: discord.Guild, config: dict) -> tuple[bool, str]:
     else:
         voice = _channel(guild, _id(config, VOICE_SAFETY_VC), discord.VoiceChannel)
     staff = _channel(guild, _id(config, VOICE_SAFETY_STAFF), discord.TextChannel)
-    notice = _channel(guild, _id(config, VOICE_SAFETY_NOTICE), discord.TextChannel)
-    if voice is None or staff is None or notice is None:
-        return False, "Select accessible VC coverage, a private staff-alert channel, and a member-visible notice channel."
+    if voice is None or staff is None:
+        return False, "Select accessible VC coverage and a private staff-alert channel."
     if staff.permissions_for(guild.default_role).view_channel:
         return False, "Staff alerts are publicly visible. Select a channel hidden from @everyone."
-    if not notice.permissions_for(guild.default_role).view_channel:
-        return False, "The notice channel must be visible to @everyone."
     me = guild.me
     if me is None or not (voice.permissions_for(me).connect and voice.permissions_for(me).view_channel):
         return False, "Dank Shield needs Connect and View Channel permissions in the monitored VC."
-    for channel in (staff, notice):
-        perms = channel.permissions_for(me)
-        if not perms.view_channel or not perms.send_messages:
-            return False, "Dank Shield needs View Channel and Send Messages in both text channels."
+    perms = staff.permissions_for(me)
+    if not perms.view_channel or not perms.send_messages:
+        return False, "Dank Shield needs View Channel and Send Messages in the staff channel."
     return True, "Configured. Monitoring starts automatically when two humans join a monitored VC."
 
 
@@ -139,7 +134,6 @@ async def _embed(interaction: discord.Interaction) -> discord.Embed:
     scope = coverage_mode(cfg)
     eligible = qualifying_channels(guild, cfg)
     staff = _id(cfg, VOICE_SAFETY_STAFF)
-    notice = _id(cfg, VOICE_SAFETY_NOTICE)
     reaction = voice_safety_reaction_mode(cfg.get(VOICE_SAFETY_REACTION_KEY))
     reaction_label = (
         "Alerts only" if reaction == VOICE_SAFETY_REACTION_ALERT else "Silent (log only)"
@@ -167,7 +161,6 @@ async def _embed(interaction: discord.Interaction) -> discord.Embed:
             f"Voice scope: {'All eligible VCs' if scope == ALL else 'One selected VC'}\n"
             f"Voice: {'Every accessible VC (2+ humans)' if scope == ALL else f'<#{voice}>' if voice else 'Not selected'}\n"
             f"Private staff alerts: {f'<#{staff}>' if staff else 'Not selected'}\n"
-            f"Public notice: {f'<#{notice}>' if notice else 'Not selected'}\n"
             f"Reaction on detection: {reaction_label}"
         ),
         inline=False,
@@ -255,7 +248,6 @@ class VoiceSafetyEndedView(VoiceSafetyConsentView):
 _VOICE_SAFETY_CHANNEL_MODES = {
     "voice": (VOICE_SAFETY_VC, discord.VoiceChannel, "Monitored Voice Channel", ("voice",)),
     "staff": (VOICE_SAFETY_STAFF, discord.TextChannel, "Private Staff Alerts", ("text",)),
-    "notice": (VOICE_SAFETY_NOTICE, discord.TextChannel, "Public Member Notice", ("text",)),
 }
 
 
@@ -278,7 +270,7 @@ def _voice_safety_channel_blocker(
     """Eligibility is checked on selection, not hidden from Search-Safe browsing."""
     mode = _VOICE_SAFETY_CHANNEL_MODES.get(kind)
     if mode is None or not isinstance(channel, mode[1]):
-        return "Select the correct channel type. Voice monitoring requires a normal VC; alerts and notices require text channels."
+        return "Select the correct channel type. Voice monitoring requires a normal VC; alerts require a text channel."
     if guild.get_channel(int(channel.id)) is not channel:
         return "The selected channel is no longer in this server. Search again."
     me = guild.me
@@ -292,8 +284,6 @@ def _voice_safety_channel_blocker(
     everyone_can_view = bool(channel.permissions_for(guild.default_role).view_channel)
     if kind == "staff" and everyone_can_view:
         return "This channel is publicly visible to @everyone. Choose a private staff-only channel."
-    if kind == "notice" and not everyone_can_view:
-        return "This notice channel is hidden from @everyone. Choose a member-visible channel."
     if not (bot_permissions.view_channel and bot_permissions.send_messages):
         return "Dank Shield needs View Channel and Send Messages in the selected text channel."
     if kind == "staff" and not channel.permissions_for(actor).view_channel:
@@ -424,10 +414,6 @@ class VoiceSafetyStaffView(discord.ui.View):
     async def choose_staff(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         await _open_voice_safety_channel_browser(interaction, owner_id=self.owner_id, kind="staff")
 
-    @discord.ui.button(label="Public Member Notice", emoji="📢", style=discord.ButtonStyle.secondary, row=0)
-    async def choose_notice(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        await _open_voice_safety_channel_browser(interaction, owner_id=self.owner_id, kind="notice")
-
     @discord.ui.button(label="Enable / Disable Setup", emoji="⚙️", style=discord.ButtonStyle.secondary, row=1)
     async def toggle_enabled(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         await interaction.response.defer()
@@ -480,7 +466,6 @@ class VoiceSafetyStaffView(discord.ui.View):
                 guild_id=int(guild.id),
                 voice_channel_id=int(candidates[0].id),
                 staff_alert_channel_id=_id(cfg, VOICE_SAFETY_STAFF),
-                notice_channel_id=_id(cfg, VOICE_SAFETY_NOTICE),
             )
         except VoiceReceiveUnavailable as exc:
             return await interaction.followup.send(f"❌ {exc}", ephemeral=True)

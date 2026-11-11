@@ -59,11 +59,9 @@ class CaptionRuntimeState:
     engine: CaptionEngine
     scope_kind: str = "community_hub"
     advisor: Optional[VoiceSafetyAdvisor] = None
-    notice_channel_id: int = 0
     safety_consents: set[int] = field(default_factory=set)
     safety_consent_epochs: dict[int, int] = field(default_factory=dict)
     safety_automatic: bool = False
-    notice_message_id: int = 0
     soak_test: bool = False
     receive_recoveries: int = 0
     receive_recovery_failures: int = 0
@@ -232,7 +230,6 @@ class CommunityVoiceCaptionManager:
             "voice_channel_id": state.voice_channel_id,
             "destination_channel_id": state.destination_channel_id,
             "opted_in_user_ids": opted_ids,
-            "voice_safety_notice_message_id": int(state.notice_message_id),
             "voice_safety_alerts": int(state.advisor.alerts) if state.advisor else 0,
             "voice_safety_requests": int(state.advisor.requests) if state.advisor else 0,
             "speaker_language_hints": speaker_language_hints,
@@ -677,7 +674,6 @@ class CommunityVoiceCaptionManager:
                     guild_id=gid,
                     voice_channel_id=int(candidates[0].id),
                     staff_alert_channel_id=int(cfg.get("voice_safety_staff_channel_id") or 0),
-                    notice_channel_id=int(cfg.get("voice_safety_notice_channel_id") or 0),
                     automatic=True,
                 )
                 return bool(state)
@@ -1044,7 +1040,6 @@ class CommunityVoiceCaptionManager:
         guild_id: int,
         voice_channel_id: int,
         staff_alert_channel_id: int,
-        notice_channel_id: int,
         automatic: bool = False,
     ) -> CaptionRuntimeState:
         return await self.start({
@@ -1052,7 +1047,6 @@ class CommunityVoiceCaptionManager:
             "guild_id": int(guild_id),
             "voice_channel_id": int(voice_channel_id),
             "panel_channel_id": int(staff_alert_channel_id),
-            "notice_channel_id": int(notice_channel_id),
             "caption_scope": "voice_safety",
             "voice_safety_automatic": bool(automatic),
         })
@@ -1095,9 +1089,6 @@ class CommunityVoiceCaptionManager:
             )
         if destination_channel_id <= 0:
             raise VoiceReceiveUnavailable("A staff alert / Live Captions destination is required.")
-        notice_channel_id = int(session.get("notice_channel_id") or 0) if safety_mode else 0
-        if safety_mode and notice_channel_id <= 0:
-            raise VoiceReceiveUnavailable("Voice Safety requires a public notice channel.")
         local_voice = bool(
             safety_mode
             and os.getenv("DANK_VOICE_SAFETY_BACKEND", "").strip().lower() == "watch"
@@ -1115,9 +1106,8 @@ class CommunityVoiceCaptionManager:
         if safety_mode:
             if not bool(caption_cfg.get("voice_safety_enabled", False)):
                 raise VoiceReceiveUnavailable("Voice Safety has not been enabled by this server.")
-            for key, actual in (("voice_safety_staff_channel_id", destination_channel_id), ("voice_safety_notice_channel_id", notice_channel_id)):
-                if int(caption_cfg.get(key) or 0) != int(actual):
-                    raise VoiceReceiveUnavailable("Voice Safety channel configuration changed; refresh setup.")
+            if int(caption_cfg.get("voice_safety_staff_channel_id") or 0) != int(destination_channel_id):
+                raise VoiceReceiveUnavailable("Voice Safety channel configuration changed; refresh setup.")
             if coverage_mode(caption_cfg) == SINGLE and int(
                 caption_cfg.get("voice_safety_voice_channel_id") or 0
             ) != voice_channel_id:
@@ -1180,19 +1170,15 @@ class CommunityVoiceCaptionManager:
                     "The Live Captions text destination no longer exists."
                 )
 
-            notice_channel = guild.get_channel(notice_channel_id) if safety_mode else None
             if safety_mode:
-                if not isinstance(destination, discord.TextChannel) or not isinstance(notice_channel, discord.TextChannel):
-                    raise VoiceReceiveUnavailable("Voice Safety channels must be existing text channels.")
+                if not isinstance(destination, discord.TextChannel):
+                    raise VoiceReceiveUnavailable("Voice Safety staff channel must be an existing text channel.")
                 if destination.permissions_for(guild.default_role).view_channel:
                     raise VoiceReceiveUnavailable("The staff alert channel is visible to everyone. Choose a private staff channel.")
-                if not notice_channel.permissions_for(guild.default_role).view_channel:
-                    raise VoiceReceiveUnavailable("The Voice Safety notice must be visible to @everyone.")
                 me = guild.me
-                for channel in (destination, notice_channel):
-                    perms = channel.permissions_for(me) if me is not None else None
-                    if perms is None or not (perms.view_channel and perms.send_messages):
-                        raise VoiceReceiveUnavailable("Dank Shield needs View Channel and Send Messages in both Voice Safety channels.")
+                perms = destination.permissions_for(me) if me is not None else None
+                if perms is None or not (perms.view_channel and perms.send_messages):
+                    raise VoiceReceiveUnavailable("Dank Shield needs View Channel and Send Messages in the staff alert channel.")
 
             if local_voice:
                 from .watch_voice_transcriber import WatchVoiceTranscriber
@@ -1281,29 +1267,11 @@ class CommunityVoiceCaptionManager:
             bridge = PerSpeakerFrameBridge(loop, engine.submit)
             voice_client = await connect_receive_client(voice_channel, bridge)
 
-            try:
-                if safety_mode:
-                    from .commands_ext.public_voice_safety import VoiceSafetyConsentView
-
-                    provider_disclosure = (
-                        "Member audio is transcribed locally by Watch Yo Mouf over the "
-                        "private Discloud VLAN, and text is reviewed locally by RivaL Intelligence. "
-                        if local_voice else
-                        "Member audio is sent to Google Gemini for transcription and conduct "
-                        "review under the operator-confirmed paid data terms. "
-                    )
-                    notice_message = await notice_channel.send(
-                        f"🛡️ **Voice Safety review is active for <#{voice_channel_id}>.** "
-                        "This is an optional AI-assisted staff-alert feature, not a guaranteed content block. "
-                        "Membership in this server includes Voice Safety monitoring in this voice channel; no action is needed to be covered. "
-                        f"{provider_disclosure}"
-                        "Staff may see an incident notice. The monitored space is restricted to adults. "
-                        "Dank Shield does not retain raw audio; moderation incidents remain in the private staff channel. "
-                        "Press **Decline & Exit Server** at any time to leave the server and stop monitoring.",
-                        view=VoiceSafetyConsentView(),
-                        allowed_mentions=discord.AllowedMentions.none(),
-                    )
-                else:
+            # No public notice is posted for Voice Safety sessions: membership
+            # is the agreement, and the Verify panel carries the Decline &
+            # Exit path. Only ordinary caption modes announce their start.
+            if not safety_mode:
+                try:
                     source_line = (
                         f"Voice channel: {voice_channel.mention}\n"
                         if scope_kind == "server"
@@ -1320,16 +1288,16 @@ class CommunityVoiceCaptionManager:
                         "Dank Shield keeps audio only in bounded memory while processing it and does not save the audio.",
                         allowed_mentions=discord.AllowedMentions.none(),
                     )
-            except (discord.Forbidden, discord.NotFound, discord.HTTPException) as exc:
-                disconnect_receive_client(voice_client)
-                try:
-                    if getattr(voice_client, "is_connected", lambda: False)():
-                        await voice_client.disconnect(force=False)
-                except Exception:
-                    log.exception("Live Captions failed to roll back voice connection")
-                raise VoiceReceiveUnavailable(
-                    "Dank Shield could not post the Live Captions privacy notice, so captions were not started."
-                ) from exc
+                except (discord.Forbidden, discord.NotFound, discord.HTTPException) as exc:
+                    disconnect_receive_client(voice_client)
+                    try:
+                        if getattr(voice_client, "is_connected", lambda: False)():
+                            await voice_client.disconnect(force=False)
+                    except Exception:
+                        log.exception("Live Captions failed to roll back voice connection")
+                    raise VoiceReceiveUnavailable(
+                        "Dank Shield could not post the Live Captions privacy notice, so captions were not started."
+                    ) from exc
 
             state = CaptionRuntimeState(
                 session_id=sid,
@@ -1342,8 +1310,6 @@ class CommunityVoiceCaptionManager:
                 scope_kind=scope_kind,
                 soak_test=soak_test,
                 advisor=advisor,
-                notice_channel_id=notice_channel_id,
-                notice_message_id=int(notice_message.id) if safety_mode else 0,
                 safety_automatic=bool(session.get("voice_safety_automatic", False)) if safety_mode else False,
             )
             self._sessions[sid] = state
@@ -1413,21 +1379,6 @@ class CommunityVoiceCaptionManager:
             disconnect_receive_client(state.voice_client)
 
         guild = self.bot.get_guild(state.guild_id)
-        if state.scope_kind == "voice_safety" and state.notice_message_id and guild is not None:
-            # Do not leave an old public "active" notice behind after staff stop.
-            notice = guild.get_channel(state.notice_channel_id)
-            if isinstance(notice, discord.TextChannel):
-                try:
-                    from .commands_ext.public_voice_safety import VoiceSafetyEndedView
-
-                    await notice.get_partial_message(state.notice_message_id).edit(
-                        content="🛡️ **Voice Safety review ended.** No new audio is admitted. "
-                        "The Opt Out button remains available; staff must start a new session and post a new notice to resume.",
-                        view=VoiceSafetyEndedView(),
-                        allowed_mentions=discord.AllowedMentions.none(),
-                    )
-                except (discord.Forbidden, discord.NotFound, discord.HTTPException):
-                    log.warning("Voice Safety notice could not be marked ended guild=%s", state.guild_id)
         destination = None
         if guild is not None:
             destination = (

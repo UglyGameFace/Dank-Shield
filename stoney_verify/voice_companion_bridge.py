@@ -56,7 +56,6 @@ async def _member_policy_and_consent(guild_id: int, member_id: int, channel_id: 
         cfg.get("voice_safety_enabled") is True
         and channel_in_scope(guild, cfg, guild.get_channel(channel_id))
         and int(cfg.get("voice_safety_staff_channel_id") or 0) > 0
-        and int(cfg.get("voice_safety_notice_channel_id") or 0) > 0
     )
     if not policy_matches:
         return False, False

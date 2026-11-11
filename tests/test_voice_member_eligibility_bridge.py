@@ -136,7 +136,7 @@ def test_authoritative_policy_membership_query_admits_members(monkeypatch):
         get_guild=lambda gid: guild if gid == GUILD else None,
     ))
     config = {"voice_safety_enabled": True, "voice_safety_voice_channel_id": str(CHANNEL),
-              "voice_safety_staff_channel_id": "111", "voice_safety_notice_channel_id": "222"}
+              "voice_safety_staff_channel_id": "111"}
     async def fetch(gid, *, refresh=False):
         assert refresh is True
         return config
