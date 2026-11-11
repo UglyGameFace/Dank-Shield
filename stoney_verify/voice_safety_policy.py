@@ -35,6 +35,11 @@ VOICE_SAFETY_REACTION_ALERT = "alert"
 VOICE_SAFETY_REACTION_SILENT = "silent"
 VOICE_SAFETY_REACTION_MODES = (VOICE_SAFETY_REACTION_ALERT, VOICE_SAFETY_REACTION_SILENT)
 
+# The review endpoint accepts at most 2 context segments of 300 chars each.
+VOICE_SAFETY_CONTEXT_SEGMENTS = 2
+VOICE_SAFETY_CONTEXT_CHARS = 300
+VOICE_SAFETY_CONTEXT_SECONDS = 45.0
+
 
 def voice_safety_reaction_mode(value: Any) -> str:
     """Normalise a stored reaction mode; unknown values fail safe to alerts."""
@@ -144,7 +149,7 @@ class VoiceSafetyAdvisor:
     def __init__(
         self,
         *,
-        classify: Optional[Callable[[str], Awaitable[Optional[VoiceSafetyVerdict]]]] = None,
+        classify: Optional[Callable[[str, tuple[str, ...]], Awaitable[Optional[VoiceSafetyVerdict]]]] = None,
         clock: Callable[[], float] = time.monotonic,
         cooldown_seconds: float = 90.0,
     ) -> None:
@@ -162,7 +167,9 @@ class VoiceSafetyAdvisor:
         self.alerts = 0
 
     @staticmethod
-    async def _default_classify(text: str) -> Optional[VoiceSafetyVerdict]:
+    async def _default_classify(text: str, context: tuple[str, ...] = ()) -> Optional[VoiceSafetyVerdict]:
+        # The Gemini path classifies the transcript alone; context is only
+        # wired through the local Watch/RivaL path.
         return await classify_voice_safety_text(text, api_key=os.getenv("GEMINI_API_KEY", "").strip())
 
     def revoke(self, user_id: int) -> None:
@@ -178,6 +185,31 @@ class VoiceSafetyAdvisor:
         self._closed = True
         for uid in tuple(self._segments):
             self.revoke(uid)
+
+    def _conversation_context(self, user_id: int, now: float) -> tuple[str, ...]:
+        """Most recent lines from other admitted speakers in this session.
+
+        The model judges the speaker's own words in the transcript; other
+        speakers' words go only in the context field, capped at what the
+        review endpoint accepts (2 segments, 300 chars each, last 45s).
+        Segments only exist for speakers who passed the admission gates,
+        so non-admitted speech can never appear here.
+        """
+        others = sorted(
+            (
+                (when, chunk)
+                for other, segments in self._segments.items()
+                if other != int(user_id)
+                for when, chunk in segments
+                if now - when <= VOICE_SAFETY_CONTEXT_SECONDS
+            ),
+            key=lambda item: item[0],
+        )
+        return tuple(
+            chunk[:VOICE_SAFETY_CONTEXT_CHARS]
+            for _, chunk in others[-VOICE_SAFETY_CONTEXT_SEGMENTS:]
+            if chunk
+        )
 
     async def inspect(
         self,
@@ -222,7 +254,7 @@ class VoiceSafetyAdvisor:
             if self._closed or not is_admitted(uid) or self._generation.get(uid, 0) != generation:
                 return None
             self.requests += 1
-            verdict = await self._classify(snapshot)
+            verdict = await self._classify(snapshot, self._conversation_context(uid, now))
         if (
             verdict is None
             or self._closed
