@@ -115,6 +115,25 @@ class TestWatchLocalVoice(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(await rival_voice_advisor.classify_local_voice("ok"))
         self.assertEqual(len(self.classification_requests), 1)
 
+    async def test_moderation_request_carries_conversation_context(self):
+        result = await rival_voice_advisor.classify_local_voice(
+            "A person is making a specific serious threat.",
+            context=("Tell us what happened last night", "It was just a story"),
+        )
+        self.assertIsNotNone(result)
+        self.assertEqual(len(self.classification_requests), 1)
+        self.assertEqual(
+            self.classification_requests[0]["context"],
+            ["Tell us what happened last night", "It was just a story"],
+        )
+        # Oversized context is clamped to what the endpoint accepts.
+        result = await rival_voice_advisor.classify_local_voice(
+            "A person is making a specific serious threat.",
+            context=("x" * 400, "second", "third"),
+        )
+        self.assertIsNotNone(result)
+        self.assertEqual(self.classification_requests[1]["context"], ["x" * 300, "second"])
+
     async def test_revocation_during_conversion_never_forwards_audio(self):
         transcriber = watch_voice_transcriber.WatchVoiceTranscriber(GUILD, CHANNEL)
         transcriber.allow_user(USER)

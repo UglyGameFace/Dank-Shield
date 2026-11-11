@@ -28,20 +28,26 @@ _REASONS = {
 }
 
 
-async def classify_local_voice(transcript: str) -> VoiceSafetyVerdict | None:
+async def classify_local_voice(
+    transcript: str, context: tuple[str, ...] = ()
+) -> VoiceSafetyVerdict | None:
     text = str(transcript or "").strip()
     token = os.getenv("DANK_RIVAL_VOICE_TOKEN", "").strip()
     # Floor is 3, matching VoiceSafetyAdvisor.inspect: a lone word must reach
     # the model; the review/high-confidence/category bar decides, not length.
     if not (3 <= len(text) <= 1200) or not 32 <= len(token) <= 256:
         return None
+    # Clamp context to what the review endpoint accepts, so a bad caller
+    # cannot turn a verdict into a rejected request.
+    safe_context = [str(segment)[:300] for segment in (context or ())][:2]
+    safe_context = [segment for segment in safe_context if segment]
     timeout = aiohttp.ClientTimeout(total=65.0, connect=1.5)
     try:
         async with aiohttp.ClientSession(timeout=timeout, trust_env=False) as client:
             async with client.post(
                 _URL,
                 headers={"Authorization": "Bearer " + token},
-                json={"version": 1, "transcript": text, "context": []},
+                json={"version": 1, "transcript": text, "context": safe_context},
                 allow_redirects=False,
             ) as reply:
                 if reply.status != 200:

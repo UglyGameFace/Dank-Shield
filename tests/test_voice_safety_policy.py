@@ -59,7 +59,7 @@ def test_voice_safety_context_isolated_by_speaker_with_bounded_cooldown() -> Non
         seen = []
         clock = [100.0]
 
-        async def classify(text):
+        async def classify(text, context=()):
             seen.append(text)
             return VoiceSafetyVerdict("harassment", "review", "Targeted harassment")
 
@@ -87,7 +87,7 @@ def test_voice_safety_model_requests_are_rate_limited_before_network_use() -> No
     async def run() -> None:
         clock = [1_000.0]
         calls = []
-        async def classify(text):
+        async def classify(text, context=()):
             calls.append(text)
             return VoiceSafetyVerdict("harassment", "review", "Targeted speech")
         advisor = VoiceSafetyAdvisor(classify=classify, clock=lambda: clock[0])
@@ -114,7 +114,7 @@ def test_voice_safety_model_requests_are_rate_limited_before_network_use() -> No
 def test_voice_safety_abstains_on_unclear_and_nonconsented_speech() -> None:
     async def run() -> None:
         calls = []
-        async def classify(text):
+        async def classify(text, context=()):
             calls.append(text)
             return VoiceSafetyVerdict("harassment", "review", "Targeted harassment")
         advisor = VoiceSafetyAdvisor(classify=classify)
@@ -132,7 +132,7 @@ def test_voice_safety_abstains_on_unclear_and_nonconsented_speech() -> None:
 def test_voice_safety_short_single_word_reaches_classifier() -> None:
     async def run() -> None:
         calls = []
-        async def classify(text):
+        async def classify(text, context=()):
             calls.append(text)
             return VoiceSafetyVerdict("harassment", "review", "Targeted harassment")
         advisor = VoiceSafetyAdvisor(classify=classify)
@@ -146,11 +146,51 @@ def test_voice_safety_short_single_word_reaches_classifier() -> None:
     asyncio.run(run())
 
 
+def test_voice_safety_sends_other_speakers_as_context() -> None:
+    async def run() -> None:
+        clock = [1_000.0]
+        seen = []
+        async def classify(text, context=()):
+            seen.append((text, tuple(context)))
+            return VoiceSafetyVerdict("harassment", "review", "Targeted harassment")
+        advisor = VoiceSafetyAdvisor(classify=classify, clock=lambda: clock[0])
+        check = lambda uid: True
+        # Another speaker sets the scene; their line reaches the model as
+        # context when the next speaker is reviewed.
+        assert await advisor.inspect(22, "Tell us the story from last night", 0.99, is_admitted=check) is not None
+        clock[0] += 10
+        verdict = await advisor.inspect(11, "Stop targeting the same member now", 0.99, is_admitted=check)
+        assert verdict is not None
+        assert seen[-1] == (
+            "Stop targeting the same member now",
+            ("Tell us the story from last night",),
+        )
+        # Only the two most recent other-speaker lines are sent, each cut to
+        # the endpoint's 300-char cap; the speaker's own earlier lines stay
+        # in the snapshot, never in context.
+        clock[0] += 10
+        assert await advisor.inspect(33, "x" * 400, 0.99, is_admitted=check) is not None
+        clock[0] += 10
+        assert await advisor.inspect(44, "It was just a story", 0.99, is_admitted=check) is not None
+        clock[0] += 10
+        verdict = await advisor.inspect(55, "One more targeted remark here", 0.99, is_admitted=check)
+        assert verdict is not None
+        assert seen[-1] == (
+            "One more targeted remark here",
+            ("x" * 300, "It was just a story"),
+        )
+        # Lines older than the 45s window are left out entirely.
+        clock[0] += 100
+        assert await advisor.inspect(66, "Something said much later", 0.99, is_admitted=check) is not None
+        assert seen[-1] == ("Something said much later", ())
+    asyncio.run(run())
+
+
 def test_voice_safety_opt_out_invalidates_in_flight_review() -> None:
     async def run() -> None:
         started = asyncio.Event()
         release = asyncio.Event()
-        async def classify(text):
+        async def classify(text, context=()):
             started.set()
             await release.wait()
             return VoiceSafetyVerdict("graphic_sexual_content", "review", "Graphic conduct.")
@@ -549,7 +589,7 @@ def test_voice_safety_manager_end_to_end_consent_and_staff_alert(monkeypatch) ->
         async def connect(channel, bridge):
             return FakeClient()
 
-        async def classify(text):
+        async def classify(text, context=()):
             if "unwanted explicit remarks" in text:
                 return VoiceSafetyVerdict("unwanted_sexual_comments", "review", "Repeated unwanted remarks")
             return None
