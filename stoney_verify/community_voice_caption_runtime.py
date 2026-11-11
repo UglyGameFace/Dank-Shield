@@ -24,7 +24,12 @@ from .community_voice_captions import (
     gemini_text_translator_from_env,
     normalize_caption_output_mode,
 )
-from .voice_safety_policy import VoiceSafetyAdvisor
+from .voice_safety_policy import (
+    VOICE_SAFETY_REACTION_KEY,
+    VOICE_SAFETY_REACTION_SILENT,
+    VoiceSafetyAdvisor,
+    voice_safety_reaction_mode,
+)
 from .voice_safety_consent import has_voice_safety_decline, save_voice_safety_agreement
 from .voice_safety_coverage import (
     SINGLE, MIN_HUMANS, channel_in_scope, coverage_mode,
@@ -173,7 +178,6 @@ class CommunityVoiceCaptionManager:
         self._receive_recovery_locks: dict[str, asyncio.Lock] = {}
         self._voice_safety_start_locks: dict[int, asyncio.Lock] = {}
         self._voice_safety_retry_after: dict[int, float] = {}
-        self._voice_safety_staff_paused: set[int] = set()
         self._lock = asyncio.Lock()
         self.max_active_guilds = _env_int(
             "DANK_COMMUNITY_CAPTION_MAX_ACTIVE_GUILDS", 4, 1, 100
@@ -631,13 +635,6 @@ class CommunityVoiceCaptionManager:
             restored += 1
         return restored
 
-    def pause_voice_safety_auto_start(self, guild_id: int, paused: bool = True) -> None:
-        gid = int(guild_id)
-        if paused:
-            self._voice_safety_staff_paused.add(gid)
-        else:
-            self._voice_safety_staff_paused.discard(gid)
-
     async def maybe_auto_start_voice_safety(
         self, guild: discord.Guild, *, joined_voice_id: int = 0
     ) -> bool:
@@ -645,19 +642,21 @@ class CommunityVoiceCaptionManager:
 
         Startup and join events use the same gate and per-guild lock. Discord
         connection setup is not instantaneous; monitoring never covers speech
-        before the receiver is ready.
+        before the receiver is ready. Stopping a session ends that session
+        only and never blocks a later automatic start; the setup switch is
+        the only off switch.
         """
         if not (voice_safety_host_enabled() and live_captions_enabled()):
             return False
         gid = int(guild.id)
-        if gid in self._voice_safety_staff_paused or gid in self._guild_owner:
+        if gid in self._guild_owner:
             return False
         now = time.monotonic()
         if now < self._voice_safety_retry_after.get(gid, 0):
             return False
         lock = self._voice_safety_start_locks.setdefault(gid, asyncio.Lock())
         async with lock:
-            if gid in self._guild_owner or gid in self._voice_safety_staff_paused:
+            if gid in self._guild_owner:
                 return False
             if len(self._sessions) >= self.max_active_guilds:
                 return False
@@ -1225,6 +1224,20 @@ class CommunityVoiceCaptionManager:
                         return
                     # A consent withdrawal or a stopped session must never publish a stale result.
                     if not state.bridge.is_opted_in(uid) or self._sessions.get(sid) is not state:
+                        return
+                    # The reaction mode is read fresh per verdict so a staff
+                    # change on the panel applies without a session restart.
+                    # Verdicts are rare and cooldown-gated, so one read is cheap.
+                    try:
+                        cfg_now = await get_guild_config(guild_id)
+                    except Exception:
+                        cfg_now = caption_cfg
+                    mode = voice_safety_reaction_mode(cfg_now.get(VOICE_SAFETY_REACTION_KEY))
+                    if mode == VOICE_SAFETY_REACTION_SILENT:
+                        log.info(
+                            "Voice Safety verdict logged without staff alert guild=%s user=%s category=%s",
+                            guild_id, uid, verdict.category,
+                        )
                         return
                     safe_reason = discord.utils.escape_markdown(verdict.reason)[:220]
                     await destination.send(

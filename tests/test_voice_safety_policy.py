@@ -19,9 +19,12 @@ from stoney_verify.commands_ext.public_voice_safety import (
     _readiness,
 )
 from stoney_verify.voice_safety_policy import (
+    VOICE_SAFETY_REACTION_ALERT,
+    VOICE_SAFETY_REACTION_SILENT,
     VoiceSafetyAdvisor,
     VoiceSafetyVerdict,
     parse_voice_safety_verdict,
+    voice_safety_reaction_mode,
 )
 
 
@@ -38,6 +41,17 @@ def test_voice_safety_policy_rejects_ambiguous_or_identity_only_results() -> Non
     assert parse_voice_safety_verdict(
         {"category": "unwanted_sexual_comments", "severity": "review", "reason": "Repeated directed remarks."}
     ) == VoiceSafetyVerdict("unwanted_sexual_comments", "review", "Repeated directed remarks.")
+
+
+def test_voice_safety_reaction_mode_fails_safe_to_alerts() -> None:
+    assert voice_safety_reaction_mode("alert") == VOICE_SAFETY_REACTION_ALERT
+    assert voice_safety_reaction_mode("silent") == VOICE_SAFETY_REACTION_SILENT
+    assert voice_safety_reaction_mode(" ALERT ") == VOICE_SAFETY_REACTION_ALERT
+    assert voice_safety_reaction_mode(None) == VOICE_SAFETY_REACTION_ALERT
+    assert voice_safety_reaction_mode("") == VOICE_SAFETY_REACTION_ALERT
+    # Future modes do not exist yet; an unknown value must never silence alerts.
+    assert voice_safety_reaction_mode("timeout") == VOICE_SAFETY_REACTION_ALERT
+    assert voice_safety_reaction_mode("kick") == VOICE_SAFETY_REACTION_ALERT
 
 
 def test_voice_safety_context_isolated_by_speaker_with_bounded_cooldown() -> None:
@@ -321,7 +335,7 @@ def test_voice_safety_ui_is_accessible_from_existing_protection_and_persistent()
         child.label for child in staff.children if getattr(child, "label", None)
     }
     assert all(int(getattr(child, "row", 0) or 0) <= 4 for child in staff.children)
-    assert {"Start / Stop Review", "Enable / Disable Setup"}.issubset({
+    assert {"Start / Stop Review", "Enable / Disable Setup", "Reaction: Alerts / Silent"}.issubset({
         child.label for child in staff.children if getattr(child, "label", None)
     })
     public = VoiceSafetyConsentView()
@@ -332,6 +346,88 @@ def test_voice_safety_ui_is_accessible_from_existing_protection_and_persistent()
         "dank:voice_safety:consent_off:v1",
     }
     assert {child.label for child in public.children} == {"Decline & Exit Server"}
+
+
+def test_voice_safety_reaction_toggle_cycles_alert_and_silent(monkeypatch) -> None:
+    async def run() -> None:
+        import stoney_verify.commands_ext.public_voice_safety as ui
+
+        class FakeGuild:
+            id = 51
+
+        cfg = {
+            "voice_safety_voice_channel_id": 88,
+            "voice_safety_staff_channel_id": 89,
+            "voice_safety_notice_channel_id": 90,
+        }
+
+        async def config(gid, *, refresh=False):
+            return cfg
+
+        saved = []
+
+        async def fake_save(interaction, patch):
+            saved.append(dict(patch))
+            cfg.update(patch)
+            return dict(cfg)
+
+        class FakeResponse:
+            async def defer(self):
+                return None
+
+        class FakeFollowup:
+            def __init__(self):
+                self.sent = []
+
+            async def send(self, *args, **kwargs):
+                self.sent.append((args, kwargs))
+
+        class FakeInteraction:
+            def __init__(self):
+                self.guild = FakeGuild()
+                self.client = object()
+                self.response = FakeResponse()
+                self.followup = FakeFollowup()
+                self.edits = []
+
+            async def edit_original_response(self, **kwargs):
+                self.edits.append(kwargs)
+
+        monkeypatch.setattr(ui, "get_guild_config", config)
+        monkeypatch.setattr(ui, "_save", fake_save)
+        monkeypatch.setattr(
+            ui, "ensure_community_voice_caption_manager",
+            lambda value: SimpleNamespace(
+                status_for_guild=lambda gid: {"active": False}
+            ),
+        )
+        monkeypatch.setattr(ui, "_readiness", lambda guild, config: (False, "Host configuration incomplete"))
+        monkeypatch.setattr(ui, "voice_safety_host_checks", lambda: {
+            "DANK_COMMUNITY_LIVE_CAPTIONS_ENABLED": True,
+            "DANK_VOICE_SAFETY_ENABLED": True,
+            "DANK_VOICE_SAFETY_GEMINI_PAID_CONFIRMED": False,
+            "DANK_VOICE_SAFETY_ADULT_ONLY_CONFIRMED": False,
+            "GEMINI_API_KEY": True,
+        })
+
+        view = VoiceSafetyStaffView(1)
+        button = next(
+            child for child in view.children
+            if getattr(child, "label", None) == "Reaction: Alerts / Silent"
+        )
+        interaction = FakeInteraction()
+        await button.callback(interaction)
+        assert saved == [{"voice_safety_reaction": "silent"}]
+        embed = await ui._embed(SimpleNamespace(guild=FakeGuild(), client=object()))
+        fields = {field.name: field.value for field in embed.fields}
+        assert "Silent (log only)" in fields["Configuration"]
+        await button.callback(interaction)
+        assert saved[-1] == {"voice_safety_reaction": "alert"}
+        embed = await ui._embed(SimpleNamespace(guild=FakeGuild(), client=object()))
+        fields = {field.name: field.value for field in embed.fields}
+        assert "Alerts only" in fields["Configuration"]
+
+    asyncio.run(run())
 
 
 def test_staff_readiness_fails_when_host_gates_are_disabled(monkeypatch) -> None:
@@ -481,6 +577,10 @@ def test_voice_safety_manager_end_to_end_consent_and_staff_alert(monkeypatch) ->
         assert not state.bridge.is_opted_in(99)
         await state.engine.publish(99, "unwanted explicit remarks directed at a member", 0.98)
         assert len(staff.sent) == 1
+        # Silent reaction mode: the verdict is logged, nothing posts to staff.
+        cfg["voice_safety_reaction"] = "silent"
+        await state.engine.publish(100, "unwanted explicit remarks directed at a member", 0.98)
+        assert len(staff.sent) == 1
         await manager.stop(voice_safety_scope_id(5))
         assert "review ended" in notice.edits[0][1]["content"]
         assert state.safety_consents == set()
@@ -545,10 +645,10 @@ def test_voice_safety_auto_start_uses_configured_channel_and_single_owner(monkey
         assert await manager.maybe_auto_start_voice_safety(guild, joined_voice_id=22) is False
         manager._sessions.clear()
         manager._guild_owner.clear()
-        manager.pause_voice_safety_auto_start(17)
-        assert await manager.maybe_auto_start_voice_safety(guild, joined_voice_id=22) is False
-        manager.pause_voice_safety_auto_start(17, False)
-        await manager.restore_voice_safety_after_ready()
+        # Stopping never blocks a later automatic start: there is no staff
+        # pause anymore, so a fresh attempt starts again right away.
+        assert not hasattr(manager, "pause_voice_safety_auto_start")
+        assert await manager.maybe_auto_start_voice_safety(guild, joined_voice_id=22) is True
         assert len(called) == 2
 
     asyncio.run(run())
