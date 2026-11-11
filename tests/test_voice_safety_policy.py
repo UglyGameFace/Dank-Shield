@@ -122,10 +122,27 @@ def test_voice_safety_abstains_on_unclear_and_nonconsented_speech() -> None:
             ("[unclear audio]", 0.99, True),
             ("Barely audible and mistaken", 0.3, True),
             ("No consent by this user", 0.99, False),
-            ("short", 1.0, True),
+            ("ok", 1.0, True),
         ]:
             assert await advisor.inspect(3, transcript, confidence, is_admitted=lambda uid: admitted) is None
         assert calls == []
+    asyncio.run(run())
+
+
+def test_voice_safety_short_single_word_reaches_classifier() -> None:
+    async def run() -> None:
+        calls = []
+        async def classify(text):
+            calls.append(text)
+            return VoiceSafetyVerdict("harassment", "review", "Targeted harassment")
+        advisor = VoiceSafetyAdvisor(classify=classify)
+        # A lone word (6 chars) was dropped by the old 12-char floor and never
+        # reached the classifier (live case 2026-11-10: a single slur, no alert).
+        verdict = await advisor.inspect(3, "target", 1.0, is_admitted=lambda uid: True)
+        assert verdict is not None
+        assert verdict.category == "harassment"
+        assert calls == ["target"]
+        assert advisor.requests == 1
     asyncio.run(run())
 
 

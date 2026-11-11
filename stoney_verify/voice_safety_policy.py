@@ -189,11 +189,14 @@ class VoiceSafetyAdvisor:
     ) -> Optional[VoiceSafetyVerdict]:
         uid = int(user_id)
         source = str(transcript or "").strip()
+        # The floor is 3, not 12: a lone word (a slur on its own) must reach
+        # the classifier. The classifier's review/high-confidence/category
+        # bar is what decides, not this length check.
         if (
             self._closed
             or not is_admitted(uid)
             or source == "[unclear audio]"
-            or len(source) < 12
+            or len(source) < 3
             or confidence is not None and float(confidence) < 0.72
         ):
             return None

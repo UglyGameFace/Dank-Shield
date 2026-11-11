@@ -31,7 +31,9 @@ _REASONS = {
 async def classify_local_voice(transcript: str) -> VoiceSafetyVerdict | None:
     text = str(transcript or "").strip()
     token = os.getenv("DANK_RIVAL_VOICE_TOKEN", "").strip()
-    if not (12 <= len(text) <= 1200) or not 32 <= len(token) <= 256:
+    # Floor is 3, matching VoiceSafetyAdvisor.inspect: a lone word must reach
+    # the model; the review/high-confidence/category bar decides, not length.
+    if not (3 <= len(text) <= 1200) or not 32 <= len(token) <= 256:
         return None
     timeout = aiohttp.ClientTimeout(total=65.0, connect=1.5)
     try:
