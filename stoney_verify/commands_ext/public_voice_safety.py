@@ -23,6 +23,12 @@ from ..community_voice_receive import VoiceReceiveUnavailable, voice_receive_cap
 from ..voice_safety_coverage import (
     ALL, SINGLE, COVERAGE_KEY, channel_in_scope, coverage_mode, qualifying_channels,
 )
+from ..voice_safety_policy import (
+    VOICE_SAFETY_REACTION_ALERT,
+    VOICE_SAFETY_REACTION_KEY,
+    VOICE_SAFETY_REACTION_SILENT,
+    voice_safety_reaction_mode,
+)
 from ..guild_config import get_guild_config, invalidate_guild_config, upsert_guild_config
 from ..panel_lifecycle import PRIVATE_MENU_TTL_SECONDS
 from ..ui.resource_browser import DankGuildResourceBrowserView
@@ -119,7 +125,7 @@ def _readiness(guild: discord.Guild, config: dict) -> tuple[bool, str]:
         perms = channel.permissions_for(me)
         if not perms.view_channel or not perms.send_messages:
             return False, "Dank Shield needs View Channel and Send Messages in both text channels."
-    return True, "Configured, but monitoring only starts when staff press Start."
+    return True, "Configured. Monitoring starts automatically when two humans join a monitored VC."
 
 
 async def _embed(interaction: discord.Interaction) -> discord.Embed:
@@ -134,6 +140,10 @@ async def _embed(interaction: discord.Interaction) -> discord.Embed:
     eligible = qualifying_channels(guild, cfg)
     staff = _id(cfg, VOICE_SAFETY_STAFF)
     notice = _id(cfg, VOICE_SAFETY_NOTICE)
+    reaction = voice_safety_reaction_mode(cfg.get(VOICE_SAFETY_REACTION_KEY))
+    reaction_label = (
+        "Alerts only" if reaction == VOICE_SAFETY_REACTION_ALERT else "Silent (log only)"
+    )
     local_voice = str(os.getenv("DANK_VOICE_SAFETY_BACKEND", "")).strip().lower() == "watch"
     provider = (
         "Watch Yo Mouf (local Vosk) and RivaL Intelligence (local LFM3)"
@@ -144,8 +154,8 @@ async def _embed(interaction: discord.Interaction) -> discord.Embed:
         description=(
             "AI conduct review of eligible voice channels once two humans join. "
             "One Dank Shield DAVE receiver covers one VC per server at a time. "
-            "Only members who explicitly accepted disclosed Voice Safety monitoring "
-            "are transcribed. Provider: " + provider + ". "
+            "Membership in this server includes Voice Safety monitoring; only "
+            "members with a standing explicit decline are excluded. Provider: " + provider + ". "
             "No automatic mutes, kicks or bans. Staff must verify every finding."
         ),
         color=discord.Color.blurple(),
@@ -157,7 +167,8 @@ async def _embed(interaction: discord.Interaction) -> discord.Embed:
             f"Voice scope: {'All eligible VCs' if scope == ALL else 'One selected VC'}\n"
             f"Voice: {'Every accessible VC (2+ humans)' if scope == ALL else f'<#{voice}>' if voice else 'Not selected'}\n"
             f"Private staff alerts: {f'<#{staff}>' if staff else 'Not selected'}\n"
-            f"Public notice: {f'<#{notice}>' if notice else 'Not selected'}"
+            f"Public notice: {f'<#{notice}>' if notice else 'Not selected'}\n"
+            f"Reaction on detection: {reaction_label}"
         ),
         inline=False,
     )
@@ -424,16 +435,16 @@ class VoiceSafetyStaffView(discord.ui.View):
         cfg = await get_guild_config(int(guild.id), refresh=True)
         manager = ensure_community_voice_caption_manager(interaction.client)
         currently_enabled = bool(cfg.get(VOICE_SAFETY_ENABLED))
-        if currently_enabled:
-            manager.pause_voice_safety_auto_start(int(guild.id))
         if manager.status_for_guild(int(guild.id)).get("scope_kind") == "voice_safety":
             await manager.stop(voice_safety_scope_id(int(guild.id)))
         try:
             await _save(interaction, {VOICE_SAFETY_ENABLED: not currently_enabled})
-            if not currently_enabled:
-                manager.pause_voice_safety_auto_start(int(guild.id), False)
         except Exception:
             return await interaction.followup.send("Failed to confirm saved setup state.", ephemeral=True)
+        if not currently_enabled:
+            # Enabling starts monitoring right away instead of waiting for
+            # the next person to join a voice channel.
+            await manager.maybe_auto_start_voice_safety(guild)
         await interaction.edit_original_response(embed=await _embed(interaction), view=VoiceSafetyStaffView(self.owner_id))
 
     @discord.ui.button(label="Start / Stop Review", emoji="🛡️", style=discord.ButtonStyle.primary, row=1)
@@ -445,18 +456,13 @@ class VoiceSafetyStaffView(discord.ui.View):
         if status.get("active"):
             if status.get("scope_kind") != "voice_safety":
                 return await interaction.followup.send("Another voice/captions session owns this receiver. Stop it first.", ephemeral=True)
-            manager.pause_voice_safety_auto_start(int(guild.id))
             await manager.stop(voice_safety_scope_id(int(guild.id)))
-            try:
-                await _save(interaction, {VOICE_SAFETY_ENABLED: False})
-            except Exception:
-                return await interaction.followup.send(
-                    "⚠️ Voice Safety stopped on this process, but the Disable setting could not be saved. "
-                    "Turn off DANK_VOICE_SAFETY_ENABLED on the host before restarting.",
-                    ephemeral=True,
-                )
             await interaction.edit_original_response(embed=await _embed(interaction), view=VoiceSafetyStaffView(self.owner_id))
-            return await interaction.followup.send("✅ Voice Safety stopped and automatic restart disabled until setup is enabled again.", ephemeral=True)
+            return await interaction.followup.send(
+                "✅ Voice Safety stopped for this session. It starts again automatically "
+                "when two humans are in a monitored VC — use Enable / Disable Setup to turn it off.",
+                ephemeral=True,
+            )
         cfg = await get_guild_config(int(guild.id), refresh=True)
         if not bool(cfg.get(VOICE_SAFETY_ENABLED)):
             return await interaction.followup.send("Enable setup first. Monitoring is off by default.", ephemeral=True)
@@ -469,7 +475,6 @@ class VoiceSafetyStaffView(discord.ui.View):
                 "No eligible VC currently has at least two humans and bot Connect access.",
                 ephemeral=True,
             )
-        manager.pause_voice_safety_auto_start(int(guild.id), False)
         try:
             await manager.start_voice_safety(
                 guild_id=int(guild.id),
@@ -483,10 +488,28 @@ class VoiceSafetyStaffView(discord.ui.View):
         await interaction.followup.send(
             f"✅ Voice Safety reviewing <#{int(candidates[0].id)}>. "
             "Only this VC is receiving audio from this bot identity; other qualifying rooms "
-            "are waiting, not monitored. Agreements and host safety gates still apply. "
+            "are waiting, not monitored. Membership includes monitoring; only a standing "
+            "explicit decline excludes a member. Host safety gates still apply. "
             "Staff alerts are advisory only.",
             ephemeral=True,
         )
+
+    @discord.ui.button(label="Reaction: Alerts / Silent", emoji="🔔", style=discord.ButtonStyle.secondary, row=2)
+    async def toggle_reaction(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await interaction.response.defer()
+        guild = interaction.guild
+        cfg = await get_guild_config(int(guild.id), refresh=True)
+        current = voice_safety_reaction_mode(cfg.get(VOICE_SAFETY_REACTION_KEY))
+        nxt = (
+            VOICE_SAFETY_REACTION_SILENT
+            if current == VOICE_SAFETY_REACTION_ALERT
+            else VOICE_SAFETY_REACTION_ALERT
+        )
+        try:
+            await _save(interaction, {VOICE_SAFETY_REACTION_KEY: nxt})
+        except Exception:
+            return await interaction.followup.send("Could not save the reaction setting. No setting was changed.", ephemeral=True)
+        await interaction.edit_original_response(embed=await _embed(interaction), view=VoiceSafetyStaffView(self.owner_id))
 
     @discord.ui.button(label="Refresh", emoji="🔄", style=discord.ButtonStyle.secondary, row=1)
     async def refresh(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
