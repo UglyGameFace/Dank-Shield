@@ -104,6 +104,17 @@ class TestWatchLocalVoice(unittest.IsolatedAsyncioTestCase):
                          {"version", "transcript", "context"})
         await transcriber.close()
 
+    async def test_short_single_word_reaches_moderation_endpoint(self):
+        # A lone word was dropped by the old 12-char floor before any request.
+        result = await rival_voice_advisor.classify_local_voice("target")
+        self.assertIsNotNone(result)
+        self.assertEqual(result.category, "threat")
+        self.assertEqual(len(self.classification_requests), 1)
+        self.assertEqual(self.classification_requests[0]["transcript"], "target")
+        # Two characters still never reach the endpoint.
+        self.assertIsNone(await rival_voice_advisor.classify_local_voice("ok"))
+        self.assertEqual(len(self.classification_requests), 1)
+
     async def test_revocation_during_conversion_never_forwards_audio(self):
         transcriber = watch_voice_transcriber.WatchVoiceTranscriber(GUILD, CHANNEL)
         transcriber.allow_user(USER)
