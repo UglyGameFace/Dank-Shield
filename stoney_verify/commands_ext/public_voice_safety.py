@@ -487,7 +487,7 @@ class VoiceSafetyStaffView(discord.ui.View):
         # When disabling, remove the agreement AND decline button from the same
         # existing panel after the disabled setting is durably confirmed.
         panel_refreshed = True
-        if currently_enabled:
+        if currently_enabled and receiver_stopped:
             panel_refreshed = await refresh_panel(False)
 
         if not currently_enabled and receiver_stopped:
@@ -499,8 +499,9 @@ class VoiceSafetyStaffView(discord.ui.View):
         )
         if not receiver_stopped:
             await interaction.followup.send(
-                "⚠️ Voice Safety setting was saved, but the active receiver "
-                "could not be confirmed stopped. Check live status immediately.",
+                "⚠️ Voice Safety is OFF in settings, but the active receiver "
+                "could not be confirmed stopped. The public monitoring notice "
+                "was preserved until shutdown can be verified.",
                 ephemeral=True,
             )
         elif currently_enabled and basic_verify and not panel_refreshed:
