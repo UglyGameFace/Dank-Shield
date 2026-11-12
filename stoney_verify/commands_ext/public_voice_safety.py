@@ -421,10 +421,54 @@ class VoiceSafetyStaffView(discord.ui.View):
         cfg = await get_guild_config(int(guild.id), refresh=True)
         manager = ensure_community_voice_caption_manager(interaction.client)
         currently_enabled = bool(cfg.get(VOICE_SAFETY_ENABLED))
+
+        from ..setup_engine.verification_modes import effective_verification_mode
+        basic_verify = effective_verification_mode(guild, cfg) == "basic_button"
+
+        async def refresh_panel(enabled: bool) -> bool:
+            if not basic_verify:
+                return True
+            try:
+                from ..startup_guards.basic_verify_panel_auto_refresh_guard import (
+                    refresh_basic_verify_panel,
+                )
+                return await refresh_basic_verify_panel(
+                    guild,
+                    reason="voice safety setting changed",
+                    voice_safety_enabled_override=enabled,
+                )
+            except Exception:
+                return False
+
+        if not currently_enabled and not await refresh_panel(True):
+            # Do NOT turn on the config first. An incoming voice-state event
+            # could automatically start monitoring before the existing public
+            # verification message has the required disclosure.
+            await interaction.edit_original_response(
+                embed=await _embed(interaction), view=VoiceSafetyStaffView(self.owner_id)
+            )
+            return await interaction.followup.send(
+                "❌ Voice Safety remains OFF: the existing verification panel "
+                "could not be updated with its monitoring disclosure. Check "
+                "Dank Shield's message permissions in your verification channel.",
+                ephemeral=True,
+            )
+
         try:
-            saved = await _save(interaction, {VOICE_SAFETY_ENABLED: not currently_enabled})
+            await _save(interaction, {VOICE_SAFETY_ENABLED: not currently_enabled})
         except Exception:
-            return await interaction.followup.send("Failed to confirm saved setup state.", ephemeral=True)
+            if not currently_enabled:
+                restored = await refresh_panel(False)
+                if not restored:
+                    return await interaction.followup.send(
+                        "❌ Voice Safety could not be enabled, and the verification "
+                        "panel could not be restored. Monitoring remains disabled; "
+                        "check the public message and its permissions.",
+                        ephemeral=True,
+                    )
+            return await interaction.followup.send(
+                "Failed to confirm saved Voice Safety setup state.", ephemeral=True
+            )
 
         # Persist OFF before stopping the receiver so automatic startup cannot
         # start another safety session while the previous one is shutting down.
@@ -440,47 +484,16 @@ class VoiceSafetyStaffView(discord.ui.View):
             except Exception:
                 receiver_stopped = False
 
-        # A saved setting does not edit an already-posted Discord message.
-        # Update its existing embed AND buttons right now, without a repost.
-        from ..setup_engine.verification_modes import effective_verification_mode
-        basic_verify = effective_verification_mode(guild, saved) == "basic_button"
+        # When disabling, remove the agreement AND decline button from the same
+        # existing panel after the disabled setting is durably confirmed.
         panel_refreshed = True
-        if basic_verify:
-            try:
-                from ..startup_guards.basic_verify_panel_auto_refresh_guard import (
-                    refresh_basic_verify_panel,
-                )
-                panel_refreshed = await refresh_basic_verify_panel(
-                    guild, reason="voice safety setting changed"
-                )
-            except Exception:
-                panel_refreshed = False
-
-        if not currently_enabled and basic_verify and not panel_refreshed:
-            # Never begin listening while a Basic Verify panel still lacks
-            # the required Voice Safety disclosure.
-            try:
-                await _save(interaction, {VOICE_SAFETY_ENABLED: False})
-            except Exception:
-                return await interaction.followup.send(
-                    "❌ Verification panel refresh failed and Voice Safety rollback "
-                    "could not be confirmed. Disable monitoring and inspect setup immediately.",
-                    ephemeral=True,
-                )
-            await interaction.edit_original_response(
-                embed=await _embed(interaction), view=VoiceSafetyStaffView(self.owner_id)
-            )
-            return await interaction.followup.send(
-                "❌ Voice Safety remains OFF because the existing verification "
-                "panel could not be updated. Check Dank Shield's message permissions "
-                "in your verification channel.",
-                ephemeral=True,
-            )
+        if currently_enabled:
+            panel_refreshed = await refresh_panel(False)
 
         if not currently_enabled and receiver_stopped:
-            # Enabling starts monitoring right away instead of waiting for
-            # the next person to join a voice channel.
+            # Enabling starts monitoring after the disclosure is visible.
             await manager.maybe_auto_start_voice_safety(guild)
+
         await interaction.edit_original_response(
             embed=await _embed(interaction), view=VoiceSafetyStaffView(self.owner_id)
         )
