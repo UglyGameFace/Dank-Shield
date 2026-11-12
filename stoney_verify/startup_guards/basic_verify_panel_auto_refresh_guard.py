@@ -157,30 +157,51 @@ async def refresh_basic_verify_panel(guild: discord.Guild, *, reason: str = "sta
                 f"verification channel guild={guild.id}"
             )
             return False
-        if not _can_scan(channel):
-            _warn(f"cannot scan verify channel guild={guild.id} channel={getattr(channel, 'id', 0)}")
-            return False
-
         me_id = int(getattr(getattr(guild, "me", None), "id", 0) or 0)
         if me_id <= 0:
             return False
 
-        refreshed = False
-        async for msg in channel.history(limit=100):
-            if int(getattr(getattr(msg, "author", None), "id", 0) or 0) != me_id:
-                continue
-            embeds = list(getattr(msg, "embeds", []) or [])
-            if not embeds:
-                continue
-            if not is_basic_verify_panel_embed(embeds[0]):
-                continue
+        def is_our_verify_panel(message: Any) -> bool:
+            if int(getattr(getattr(message, "author", None), "id", 0) or 0) != me_id:
+                return False
+            embeds = list(getattr(message, "embeds", []) or [])
+            return bool(embeds and is_basic_verify_panel_embed(embeds[0]))
 
-            await msg.edit(embed=build_basic_verify_embed(guild, cfg), view=BasicVerifyView())
-            _log(f"refreshed basic verify panel guild={guild.id} channel={channel.id} message={msg.id} reason={reason}")
-            refreshed = True
-            break
+        # Prefer the persisted panel identity. It may be far older than the
+        # most recent 100 messages, so a history-only refresh can miss it.
+        message = None
+        persisted_id = _safe_int(_cfg_value(cfg, "basic_verify_panel_message_id"), 0)
+        if persisted_id > 0:
+            try:
+                saved = await channel.fetch_message(persisted_id)
+                if is_our_verify_panel(saved):
+                    message = saved
+            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                pass
 
-        return refreshed
+        if message is None:
+            if not _can_scan(channel):
+                _warn(f"cannot scan verify channel guild={guild.id} channel={getattr(channel, 'id', 0)}")
+                return False
+            async for candidate in channel.history(limit=100):
+                if is_our_verify_panel(candidate):
+                    message = candidate
+                    break
+
+        if message is None:
+            return False
+
+        # Refresh the SAME public message, including its buttons. In particular
+        # disabling Voice Safety removes the monitoring agreement and decline
+        # button; enabling it restores the disclosure before any new Verify click.
+        await message.edit(
+            embed=build_basic_verify_embed(guild, cfg),
+            view=BasicVerifyView(
+                voice_safety_agreement=bool(_cfg_value(cfg, "voice_safety_enabled"))
+            ),
+        )
+        _log(f"refreshed basic verify panel guild={guild.id} channel={channel.id} message={message.id} reason={reason}")
+        return True
     except Exception as exc:
         _warn(f"refresh failed guild={getattr(guild, 'id', 'unknown')}: {type(exc).__name__}: {exc}")
         return False
