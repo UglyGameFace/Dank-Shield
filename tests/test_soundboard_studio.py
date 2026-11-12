@@ -130,3 +130,29 @@ def test_actual_ffmpeg_output_is_short_and_native_compatible(tmp_path) -> None:
     encoded = asyncio.run(audio._convert_bytes(source.read_bytes(), start=2))
     assert encoded.startswith(b"ID3")
     assert 1000 < len(encoded) < audio.MAX_SOUND_BYTES
+
+
+def test_duplicate_named_clips_remain_distinct_stage_items() -> None:
+    # Uploading the second of two identical files must not remove the first.
+    first = audio.PreparedSound("same.mp3", "same", b"same")
+    second = audio.PreparedSound("same.mp3", "same", b"same")
+    sounds = [first, second]
+    sounds.remove(second)
+    assert sounds == [first]
+    assert sounds[0] is first
+
+
+def test_stalled_attachment_download_is_bounded(monkeypatch) -> None:
+    class SlowAttachment(FakeAttachment):
+        async def read(self) -> bytes:
+            await asyncio.sleep(10)
+            return b"x"
+
+    async def fast_timeout(coro, *, timeout):
+        assert timeout == 30
+        coro.close()
+        raise asyncio.TimeoutError
+
+    monkeypatch.setattr(audio.asyncio, "wait_for", fast_timeout)
+    with pytest.raises(audio.SoundboardInputError, match="download timed out"):
+        asyncio.run(audio.prepare_attachment(SlowAttachment()))
