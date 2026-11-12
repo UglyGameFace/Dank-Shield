@@ -5,6 +5,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import discord
+import pytest
 
 from stoney_verify.community_voice_caption_runtime import (
     CommunityVoiceCaptionManager,
