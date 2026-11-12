@@ -5,6 +5,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import discord
+import pytest
 
 from stoney_verify.community_voice_caption_runtime import (
     CommunityVoiceCaptionManager,
@@ -1243,4 +1244,227 @@ def test_voice_safety_releases_room_below_two_and_checks_next_room(monkeypatch) 
         assert disabled == [7]
         assert stopped == [sid]
         assert retried == [4]
+    asyncio.run(run())
+
+@pytest.mark.parametrize("persisted", [False, True])
+def test_voice_safety_refresh_edits_existing_verify_panel_in_place(monkeypatch, persisted) -> None:
+    """The same published message loses and regains the agreement on toggle."""
+    import stoney_verify.startup_guards.basic_verify_panel_auto_refresh_guard as guard
+    from stoney_verify.verification_new.basic_verify import build_basic_verify_embed
+
+    async def run() -> None:
+        cfg = {
+            "verify_channel_id": 77,
+            "voice_safety_enabled": False,
+            "basic_verify_panel_message_id": "901" if persisted else "",
+        }
+
+        class FakeMessage:
+            id = 901
+            author = SimpleNamespace(id=11)
+
+            def __init__(self, guild):
+                self.embeds = [build_basic_verify_embed(guild, cfg)]
+                self.edits = []
+
+            async def edit(self, *, embed, view):
+                self.embeds = [embed]
+                self.edits.append((embed, view))
+
+        class FakeChannel:
+            id = 77
+
+            def __init__(self):
+                self.message = None
+                self.fetches = 0
+                self.scans = 0
+
+            async def fetch_message(self, message_id):
+                self.fetches += 1
+                assert message_id == 901
+                return self.message
+
+            async def history(self, *, limit):
+                self.scans += 1
+                assert limit == 100
+                yield self.message
+
+        channel = FakeChannel()
+
+        class FakeGuild:
+            id = 42
+            me = SimpleNamespace(id=11)
+            text_channels = []
+
+            def get_channel(self, channel_id):
+                return channel if int(channel_id) == 77 else None
+
+        guild = FakeGuild()
+        channel.message = FakeMessage(guild)
+
+        async def load_config(_guild):
+            return dict(cfg)
+
+        monkeypatch.setattr(guard.discord, "TextChannel", FakeChannel)
+        monkeypatch.setattr(guard, "_load_cfg", load_config)
+        monkeypatch.setattr(guard, "_can_scan", lambda _: True)
+        monkeypatch.setattr(guard, "effective_verification_mode", lambda *_: "basic_button")
+
+        for enabled in (True, False):
+            cfg["voice_safety_enabled"] = enabled
+            assert await guard.refresh_basic_verify_panel(guild, reason="setting toggled")
+            embed, view = channel.message.edits[-1]
+            labels = {child.label for child in view.children}
+            if enabled:
+                assert "Agree & Verify" in labels
+                assert "Decline & Exit Server" in labels
+                assert "Voice Safety Agreement v1" in str(embed.to_dict())
+            else:
+                assert labels == {"Verify"}
+                assert "Voice Safety Agreement v1" not in str(embed.to_dict())
+                assert "Tap **Verify**" in embed.description
+
+        assert len(channel.message.edits) == 2
+        assert channel.fetches == (2 if persisted else 0)
+        assert channel.scans == (0 if persisted else 2)
+
+        # Preflight must show the consent form before activation without
+        # mutating the actual (still disabled) stored configuration.
+        cfg["voice_safety_enabled"] = False
+        assert await guard.refresh_basic_verify_panel(
+            guild, reason="pre-enable", voice_safety_enabled_override=True
+        )
+        preflight_embed, preflight_view = channel.message.edits[-1]
+        assert "Voice Safety Agreement v1" in str(preflight_embed.to_dict())
+        assert "Agree & Verify" in {child.label for child in preflight_view.children}
+        assert cfg["voice_safety_enabled"] is False
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize(
+    ("starting_enabled", "panel_refresh_succeeds", "stop_succeeds"),
+    [
+        (True, True, True), (False, True, True),
+        (True, False, True), (False, False, True),
+        (True, True, False),
+    ],
+)
+def test_voice_safety_toggle_refreshes_public_verify_and_fails_safe(
+    monkeypatch, starting_enabled, panel_refresh_succeeds, stop_succeeds
+) -> None:
+    import stoney_verify.commands_ext.public_voice_safety as ui
+    import stoney_verify.setup_engine.verification_modes as modes
+    import stoney_verify.startup_guards.basic_verify_panel_auto_refresh_guard as guard
+
+    async def run() -> None:
+        state = {"voice_safety_enabled": starting_enabled}
+        events = []
+
+        async def load_config(_guild_id, *, refresh=False):
+            return dict(state)
+
+        async def save(_interaction, patch):
+            state.update(patch)
+            events.append(("saved", state["voice_safety_enabled"]))
+            return dict(state)
+
+        class FakeManager:
+            active = starting_enabled
+            started = 0
+
+            def status_for_guild(self, _guild_id):
+                return {
+                    "active": self.active,
+                    "scope_kind": "voice_safety" if self.active else None,
+                }
+
+            async def stop(self, scope_id):
+                assert scope_id == voice_safety_scope_id(42)
+                if not stop_succeeds:
+                    events.append(("stop_failed", True))
+                    raise RuntimeError("receiver shutdown failed")
+                self.active = False
+                events.append(("stopped", True))
+
+            async def maybe_auto_start_voice_safety(self, _guild):
+                self.started += 1
+                events.append(("started", True))
+
+        class Response:
+            async def defer(self):
+                pass
+
+        class Followup:
+            def __init__(self):
+                self.messages = []
+
+            async def send(self, message, **kwargs):
+                self.messages.append(message)
+
+        class Interaction:
+            guild = SimpleNamespace(id=42)
+            client = SimpleNamespace()
+            response = Response()
+
+            def __init__(self):
+                self.followup = Followup()
+                self.edits = []
+
+            async def edit_original_response(self, **kwargs):
+                self.edits.append(kwargs)
+
+        manager = FakeManager()
+
+        async def refresh(_guild, *, reason, voice_safety_enabled_override):
+            events.append(("refreshed", voice_safety_enabled_override))
+            assert reason == "voice safety setting changed"
+            if voice_safety_enabled_override:
+                # The public agreement must precede the persistent ON flag.
+                assert state["voice_safety_enabled"] is False
+            else:
+                assert state["voice_safety_enabled"] is False
+            return panel_refresh_succeeds
+
+        async def embed(_interaction):
+            return discord.Embed(title="staff panel")
+
+        monkeypatch.setattr(ui, "get_guild_config", load_config)
+        monkeypatch.setattr(ui, "_save", save)
+        monkeypatch.setattr(ui, "_embed", embed)
+        monkeypatch.setattr(ui, "ensure_community_voice_caption_manager", lambda _: manager)
+        monkeypatch.setattr(modes, "effective_verification_mode", lambda *_: "basic_button")
+        monkeypatch.setattr(guard, "refresh_basic_verify_panel", refresh)
+
+        view = VoiceSafetyStaffView(1)
+        toggle = next(child for child in view.children if child.label == "Enable / Disable Setup")
+        interaction = Interaction()
+        await toggle.callback(interaction)
+
+        assert len(interaction.edits) == 1
+
+        if starting_enabled:
+            assert events[0] == ("saved", False)
+            assert state["voice_safety_enabled"] is False
+            assert manager.started == 0
+            if stop_succeeds:
+                assert ("stopped", True) in events
+                assert ("refreshed", False) in events
+                assert bool(interaction.followup.messages) is not panel_refresh_succeeds
+            else:
+                assert ("stop_failed", True) in events
+                assert ("refreshed", False) not in events
+                assert any("public monitoring notice" in m for m in interaction.followup.messages)
+        elif panel_refresh_succeeds:
+            assert events[:2] == [("refreshed", True), ("saved", True)]
+            assert state["voice_safety_enabled"] is True
+            assert manager.started == 1
+            assert events.index(("saved", True)) < events.index(("started", True))
+            assert interaction.followup.messages == []
+        else:
+            assert events == [("refreshed", True)]
+            assert state["voice_safety_enabled"] is False
+            assert manager.started == 0
+            assert any("remains OFF" in m for m in interaction.followup.messages)
+
     asyncio.run(run())
