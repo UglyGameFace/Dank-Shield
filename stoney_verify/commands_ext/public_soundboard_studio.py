@@ -21,8 +21,14 @@ _ALLOWED_MENTIONS = discord.AllowedMentions.none()
 
 
 def _perms(interaction: discord.Interaction, *, bot: bool = False) -> Any:
-    member = interaction.guild.me if bot and interaction.guild else interaction.user
-    return getattr(member, "guild_permissions", None)
+    if not bot:
+        return getattr(interaction.user, "guild_permissions", None)
+    member = interaction.guild.me if interaction.guild else None
+    if member is not None:
+        return getattr(member, "guild_permissions", None)
+    # Discord includes the bot's effective permissions in the interaction even
+    # if its own Member is not yet cached after reconnecting.
+    return getattr(interaction, "app_permissions", None)
 
 
 def _allowed(interaction: discord.Interaction, action: str, *, bot: bool = False) -> bool:
