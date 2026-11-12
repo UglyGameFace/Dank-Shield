@@ -27,7 +27,7 @@ class SoundboardInputError(ValueError):
     """Expected, actionable user upload error."""
 
 
-@dataclass
+@dataclass(eq=False)
 class PreparedSound:
     filename: str
     name: str
@@ -117,7 +117,10 @@ async def prepare_attachment(
         raise SoundboardInputError("Trim start must be a number of seconds.") from exc
     if not 0 <= start <= MAX_START_SECONDS:
         raise SoundboardInputError("Trim start must be between 0 and 300 seconds.")
-    data = await attachment.read()
+    try:
+        data = await asyncio.wait_for(attachment.read(), timeout=30)
+    except asyncio.TimeoutError as exc:
+        raise SoundboardInputError("File download timed out. Try a smaller clip.") from exc
     if not 0 < len(data) <= MAX_SOURCE_BYTES:
         raise SoundboardInputError("File download exceeded the 8 MB input limit.")
     encoded = await _convert_bytes(data, start=start)
