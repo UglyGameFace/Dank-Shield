@@ -1328,6 +1328,17 @@ def test_voice_safety_refresh_edits_existing_verify_panel_in_place(monkeypatch, 
         assert channel.fetches == (2 if persisted else 0)
         assert channel.scans == (0 if persisted else 2)
 
+        # Preflight must show the consent form before activation without
+        # mutating the actual (still disabled) stored configuration.
+        cfg["voice_safety_enabled"] = False
+        assert await guard.refresh_basic_verify_panel(
+            guild, reason="pre-enable", voice_safety_enabled_override=True
+        )
+        preflight_embed, preflight_view = channel.message.edits[-1]
+        assert "Voice Safety Agreement v1" in str(preflight_embed.to_dict())
+        assert "Agree & Verify" in {child.label for child in preflight_view.children}
+        assert cfg["voice_safety_enabled"] is False
+
     asyncio.run(run())
 
 
@@ -1398,9 +1409,14 @@ def test_voice_safety_toggle_refreshes_public_verify_and_fails_safe(
 
         manager = FakeManager()
 
-        async def refresh(_guild, *, reason):
-            events.append(("refreshed", state["voice_safety_enabled"]))
+        async def refresh(_guild, *, reason, voice_safety_enabled_override):
+            events.append(("refreshed", voice_safety_enabled_override))
             assert reason == "voice safety setting changed"
+            if voice_safety_enabled_override:
+                # The public agreement must precede the persistent ON flag.
+                assert state["voice_safety_enabled"] is False
+            else:
+                assert state["voice_safety_enabled"] is False
             return panel_refresh_succeeds
 
         async def embed(_interaction):
@@ -1419,23 +1435,24 @@ def test_voice_safety_toggle_refreshes_public_verify_and_fails_safe(
         await toggle.callback(interaction)
 
         assert len(interaction.edits) == 1
-        assert events[0] == ("saved", not starting_enabled)
-        assert ("refreshed", not starting_enabled) in events
 
         if starting_enabled:
+            assert events[0] == ("saved", False)
+            assert ("refreshed", False) in events
             assert state["voice_safety_enabled"] is False
             assert ("stopped", True) in events
             assert manager.started == 0
             assert bool(interaction.followup.messages) is not panel_refresh_succeeds
         elif panel_refresh_succeeds:
+            assert events[:2] == [("refreshed", True), ("saved", True)]
             assert state["voice_safety_enabled"] is True
             assert manager.started == 1
-            assert events.index(("refreshed", True)) < events.index(("started", True))
+            assert events.index(("saved", True)) < events.index(("started", True))
             assert interaction.followup.messages == []
         else:
+            assert events == [("refreshed", True)]
             assert state["voice_safety_enabled"] is False
             assert manager.started == 0
-            assert events[-1] == ("saved", False)
             assert any("remains OFF" in m for m in interaction.followup.messages)
 
     asyncio.run(run())
