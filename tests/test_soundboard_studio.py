@@ -95,7 +95,7 @@ def test_mobile_ui_uses_existing_upload_and_home_command_contract() -> None:
     assert "Soundboard Clip" in source
     assert "stage_soundboard_upload" in source
     assert "trim_start" in source
-    assert '"soundboard_studio"' in surface._FEATURE_ROUTE_KEYS
+    assert "soundboard_studio" in surface._FEATURE_ROUTE_KEYS
     entry = feature_by_key("soundboard_studio")
     assert entry is not None and entry.category == "voice"
     assert "soundboard" in entry.aliases
