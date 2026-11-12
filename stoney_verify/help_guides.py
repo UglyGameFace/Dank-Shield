@@ -203,6 +203,13 @@ HELP_GUIDES: dict[str, HelpGuide] = {
          "Return to Welcome & Exit Studio and preview the updated card."),
         "Uploaded assets change card appearance only when the relevant card uses them.",
         "Discord buttons cannot open an attachment picker, so uploads require the /dank upload command."),
+    "soundboard_studio": HelpGuide(
+        "Create native Discord Soundboard clips from phone recordings or audio files.",
+        ("Open /dank upload, select Soundboard Clip, attach up to three audio or video files and optionally choose trim_start.",
+         "Review each converted five-second sound, preview the audio and change its name, emoji or playback volume.",
+         "Choose Publish Clip or Publish All; to manage existing sounds, open Soundboard Studio from Voice & Accessibility."),
+        "Only sounds you explicitly publish are added to this server's native Soundboard.",
+        "Upload requires Create Expressions. Editing and deleting server sounds require Manage Expressions. Discord limits each sound to 5.2 seconds and 512 KB."),
     "live_captions": HelpGuide(
         "Show speech as text in supported Discord voice sessions.",
         ("Open Live Captions and review whether captions are available on your server.",
