@@ -67,13 +67,11 @@ async def _convert_bytes(source: bytes, *, start: float) -> bytes:
         raise SoundboardInputError("Audio converter unavailable on the bot host.")
     async with _CONVERSION_SLOTS:
         with tempfile.TemporaryDirectory(prefix="dank_sound_") as temporary:
-            src = Path(temporary) / "source.bin"
             dst = Path(temporary) / "clip.mp3"
-            await asyncio.to_thread(src.write_bytes, source)
             command = [
                 ffmpeg, "-hide_banner", "-loglevel", "error", "-nostdin",
-                "-y", "-protocol_whitelist", "file,pipe",
-                "-ss", str(start), "-i", str(src),
+                "-y", "-protocol_whitelist", "pipe",
+                "-i", "pipe:0", "-ss", str(start),
                 "-t", str(MAX_CLIP_SECONDS), "-vn", "-sn", "-dn",
                 "-threads", "1", "-ac", "1", "-ar", "32000",
                 "-af", "loudnorm=I=-16:TP=-1.5:LRA=11",
@@ -82,11 +80,12 @@ async def _convert_bytes(source: bytes, *, start: float) -> bytes:
             ]
             proc = await asyncio.create_subprocess_exec(
                 *command,
+                stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.DEVNULL,
                 stderr=asyncio.subprocess.PIPE,
             )
             try:
-                _, stderr = await asyncio.wait_for(proc.communicate(), timeout=20)
+                _, stderr = await asyncio.wait_for(proc.communicate(input=source), timeout=20)
             except asyncio.TimeoutError as exc:
                 proc.kill()
                 await proc.communicate()
