@@ -421,10 +421,10 @@ def test_merged_voice_safety_navigation_contract_from_pr_522() -> None:
     assert "Movie Night" not in cats["community"].description
     assert len(registry.CATEGORIES) <= 25
     assert all(len(c.description) <= 100 for c in registry.CATEGORIES)
-    assert {f.key for f in registry.features_for_category("voice")} == {"live_captions", "voice_safety"}
+    assert {f.key for f in registry.features_for_category("voice")} == {"live_captions", "voice_safety", "soundboard_studio"}
     entry = registry.feature_by_key("voice_safety")
     assert entry is not None and entry.manager_only is True
-    assert "AI Voice Safety" in _labels(surface.FeatureCategoryView(100, "voice"))
+    assert {"AI Voice Safety", "Soundboard Studio"} <= _labels(surface.FeatureCategoryView(100, "voice"))
     assert registry.search_features("AI Voice Moderation")[0].key == "voice_safety"
     assert registry.search_features("voice harassment")[0].key == "voice_safety"
     assert registry.search_features("voicepatrol")[0].key == "voice_safety"

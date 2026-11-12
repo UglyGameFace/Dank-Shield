@@ -37,6 +37,7 @@ _UPLOAD_CHOICES = [
     app_commands.Choice(name="Join Card Background", value="join_background"),
     app_commands.Choice(name="Exit Card Background", value="exit_background"),
     app_commands.Choice(name="Custom Card Font", value="custom_font"),
+    app_commands.Choice(name="Soundboard Clip", value="soundboard_clip"),
 ]
 
 
@@ -364,6 +365,7 @@ _FEATURE_ROUTE_KEYS = frozenset(
         "tickets",
         "server_design",
         "card_assets",
+        "soundboard_studio",
         "live_captions",
         "voice_safety",
         "logs_activity",
@@ -613,6 +615,10 @@ async def _route_feature(interaction: discord.Interaction, feature_key: str) -> 
             embed=_asset_embed(),
             view=CardAssetView(int(interaction.user.id)),
         )
+
+    if key == "soundboard_studio":
+        from .public_soundboard_studio import open_soundboard_studio
+        return await open_soundboard_studio(interaction)
 
     if key == "live_captions":
         from .public_live_captions import open_server_live_captions
@@ -1481,15 +1487,30 @@ async def open_compact_dank_home(
 
 @app_commands.describe(
     asset="What card asset are you uploading?",
-    file="Attach the image or font file.",
+    file="Attach the image, font or sound file.",
+    extra_file="Optional second soundboard clip (only for Soundboard Clip).",
+    third_file="Optional third soundboard clip (only for Soundboard Clip).",
+    trim_start="Start each sound clip this many seconds into its recording (0–300).",
 )
 @app_commands.choices(asset=_UPLOAD_CHOICES)
 async def consolidated_asset_upload(
     interaction: discord.Interaction,
     asset: app_commands.Choice[str],
     file: discord.Attachment,
+    extra_file: Optional[discord.Attachment] = None,
+    third_file: Optional[discord.Attachment] = None,
+    trim_start: app_commands.Range[int, 0, 300] = 0,
 ) -> None:
     value = str(getattr(asset, "value", asset) or "").strip().lower()
+    if value == "soundboard_clip":
+        from .public_soundboard_studio import stage_soundboard_upload
+        return await stage_soundboard_upload(
+            interaction, [file, extra_file, third_file], trim_start=trim_start
+        )
+    if extra_file is not None or third_file is not None or trim_start != 0:
+        return await _private(
+            interaction, "❌ Extra files and trim start are only for Soundboard Clip."
+        )
     if value == "join_background":
         from .public_welcome_group import welcome_card_upload
         return await welcome_card_upload(interaction, background=file)
@@ -1582,7 +1603,7 @@ def _compact_dank_children(tree: Any) -> int:
     dank_group.add_command(setup_command)
     upload = app_commands.Command(
         name="upload",
-        description="Upload Join/Exit card artwork or a custom card font.",
+        description="Upload card artwork, fonts or native Soundboard clips.",
         callback=consolidated_asset_upload,
     )
     dank_group.add_command(upload)

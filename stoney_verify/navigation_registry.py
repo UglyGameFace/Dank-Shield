@@ -361,6 +361,14 @@ FEATURES: tuple[NavigationFeature, ...] = (
         True,
     ),
     NavigationFeature(
+        "soundboard_studio",
+        "Soundboard Studio",
+        "🔊",
+        "voice",
+        "Upload, trim, preview and manage native Discord Soundboard sounds from mobile.",
+        ("soundboard", "sound uploader", "upload sounds", "audio clips", "sound effects", "voice soundboard", "soundboard manager", "trim sound", "soundboard upload"),
+    ),
+    NavigationFeature(
         "live_captions",
         "Live Captions",
         "📝",
