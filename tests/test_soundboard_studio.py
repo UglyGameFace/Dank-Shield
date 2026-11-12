@@ -110,3 +110,23 @@ def test_publish_stays_explicit_and_native_with_anti_nuke_audit_reason() -> None
     assert "await sound.edit(" in source
     assert "await sound.delete(" in source
     assert "Published" in source
+
+
+def test_actual_ffmpeg_output_is_short_and_native_compatible(tmp_path) -> None:
+    import shutil
+    import subprocess
+
+    if not shutil.which("ffmpeg"):
+        pytest.skip("FFmpeg is not installed on this test runner")
+    source = tmp_path / "source.wav"
+    subprocess.run(
+        [
+            "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+            "-f", "lavfi", "-i", "sine=frequency=440:duration=9",
+            "-c:a", "pcm_s16le", str(source),
+        ],
+        check=True, timeout=20,
+    )
+    encoded = asyncio.run(audio._convert_bytes(source.read_bytes(), start=2))
+    assert encoded.startswith(b"ID3")
+    assert 1000 < len(encoded) < audio.MAX_SOUND_BYTES
