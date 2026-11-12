@@ -1343,11 +1343,15 @@ def test_voice_safety_refresh_edits_existing_verify_panel_in_place(monkeypatch, 
 
 
 @pytest.mark.parametrize(
-    ("starting_enabled", "panel_refresh_succeeds"),
-    [(True, True), (False, True), (True, False), (False, False)],
+    ("starting_enabled", "panel_refresh_succeeds", "stop_succeeds"),
+    [
+        (True, True, True), (False, True, True),
+        (True, False, True), (False, False, True),
+        (True, True, False),
+    ],
 )
 def test_voice_safety_toggle_refreshes_public_verify_and_fails_safe(
-    monkeypatch, starting_enabled, panel_refresh_succeeds
+    monkeypatch, starting_enabled, panel_refresh_succeeds, stop_succeeds
 ) -> None:
     import stoney_verify.commands_ext.public_voice_safety as ui
     import stoney_verify.setup_engine.verification_modes as modes
@@ -1377,6 +1381,9 @@ def test_voice_safety_toggle_refreshes_public_verify_and_fails_safe(
 
             async def stop(self, scope_id):
                 assert scope_id == voice_safety_scope_id(42)
+                if not stop_succeeds:
+                    events.append(("stop_failed", True))
+                    raise RuntimeError("receiver shutdown failed")
                 self.active = False
                 events.append(("stopped", True))
 
@@ -1438,11 +1445,16 @@ def test_voice_safety_toggle_refreshes_public_verify_and_fails_safe(
 
         if starting_enabled:
             assert events[0] == ("saved", False)
-            assert ("refreshed", False) in events
             assert state["voice_safety_enabled"] is False
-            assert ("stopped", True) in events
             assert manager.started == 0
-            assert bool(interaction.followup.messages) is not panel_refresh_succeeds
+            if stop_succeeds:
+                assert ("stopped", True) in events
+                assert ("refreshed", False) in events
+                assert bool(interaction.followup.messages) is not panel_refresh_succeeds
+            else:
+                assert ("stop_failed", True) in events
+                assert ("refreshed", False) not in events
+                assert any("public monitoring notice" in m for m in interaction.followup.messages)
         elif panel_refresh_succeeds:
             assert events[:2] == [("refreshed", True), ("saved", True)]
             assert state["voice_safety_enabled"] is True
