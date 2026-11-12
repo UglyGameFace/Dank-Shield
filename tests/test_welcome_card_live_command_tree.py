@@ -82,8 +82,11 @@ def test_attachment_doorways_are_limited_to_card_upload_and_toke_media() -> None
         "stoney_verify.commands_ext.public_command_surface_v2"
     )
     upload_params = getattr(upload, "_params", {})
-    assert set(upload_params) == {"asset", "file"}
+    assert set(upload_params) == {"asset", "file", "extra_file", "third_file", "trim_start"}
     assert upload_params["file"].type is discord.AppCommandOptionType.attachment
+    for extra_name in ("extra_file", "third_file"):
+        assert upload_params[extra_name].type is discord.AppCommandOptionType.attachment
+        assert not upload_params[extra_name].required
 
     toke = commands_module.bot.tree.get_command("toke", guild=None)
     assert isinstance(toke, app_commands.Command)
@@ -119,6 +122,8 @@ def test_attachment_doorways_are_limited_to_card_upload_and_toke_media() -> None
 
     assert attachment_paths == {
         "dank upload:file",
+        "dank upload:extra_file",
+        "dank upload:third_file",
         "toke:upload",
     }
 
