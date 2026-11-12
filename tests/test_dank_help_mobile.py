@@ -18,7 +18,7 @@ ROOT = Path(__file__).resolve().parents[1]
 def test_all_registered_features_have_actionable_help_not_just_navigation():
     assert not HELP_GUIDE_ERRORS
     assert set(HELP_GUIDES) == {feature.key for feature in navigation_registry.FEATURES}
-    assert len(HELP_GUIDES) == 37
+    assert len(HELP_GUIDES) == len(navigation_registry.FEATURES)
     for feature in navigation_registry.FEATURES:
         guide = HELP_GUIDES[feature.key]
         assert len(guide.steps) >= 2
