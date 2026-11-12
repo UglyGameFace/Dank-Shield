@@ -147,7 +147,7 @@ class SoundReviewView(_PrivateView):
         e.set_footer(text="To pick another part of a recording, use /dank upload with trim_start.")
         return e
 
-    def on_timeout(self) -> None:
+    async def on_timeout(self) -> None:
         self.sounds.clear()
         self.message = None
 
@@ -287,7 +287,7 @@ async def stage_soundboard_upload(
 
 
 class _SoundSelect(discord.ui.Select):
-    def __init__(self, sounds: list[discord.SoundboardSound], page: int) -> None:
+    def __init__(self, sounds: list[discord.SoundboardSound]) -> None:
         self.sound_ids = {str(s.id) for s in sounds}
         super().__init__(
             placeholder="Choose a sound to inspect",
@@ -330,7 +330,7 @@ class SoundboardBrowseView(_PrivateView):
         self.page = max(0, min(page, max(0, (len(self.sounds) - 1) // 20)))
         subset = self.sounds[self.page * 20 : self.page * 20 + 20]
         if subset:
-            self.add_item(_SoundSelect(subset, self.page))
+            self.add_item(_SoundSelect(subset))
 
     def embed(self) -> discord.Embed:
         e = discord.Embed(
