@@ -125,7 +125,10 @@ def _can_scan(channel: discord.TextChannel) -> bool:
         return False
 
 
-async def refresh_basic_verify_panel(guild: discord.Guild, *, reason: str = "startup") -> bool:
+async def refresh_basic_verify_panel(
+    guild: discord.Guild, *, reason: str = "startup",
+    voice_safety_enabled_override: Optional[bool] = None,
+) -> bool:
     try:
         from stoney_verify.verification_new.basic_verify import (
             BasicVerifyView,
@@ -194,10 +197,19 @@ async def refresh_basic_verify_panel(guild: discord.Guild, *, reason: str = "sta
         # Refresh the SAME public message, including its buttons. In particular
         # disabling Voice Safety removes the monitoring agreement and decline
         # button; enabling it restores the disclosure before any new Verify click.
+        # For enabling, pre-publish the disclosure while monitoring is still
+        # disabled in storage. A voice-state event must not start monitoring in
+        # the gap between enabling the setting and editing the public message.
+        panel_cfg = cfg
+        if voice_safety_enabled_override is not None:
+            if not isinstance(cfg, dict):
+                raise TypeError("Voice Safety panel preflight requires a config mapping")
+            panel_cfg = {**cfg, "voice_safety_enabled": voice_safety_enabled_override}
+
         await message.edit(
-            embed=build_basic_verify_embed(guild, cfg),
+            embed=build_basic_verify_embed(guild, panel_cfg),
             view=BasicVerifyView(
-                voice_safety_agreement=bool(_cfg_value(cfg, "voice_safety_enabled"))
+                voice_safety_agreement=bool(_cfg_value(panel_cfg, "voice_safety_enabled"))
             ),
         )
         _log(f"refreshed basic verify panel guild={guild.id} channel={channel.id} message={message.id} reason={reason}")
