@@ -82,10 +82,10 @@ async def _convert_bytes(source: bytes, *, start: float) -> bytes:
                 *command,
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.DEVNULL,
-                stderr=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.DEVNULL,
             )
             try:
-                _, stderr = await asyncio.wait_for(proc.communicate(input=source), timeout=20)
+                await asyncio.wait_for(proc.communicate(input=source), timeout=20)
             except asyncio.TimeoutError as exc:
                 proc.kill()
                 await proc.communicate()
