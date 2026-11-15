@@ -3,6 +3,8 @@
 // Authenticate using short-lived Ed25519 signatures from the Cloudflare Shield server.
 const PUBLIC_KEY_B64U = "U2OMgZuaVXAC3sNHnVITp7aED6WwSTjOtQReG7auOAw";
 const GUILD_ID = "1514374173517152418";
+const BOT_ID = "1458458091468226630";
+// The bot normally writes every two minutes. Treat >= 6 minutes as stale.
 
 function b64decode(s: string): Uint8Array {
   const raw = atob(s.replace(/-/g, "+").replace(/_/g, "/").padEnd(Math.ceil(s.length / 4) * 4, "="));
@@ -49,10 +51,11 @@ Deno.serve(async (request: Request) => {
   const cutoff = new Date(now.getTime() - 86_400_000).toISOString();
   const guild = "eq."+GUILD_ID;
   try {
-    const [configs,tickets,activity] = await Promise.all([
+    const [configs,tickets,activity,heartbeats] = await Promise.all([
       rows("guild_configs",new URLSearchParams({select:"guild_name,updated_at",guild_id:guild,limit:"1"})),
       rows("tickets",new URLSearchParams({select:"status",guild_id:guild,limit:"1000"})),
-      rows("activity_feed_events",new URLSearchParams({select:"created_at",guild_id:guild,created_at:"gte."+cutoff,order:"created_at.desc",limit:"1000"}))
+      rows("activity_feed_events",new URLSearchParams({select:"created_at",guild_id:guild,created_at:"gte."+cutoff,order:"created_at.desc",limit:"1000"})),
+      rows("bot_status_heartbeats",new URLSearchParams({select:"status,last_seen_at,guild_count",bot_id:"eq."+BOT_ID,limit:"1"}))
     ]);
     if (configs.length !== 1) return reply(503,{ok:false,error:"guild_unavailable"});
     const ticketCounts: Record<string, number> = {open:0,claimed:0,closed:0,other:0};
@@ -63,13 +66,23 @@ Deno.serve(async (request: Request) => {
       else if (status==="closed") ticketCounts.closed++;
       else ticketCounts.other++;
     }
+    const raw = heartbeats[0] || null;
+    const seenAt = typeof raw?.last_seen_at === "string" ? raw.last_seen_at : null;
+    const age = seenAt ? now.getTime() - Date.parse(seenAt) : Number.POSITIVE_INFINITY;
+    const fresh = Number.isFinite(age) && age >= 0 && age < 360_000;
+    const runtime = {
+      status:!seenAt ? "not_reported" : !fresh ? "stale" : raw?.status === "online" ? "heartbeat_recent" : "reported_not_online",
+      lastSeenAt:seenAt,
+      guildCount:Number.isInteger(raw?.guild_count) && (raw.guild_count as number)>=0 ? raw.guild_count : null,
+      evidence:"Supabase heartbeat (nominal interval 120 seconds); fresh evidence is not a live HTTP health probe."
+    };
     return reply(200,{
       ok:true,source:"dank-shield-supabase",kind:"database_snapshot",guild:"The 420 Lobby",
       capturedAt:now.toISOString(),
       configUpdatedAt:configs[0].updated_at||null,
       tickets:{...ticketCounts,atLeast:tickets.length,truncated:tickets.length>=1000},
       activity24h:{atLeast:activity.length,truncated:activity.length>=1000,latestAt:activity[0]?.created_at||null},
-      runtime:{status:"not_connected",note:"Database freshness does not prove Discloud bot liveness."}
+      runtime
     });
   } catch {
     return reply(503,{ok:false,error:"source_unavailable"});
