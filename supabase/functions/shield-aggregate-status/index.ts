@@ -28,15 +28,32 @@ async function authorized(req: Request): Promise<boolean> {
   try { return await crypto.subtle.verify("Ed25519", key, b64decode(signed), message); }
   catch { return false; }
 }
+// Supabase's named secret API keys are now the primary server-side credential.
+// Unlike legacy service_role JWTs, sb_secret keys MUST NOT be sent as Bearer JWTs.
+function internalAdminHeaders(): Record<string, string> {
+  let key: string | undefined;
+  try {
+    const keys: unknown = JSON.parse(Deno.env.get("SUPABASE_SECRET_KEYS") || "{}");
+    if (keys && typeof keys === "object" && !Array.isArray(keys)) {
+      const primary=(keys as Record<string, unknown>).default;
+      if (typeof primary === "string" && primary.startsWith("sb_secret_")) key=primary;
+    }
+  } catch {
+    // Legacy fallback remains usable only for older Supabase projects.
+  }
+  if (key) return {"apikey":key,"Accept":"application/json"};
+  const legacy = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+  if (!legacy) throw Error("Missing server-side service credentials");
+  return {"apikey":legacy,"Authorization":"Bearer "+legacy,"Accept":"application/json"};
+}
 async function rows(table: string, params: URLSearchParams): Promise<Array<Record<string, unknown>>> {
   const base = Deno.env.get("SUPABASE_URL");
-  const key = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
-  if (!base || !key) throw Error("Missing server-side service credentials");
+  if (!base) throw Error("Missing Supabase project URL");
   const target = new URL("/rest/v1/"+table,base);
   target.search=params.toString();
   const result = await fetch(target, {
     method:"GET",
-    headers:{"apikey":key,"Authorization":"Bearer "+key,"Accept":"application/json"},
+    headers:internalAdminHeaders(),
     signal:AbortSignal.timeout(4500)
   });
   if (!result.ok) throw Error("Database read unavailable");
