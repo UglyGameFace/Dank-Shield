@@ -1,3 +1,12 @@
+## DISCORD FETCH EFFICIENCY CONTINUATION (2026-11-16)
+
+- **Verified integration:** PR #851 (RAM/CPU pressure, bounded caching, member prefetch, activity buffer/linear flush, departed reconciliation and idle download work) merged into `main` as `04730f44d94d30672312641220ea7c4dcb7bad43`, after all ten PR-head workflows passed. Exact-main CI and deployed Discloud SHA are separately tracked, not assumed.
+- **Current objective / branch:** consolidate eleven live native message-fetch owner modules onto existing `startup_guards.discord_api_safety.fetch_message_with_api_safety`, without a second limiter or changes to authorization semantics. Branch `fix/discord-message-fetch-consolidation-20261116`; new regression audit enumerates every changed owner.
+- **Remaining:** exact-head CI, code review, merge when green, exact-main verification; issue #384 remains open until actual production Discord API 429 rates are measured against an authenticated live deployment. Capture RSS/CPU/lag/task counts for #851's performance proof. No database, Discloud host, credentials or deployments changed here.
+- **Compatibility:** retain existing Discord custom IDs, storage, moderation rules, retry policies, shard ownership, message ownership proof, and timeout/error semantics.
+
+---
+
 ## OPTIMIZATION CONTINUATION: LARGE GUILD & IDLE WORK (2026-11-16)
 
 - **Further changes in PR #851:** departure reconciliation now pages guild DB records by stable user ID (500 per page), so PostgREST's default row cap does not silently truncate large-guild reconciliation; failed page fetch propagates instead of falsely reporting complete coverage. Share Router Download queue workers wake on admitted jobs and use bounded idle backoff with periodic SQLite fallback polling, preserving cross-restart durable queue behavior and no duplicate DM replay.
