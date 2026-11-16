@@ -155,9 +155,22 @@ def _eligible(member: discord.Member, guild: discord.Guild, cfg: Mapping[str, An
     if any((
         member_permissions.administrator,
         member_permissions.manage_guild,
+        member_permissions.manage_roles,
+        member_permissions.moderate_members,
         member_permissions.kick_members,
         member_permissions.ban_members,
     )):
+        return False
+    # Explicitly protected staff/control-role IDs are not synonymous with
+    # the bot's highest role, and may lack any dangerous Discord permission.
+    from .role_truth import safe_int
+    protected_ids = {
+        safe_int(cfg.get(key)) for key in (
+            "staff_role_id", "vc_staff_role_id", "server_control_role_id",
+            "control_role_id", "bot_manager_role_id",
+        )
+    } - {0}
+    if any(getattr(role, "id", 0) in protected_ids for role in getattr(member, "roles", ())):
         return False
     if action == "kick" and not me.guild_permissions.kick_members:
         return False
