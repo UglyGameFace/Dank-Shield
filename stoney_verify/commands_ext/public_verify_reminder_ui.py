@@ -25,6 +25,7 @@ from ..verification_reminder_postgres import (
     diagnose_reminder_ledgers_sync,
     format_reminder_ledger_diagnostics,
 )
+from ..verification_reminder_enforcement import enforcement_ready_sync
 from ..verification_reminder_manual import (
     ManualPreview,
     preview_manual_reminders,
@@ -102,6 +103,17 @@ def _embed(guild: discord.Guild, cfg: Mapping[str, Any], policy: ReminderPolicy)
         ),
         inline=False,
     )
+    embed.add_field(
+        name="After 3 successful scheduled reminders",
+        value=(
+            f"Action: **{policy.after_max_action.upper()}** • "
+            f"Grace period: **{policy.after_max_grace_hours}h** after the last delivery\\n"
+            "Default OFF. Only confirmed scheduled sends count; failed deliveries "
+            "and manual reminders do not. Staff/admin roles and newly verified "
+            "members are excluded. Each action is reserved once and logged."
+        ),
+        inline=False,
+    )
     if blocker:
         embed.add_field(name="Setup needed", value=blocker, inline=False)
     embed.set_footer(
@@ -129,6 +141,100 @@ async def _save(interaction: discord.Interaction, cfg: Mapping[str, Any], update
     except Exception as exc:
         await _private(interaction, f"❌ Could not safely save reminder settings ({type(exc).__name__}).")
         return False
+
+
+
+def _can_configure_action(interaction: discord.Interaction, action: str) -> bool:
+    guild = interaction.guild
+    user = interaction.user
+    if guild is None or user is None:
+        return False
+    permissions = getattr(user, "guild_permissions", None)
+    if permissions is None:
+        return False
+    manager = (
+        user.id == guild.owner_id
+        or permissions.administrator
+        or permissions.manage_guild
+    )
+    if not manager:
+        return False
+    if action == "ban" and not (permissions.ban_members or permissions.administrator or user.id == guild.owner_id):
+        return False
+    if action == "kick" and not (permissions.kick_members or permissions.administrator or user.id == guild.owner_id):
+        return False
+    return True
+
+
+class AutoActionModal(discord.ui.Modal, title="After 3 verification reminders"):
+    action = discord.ui.TextInput(
+        label="Action: NONE, KICK or BAN",
+        placeholder="NONE",
+        max_length=4,
+    )
+    grace = discord.ui.TextInput(
+        label="Hours after third delivered reminder (1-720)",
+        default="24", max_length=3,
+    )
+    confirmation = discord.ui.TextInput(
+        label="Type CONFIRM to save this policy",
+        placeholder="CONFIRM", max_length=7,
+    )
+
+    def __init__(self, owner_id: int, policy: ReminderPolicy) -> None:
+        super().__init__(timeout=300)
+        self.owner_id = owner_id
+        self.action.default = policy.after_max_action.upper()
+        self.grace.default = str(policy.after_max_grace_hours)
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        if int(interaction.user.id) != self.owner_id or not await _require_staff(interaction):
+            return
+        action = str(self.action.value or "").strip().lower()
+        if action not in {"none", "kick", "ban"}:
+            return await _private(interaction, "❌ Choose NONE, KICK or BAN.")
+        if str(self.confirmation.value or "").strip().upper() != "CONFIRM":
+            return await _private(interaction, "❌ Type CONFIRM to change automatic removal settings.")
+        try:
+            grace_hours = int(str(self.grace.value).strip())
+        except ValueError:
+            return await _private(interaction, "❌ Grace period must be a whole number of hours.")
+        if not 1 <= grace_hours <= 720:
+            return await _private(interaction, "❌ Grace period must be 1-720 hours.")
+        if not _can_configure_action(interaction, action):
+            return await _private(interaction, "❌ Only a server manager with the required moderation permission may change this setting.")
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        cfg, current = await _load(interaction.guild)
+        if action != "none":
+            if current.max_reminders != 3:
+                return await _private(interaction, "❌ Set Maximum reminders to 3 using Configure first.")
+            blocker = _can_enable(interaction.guild, cfg)
+            if blocker:
+                return await _private(interaction, f"❌ Finish verification setup first: {blocker}")
+            bot = interaction.guild.me
+            if bot is None or not (
+                bot.guild_permissions.kick_members if action == "kick"
+                else bot.guild_permissions.ban_members
+            ):
+                return await _private(interaction, f"❌ Dank Shield needs the Discord {action.title()} Members permission.")
+            if not await asyncio.to_thread(enforcement_ready_sync):
+                return await _private(
+                    interaction,
+                    "❌ Enforcement ledger is not installed/readable. Back up the private "
+                    "Discloud database and apply the committed enforcement migration first. "
+                    "Automatic removal stays OFF.",
+                )
+        updated = replace(
+            current, after_max_action=action,
+            after_max_grace_hours=grace_hours,
+        )
+        if await _save(interaction, cfg, updated):
+            fresh, policy = await _load(interaction.guild)
+            await _private(
+                interaction,
+                embed=_embed(interaction.guild, fresh, policy),
+                view=ReminderSettingsView(self.owner_id, policy),
+            )
 
 
 class SettingsModal(discord.ui.Modal, title="Verification Reminder Settings"):
@@ -161,6 +267,11 @@ class SettingsModal(discord.ui.Modal, title="Verification Reminder Settings"):
         if not interaction.response.is_done():
             await interaction.response.defer(ephemeral=True, thinking=True)
         cfg, old = await _load(interaction.guild)
+        if old.after_max_action != "none" and maximum != 3:
+            return await _private(
+                interaction, "❌ Automatic kick/ban requires exactly 3 scheduled reminders. "
+                "Turn off the action before changing the limit.",
+            )
         updated = replace(
             old,
             delay_hours=first,
@@ -607,6 +718,13 @@ class ReminderSettingsView(_OwnedView):
             view=ManualPreviewView(self.owner_id, preview),
         )
 
+    @discord.ui.button(label="After 3 Reminders", emoji="🛡️", style=discord.ButtonStyle.danger, row=2)
+    async def after_three(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        if not await _require_staff(interaction):
+            return
+        await interaction.response.send_modal(AutoActionModal(self.owner_id, self.policy))
+
     @discord.ui.button(label="Check Database", emoji="🩺", style=discord.ButtonStyle.secondary, row=3)
     async def check_database(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
@@ -617,7 +735,14 @@ class ReminderSettingsView(_OwnedView):
         # Read-only diagnostics run off the Discord event loop and never reveal
         # raw PostgreSQL exceptions, credentials, or connection settings.
         report = await asyncio.to_thread(diagnose_reminder_ledgers_sync)
-        await _private(interaction, format_reminder_ledger_diagnostics(report))
+        enforcement_ok = await asyncio.to_thread(enforcement_ready_sync)
+        await _private(
+            interaction, format_reminder_ledger_diagnostics(report)
+            + ("\\nEnforcement ledger: Ready (opt-in policy still required)."
+               if enforcement_ok else
+               "\\nEnforcement ledger: Not ready. Apply the separate private "
+               "enforcement migration before enabling kicks/bans.")
+        )
 
     @discord.ui.button(label="Refresh", emoji="🔄", style=discord.ButtonStyle.secondary, row=3)
     async def refresh(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
