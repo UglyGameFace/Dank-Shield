@@ -30,7 +30,7 @@ def enforcement_ready_sync() -> bool:
                     "last_delivered_at, action_claimed_at, action_result "
                     "from public.dank_verify_reminder_enforcement limit 0"
                 )
-                for privilege in ("SELECT", "INSERT", "UPDATE"):
+                for privilege in ("SELECT", "INSERT", "UPDATE", "DELETE"):
                     cursor.execute(
                         "select has_table_privilege(current_user, %s, %s)",
                         (ENFORCEMENT_TABLE, privilege),
