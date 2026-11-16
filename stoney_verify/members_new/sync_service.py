@@ -25,6 +25,7 @@ from .membership_authority import collect_membership_snapshot, departure_reconci
 # ============================================================
 
 _FULL_SYNC_PREFETCH_SIZE = 50
+_DEPARTED_RECONCILIATION_PAGE_SIZE = 500
 _FULL_SYNC_ROW_UNFETCHED = object()
 GUILD_MEMBERS_TABLE = "guild_members"
 MEMBER_JOINS_TABLE = "member_joins"
@@ -751,20 +752,33 @@ async def _guild_members_update_member_async(
     )
 
 
-def _guild_members_select_guild_rows_sync(sb: Any, guild_id: str):
+def _guild_members_select_guild_rows_sync(
+    sb: Any,
+    guild_id: str,
+    offset: int = 0,
+    limit: int = _DEPARTED_RECONCILIATION_PAGE_SIZE,
+):
+    # PostgREST silently caps unpaginated table reads at its server row limit.
+    # A stable ordered page is mandatory for guilds with >1,000 known members.
     return (
         sb.table(GUILD_MEMBERS_TABLE)
         .select("*")
         .eq("guild_id", str(guild_id))
+        .order("user_id")
+        .range(int(offset), int(offset) + int(limit) - 1)
         .execute()
     )
 
 
-async def _guild_members_select_guild_rows_async(sb: Any, guild_id: str):
+async def _guild_members_select_guild_rows_async(
+    sb: Any,
+    guild_id: str,
+    offset: int = 0,
+    limit: int = _DEPARTED_RECONCILIATION_PAGE_SIZE,
+):
     return await _run_blocking_db(
         _guild_members_select_guild_rows_sync,
-        sb,
-        guild_id,
+        sb, guild_id, offset, limit,
     )
 
 
@@ -1686,65 +1700,73 @@ async def _bulk_mark_departed_members_async(
     guild_id: str,
     active_ids: set[str],
 ) -> int:
-    try:
-        res = await _guild_members_select_guild_rows_async(sb, guild_id)
-        rows = getattr(res, "data", None) or []
-    except Exception:
-        rows = []
-
     marked = 0
     now_iso = _sync_iso_now()
+    offset = 0
+    page_size = _DEPARTED_RECONCILIATION_PAGE_SIZE
 
-    for row in rows:
-        try:
-            if not isinstance(row, dict):
-                continue
-
-            uid = str(row.get("user_id") or "")
-            if not uid or uid in active_ids:
-                continue
-
-            already_departed = bool(
-                not _safe_bool(row.get("in_guild"), True)
-                and _safe_str(row.get("data_health")).strip().lower() == "left_guild"
-                and _safe_str(row.get("role_state")).strip().lower() == "left_guild"
-            )
-            if already_departed:
-                continue
-
-            payload = {
-                "in_guild": False,
-                "data_health": "left_guild",
-                "synced_at": now_iso,
-                "updated_at": now_iso,
-                "role_state": "left_guild",
-                "role_state_reason": "Member left or was removed from guild.",
-                "in_voice": False,
-                "voice_channel_id": None,
-                "voice_channel_name": None,
-                "voice_muted": False,
-                "voice_deafened": False,
-                "voice_self_muted": False,
-                "voice_self_deafened": False,
-                "voice_streaming": False,
-                "voice_video": False,
-                "voice_suppressed": False,
-            }
-
-            if row.get("in_guild") is not False:
-                payload["left_at"] = now_iso
-                payload["times_left"] = int(row.get("times_left") or 0) + 1
-
+    while True:
+        # Never interpret a failed or incomplete database read as proof that
+        # other members are absent. A read failure propagates to the caller.
+        res = await _guild_members_select_guild_rows_async(
+            sb, guild_id, offset=offset, limit=page_size,
+        )
+        rows = getattr(res, "data", None)
+        if not isinstance(rows, list):
+            raise RuntimeError("departed reconciliation page unavailable")
+        for row in rows:
             try:
-                await _guild_members_update_safe_async(sb, str(guild_id), uid, payload)
-                marked += 1
+                if not isinstance(row, dict):
+                    continue
+
+                uid = str(row.get("user_id") or "")
+                if not uid or uid in active_ids:
+                    continue
+
+                already_departed = bool(
+                    not _safe_bool(row.get("in_guild"), True)
+                    and _safe_str(row.get("data_health")).strip().lower() == "left_guild"
+                    and _safe_str(row.get("role_state")).strip().lower() == "left_guild"
+                )
+                if already_departed:
+                    continue
+
+                payload = {
+                    "in_guild": False,
+                    "data_health": "left_guild",
+                    "synced_at": now_iso,
+                    "updated_at": now_iso,
+                    "role_state": "left_guild",
+                    "role_state_reason": "Member left or was removed from guild.",
+                    "in_voice": False,
+                    "voice_channel_id": None,
+                    "voice_channel_name": None,
+                    "voice_muted": False,
+                    "voice_deafened": False,
+                    "voice_self_muted": False,
+                    "voice_self_deafened": False,
+                    "voice_streaming": False,
+                    "voice_video": False,
+                    "voice_suppressed": False,
+                }
+
+                if row.get("in_guild") is not False:
+                    payload["left_at"] = now_iso
+                    payload["times_left"] = int(row.get("times_left") or 0) + 1
+
+                try:
+                    await _guild_members_update_safe_async(sb, str(guild_id), uid, payload)
+                    marked += 1
+                except Exception:
+                    continue
             except Exception:
                 continue
-        except Exception:
-            continue
+
+        if len(rows) < page_size:
+            break
+        offset += len(rows)
 
     return marked
-
 
 async def run_full_member_sync_for_guild(guild: discord.Guild) -> Dict[str, Any]:
     summary: Dict[str, Any] = {

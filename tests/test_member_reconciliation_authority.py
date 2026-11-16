@@ -224,8 +224,8 @@ def test_bulk_departed_reconciliation_skips_rows_already_departed(monkeypatch: p
         },
     ]
 
-    async def fake_select(_sb, _guild_id):
-        return SimpleNamespace(data=rows)
+    async def fake_select(_sb, _guild_id, offset=0, limit=500):
+        return SimpleNamespace(data=rows[offset:offset + limit])
 
     updates: list[tuple[str, dict]] = []
 
@@ -333,3 +333,58 @@ def test_full_member_sync_prefetch_failure_falls_back_only_once(monkeypatch: pyt
     assert result["active_members_synced"] == 52
     assert result["departure_reconciliation_skipped"] is True
     assert synced == list(range(1, 53))
+
+
+def test_departure_reconciliation_scans_beyond_default_postgrest_1000_rows(monkeypatch: pytest.MonkeyPatch) -> None:
+    page_calls = []
+    all_rows = [
+        {"user_id": str(i), "in_guild": True, "data_health": "ok",
+         "role_state": "verified", "times_left": 0}
+        for i in range(1205)
+    ]
+    async def paged(_sb, _guild, offset=0, limit=500):
+        page_calls.append((offset, limit))
+        return SimpleNamespace(data=all_rows[offset:offset + limit])
+    updates = []
+    async def update(_sb, _guild, uid, payload):
+        updates.append((uid, payload))
+    monkeypatch.setattr(sync_service, "_guild_members_select_guild_rows_async", paged)
+    monkeypatch.setattr(sync_service, "_guild_members_update_safe_async", update)
+    active = {str(i) for i in range(1204)}
+    marked = asyncio.run(sync_service._bulk_mark_departed_members_async(object(), "123", active))
+    assert marked == 1
+    assert [uid for uid, _payload in updates] == ["1204"]
+    assert page_calls == [(0, 500), (500, 500), (1000, 500)]
+
+
+def test_departure_reconciliation_read_failure_is_not_silent_success(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def fail_after_first(_sb, _guild, offset=0, limit=500):
+        if offset == 0:
+            return SimpleNamespace(data=[{"user_id": str(i), "in_guild": True} for i in range(500)])
+        raise RuntimeError("storage timeout")
+    monkeypatch.setattr(sync_service, "_guild_members_select_guild_rows_async", fail_after_first)
+    import pytest as local_pytest
+    with local_pytest.raises(RuntimeError, match="storage timeout"):
+        asyncio.run(sync_service._bulk_mark_departed_members_async(
+            object(), "123", {str(i) for i in range(500)},
+        ))
+
+
+def test_departed_page_query_is_stable_and_bounded() -> None:
+    seen = []
+    class Query:
+        def select(self, *_cols): return self
+        def eq(self, *_args): return self
+        def order(self, field):
+            assert field == "user_id"
+            return self
+        def range(self, start, end):
+            seen.append((start, end))
+            return self
+        def execute(self): return SimpleNamespace(data=[])
+    class DB:
+        def table(self, table):
+            assert table == "guild_members"
+            return Query()
+    sync_service._guild_members_select_guild_rows_sync(DB(), "123", 1000, 500)
+    assert seen == [(1000, 1499)]

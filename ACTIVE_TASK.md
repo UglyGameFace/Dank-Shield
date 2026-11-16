@@ -1,3 +1,10 @@
+## OPTIMIZATION CONTINUATION: LARGE GUILD & IDLE WORK (2026-11-16)
+
+- **Further changes in PR #851:** departure reconciliation now pages guild DB records by stable user ID (500 per page), so PostgREST's default row cap does not silently truncate large-guild reconciliation; failed page fetch propagates instead of falsely reporting complete coverage. Share Router Download queue workers wake on admitted jobs and use bounded idle backoff with periodic SQLite fallback polling, preserving cross-restart durable queue behavior and no duplicate DM replay.
+- **Testing:** added page-boundary / failure-path / idle-wake regressions. Final PR-head CI and production canary are required after this push. No deployed resources or database schema mutated.
+
+---
+
 ## OPTIMIZATION CONTINUATION (2026-11-16)
 
 - **Scope:** Extend existing PR #851 rather than start a competing resource PR. Current focus is reducing full-sync DB round trips and activity flush CPU without weakening membership authority, join/ticket history, or fail-closed activity coverage.

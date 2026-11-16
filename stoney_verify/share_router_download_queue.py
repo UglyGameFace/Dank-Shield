@@ -30,12 +30,35 @@ MAX_PENDING_PER_GUILD = 10
 MAX_WORKERS = 2
 MAX_QUEUED_AGE_SECONDS = 6 * 3600
 _IDLE_POLL_SECONDS = 2.0
+_MAX_IDLE_POLL_SECONDS = 30.0
 
 _WORKERS: list[asyncio.Task[None]] = []
 _WORKER_BOT: Any = None
 _LAST_GUILD_ID = ""
 _SCHEMA_LOCK = threading.Lock()
 _SCHEMA_READY_PATH = ""
+_WAKE_EVENT: asyncio.Event | None = None
+_WAKE_EVENT_LOOP: asyncio.AbstractEventLoop | None = None
+
+
+def _wake_event() -> asyncio.Event:
+    # An event is bound to its event loop. Recreate it across test/restart loops.
+    global _WAKE_EVENT, _WAKE_EVENT_LOOP
+    loop = asyncio.get_running_loop()
+    if _WAKE_EVENT is None or _WAKE_EVENT_LOOP is not loop:
+        _WAKE_EVENT = asyncio.Event()
+        _WAKE_EVENT_LOOP = loop
+    return _WAKE_EVENT
+
+
+async def _idle_wait(seconds: float) -> bool:
+    event = _wake_event()
+    try:
+        await asyncio.wait_for(event.wait(), timeout=max(0.01, seconds))
+    except asyncio.TimeoutError:
+        return False
+    event.clear()
+    return True
 
 
 def _db_path() -> Path:
@@ -262,6 +285,9 @@ async def enqueue_download_request(message: discord.Message) -> bool:
     if status in {"full", "guild_full"}:
         await _reply_problem(message, "Downloads are busy. Queue capacity is limited; please try again later.")
     elif status == "queued":
+        # The durable row is committed. Wake idle workers immediately instead
+        # of opening the SQLite DB twice every two seconds while idle.
+        _wake_event().set()
         # Reaction is best-effort and not needed to preserve the queue job.
         try:
             await message.add_reaction("📥")
@@ -315,12 +341,15 @@ async def _process_job(bot: Any, job: DownloadJob) -> None:
 
 async def _worker(bot: Any, index: int) -> None:
     global _LAST_GUILD_ID
+    idle_seconds = _IDLE_POLL_SECONDS
     while True:
         try:
             job = await asyncio.to_thread(_claim_next, _LAST_GUILD_ID)
             if job is None:
-                await asyncio.sleep(_IDLE_POLL_SECONDS)
+                woke = await _idle_wait(idle_seconds)
+                idle_seconds = _IDLE_POLL_SECONDS if woke else min(_MAX_IDLE_POLL_SECONDS, idle_seconds * 2)
                 continue
+            idle_seconds = _IDLE_POLL_SECONDS
             _LAST_GUILD_ID = str(job.guild_id)
             try:
                 await _process_job(bot, job)
