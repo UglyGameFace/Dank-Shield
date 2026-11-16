@@ -11,6 +11,8 @@ from typing import Any, Mapping
 
 import discord
 
+from .startup_guards.discord_api_safety import fetch_message_with_api_safety
+
 from stoney_verify import toke_sessions
 from stoney_verify.share_router_media_network import is_safe_media_download_url
 
@@ -306,7 +308,7 @@ async def refresh_card(bot: Any, session: Mapping[str, Any], interaction: discor
         message = interaction.message
     else:
         try:
-            message = await channel.fetch_message(int(session["message_id"]))
+            message = await fetch_message_with_api_safety(channel, int(session["message_id"]), label="toke live attendance")
         except discord.NotFound:
             if not current.get("active", False):
                 await toke_sessions.mark_closed_synced(int(session["guild_id"]), int(session["message_id"]))
