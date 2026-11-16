@@ -178,9 +178,9 @@ async def _write_modlog(guild: discord.Guild, cfg: Mapping[str, Any], member_id:
         card = discord.Embed(
             title=f"Verification auto-{action}",
             description=(
-                f"Member ID: `{member_id}`\\n"
+                f"Member ID: `{member_id}`\n"
                 "Reason: three confirmed scheduled verification reminders, "
-                "grace period elapsed, member still unverified.\\n"
+                "grace period elapsed, member still unverified.\n"
                 "Actor: Dank Shield automated verification policy."
             ),
             color=discord.Color.orange(),
@@ -190,12 +190,14 @@ async def _write_modlog(guild: discord.Guild, cfg: Mapping[str, Any], member_id:
         print(f"⚠️ verify enforcement modlog unavailable guild={guild.id} kind={type(exc).__name__}")
 
 
-async def enforce_guild(guild: discord.Guild) -> int:
+async def enforce_guild(guild: discord.Guild, *, limit: int = MAX_ACTIONS_PER_GUILD_PASS) -> int:
     """Bounded, fail-closed enforcement pass; never triggered by manual sends."""
     from .guild_config import get_guild_config
     from .setup_engine.verification_modes import basic_verify_allowed_for_guild
     from .verification_reminders import parse_policy
 
+    if not 1 <= limit <= MAX_ACTIONS_PER_GUILD_PASS:
+        return 0
     try:
         cfg = await get_guild_config(guild.id, refresh=True)
         policy = parse_policy(cfg)
@@ -206,7 +208,7 @@ async def enforce_guild(guild: discord.Guild) -> int:
                 or not await asyncio.to_thread(enforcement_ready_sync)):
             return 0
         rows = await asyncio.to_thread(
-            due_candidates_sync, guild.id, grace_hours=policy.after_max_grace_hours,
+            due_candidates_sync, guild.id, grace_hours=policy.after_max_grace_hours, limit=limit,
         )
     except asyncio.CancelledError:
         raise
@@ -242,7 +244,7 @@ async def enforce_guild(guild: discord.Guild) -> int:
                 continue
         except asyncio.CancelledError:
             raise
-        except (discord.Forbidden, discord.HTTPException, Exception):
+        except Exception:
             continue
 
         outcome = "failed"
