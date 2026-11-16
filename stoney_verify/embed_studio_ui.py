@@ -314,6 +314,10 @@ class StudioDesignTools(_StudioView):
     async def game_details(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
         await interaction.response.send_modal(StudioGameServerModal(self.session))
 
+    @discord.ui.button(label="Event Details", emoji="📅", style=discord.ButtonStyle.primary, row=1)
+    async def event_details(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        await interaction.response.send_modal(StudioEventDetailsModal(self.session))
+
     @discord.ui.button(label="Back to My Post", emoji="◀️", style=discord.ButtonStyle.secondary, row=2)
     async def back(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
         await _home(interaction, self.session)
@@ -327,6 +331,7 @@ async def _design_tools(interaction: discord.Interaction, session: StudioSession
             "**Add Pictures** for new image links, **Saved Pictures** to reuse images, "
             "or **Reuse Server Style** for a look your staff already saved. "
             "**Game Server Details** quickly edits address, editions, mods and join steps. "
+            "**Event Details** updates time, location, program and RSVP/entry instructions. "
             "None of these options posts anything."
         ),
         view=StudioDesignTools(session),
@@ -623,11 +628,13 @@ async def _starters(interaction: discord.Interaction, session: StudioSession) ->
         interaction,
         heading="✨ Start with a Layout",
         description=(
-            "**Gaming:** Minecraft Relaunch, Modded Adventure, Game Night, "
+            "**Game Servers:** Minecraft Relaunch, Modded Adventure, Game Night, "
             "Tournament, Patch Notes and Players Wanted.\n"
+            "**Discord Events:** Movie Night, Live Watch Party, Trivia, Karaoke, "
+            "Hangout, Giveaway, AMA and Creative Contest.\n"
             "**Community:** Announcements, Rules, Events, Info, FAQs and Showcase.\n\n"
-            "Choose a design from the list. Change the server address, features, "
-            "colors and banner before posting. All layouts are private drafts until confirmed."
+            "Choose a design from the list, then customize details, colors, artwork "
+            "and buttons. No layout posts or schedules anything automatically."
         ),
         view=StarterMenu(session),
     )
@@ -761,6 +768,89 @@ class StudioGameServerModal(_ProjectModal):
         index = self.session.active
         await self.commit(
             interaction, lambda project: _update_game_server_fields(project, index, values),
+        )
+
+
+_EVENT_DETAILS_FIELD_ALIASES = (
+    ("when", "📅 WHEN", ("📅 WHEN", "⏰ START TIME", "When")),
+    ("where", "📍 WHERE", ("📍 WHERE", "Where", "🔊 MEET HERE")),
+    ("topic", "✨ EVENT DETAILS", (
+        "✨ EVENT DETAILS", "🎞️ MOVIE PICK", "📡 WHAT WE'RE WATCHING",
+        "🎯 TOPICS & FORMAT", "🎵 SONG QUEUE", "🛋️ THE VIBE",
+        "🎁 CONFIRMED PRIZE & RULES", "🎙️ HOST & TOPICS",
+        "🖌️ THEME, RULES & JUDGING", "🎮 GAME & FORMAT", "🕹️ GAME / MODE",
+    )),
+    ("join", "✅ HOW TO JOIN", (
+        "✅ HOW TO JOIN", "How to join", "✅ HOW TO RSVP",
+        "📝 RULES & ENTRY",
+    )),
+)
+
+
+def _update_event_details_fields(
+    project: dict[str, Any], index: int, values: dict[str, str],
+) -> None:
+    """Edit time, location, program and participation without erasing the rest."""
+    fields = project["embeds"][index]["fields"]
+    for key, label, aliases in _EVENT_DETAILS_FIELD_ALIASES:
+        value = values.get(key, "").strip()
+        if not value:
+            continue
+        existing = next((f for f in fields if f["name"] in aliases), None)
+        if existing is None:
+            fields.append({"name": label, "value": value, "inline": key in {"when", "where"}})
+        else:
+            existing["value"] = value
+
+
+class StudioEventDetailsModal(_ProjectModal):
+    """Fast mobile editor for movie nights and typical Discord server events."""
+
+    def __init__(self, session: StudioSession) -> None:
+        super().__init__(session, "Discord Event Details")
+        current = session.project["embeds"][session.active]["fields"]
+
+        def previous(aliases: tuple[str, ...], limit: int) -> str:
+            existing = next((field["value"] for field in current if field["name"] in aliases), "")
+            return existing if len(existing) <= limit else ""
+
+        self.when = discord.ui.TextInput(
+            label="Event date, time and timezone", required=False, max_length=180,
+            placeholder="Friday at 8 PM Eastern",
+            default=previous(_EVENT_DETAILS_FIELD_ALIASES[0][2], 180),
+        )
+        self.where = discord.ui.TextInput(
+            label="Discord channel or event location", required=False, max_length=180,
+            placeholder="Movie Night voice channel / Stage channel",
+            default=previous(_EVENT_DETAILS_FIELD_ALIASES[1][2], 180),
+        )
+        self.topic = discord.ui.TextInput(
+            label="Movie, activity, theme or prize", required=False, max_length=700,
+            style=discord.TextStyle.paragraph,
+            placeholder="What's happening? Include only confirmed details.",
+            default=previous(_EVENT_DETAILS_FIELD_ALIASES[2][2], 700),
+        )
+        self.join = discord.ui.TextInput(
+            label="How to join, RSVP or enter", required=False, max_length=500,
+            style=discord.TextStyle.paragraph,
+            placeholder="Instructions, access requirements and any rules",
+            default=previous(_EVENT_DETAILS_FIELD_ALIASES[3][2], 500),
+        )
+        for control in (self.when, self.where, self.topic, self.join):
+            self.add_item(control)
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        values = {
+            "when": str(self.when.value or ""),
+            "where": str(self.where.value or ""),
+            "topic": str(self.topic.value or ""),
+            "join": str(self.join.value or ""),
+        }
+        if not any(value.strip() for value in values.values()):
+            return await _say(interaction, "Enter at least one event detail. Your draft was kept.")
+        index = self.session.active
+        await self.commit(
+            interaction, lambda p: _update_event_details_fields(p, index, values),
         )
 
 
