@@ -83,7 +83,7 @@ def _center_embed() -> discord.Embed:
 def parse_mod_member_id(raw: str) -> int:
     """IDs do not depend on the native Discord picker or cache."""
     text = str(raw or "").strip()
-    match = re.fullmatch(r"(?:<@!?(\\d{15,20})>|(\\d{15,20}))", text)
+    match = re.fullmatch(r"(?:<@!?(\d{15,20})>|(\d{15,20}))", text)
     return int((match.group(1) or match.group(2))) if match else 0
 
 
@@ -107,7 +107,7 @@ async def resolve_current_mod_member(
 def _lookup_failure(status: str, user_id: int) -> str:
     if status == "absent":
         return (
-            f"ℹ️ Discord confirms \`{user_id}\` is not currently in this server. "
+            f"ℹ️ Discord confirms `{user_id}` is not currently in this server. "
             "Use Ban / Unban by ID for ban history or Intelligence for stored history."
         )
     return (
