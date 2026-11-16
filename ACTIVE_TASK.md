@@ -1,3 +1,13 @@
+## POST BUILDER MOBILE ACK & GAMING LAYOUTS (2026-11-16)
+
+- **User report:** Screenshot of private Post Builder (old Feature Showcase draft in announcements) shows `Dank Shield didn't respond in time` beside Look & Images. Without a matching callback traceback the precise cause is unproven; one identified risk is starting menu render/autosave before Discord acknowledgement, while private views also naturally expire after 15 minutes.
+- **Current branch:** `fix/embed-post-builder-ack-gaming-layouts-20261116`, based on `c4e22706` (merged and verified #852). Do not conflict with independent Toke no-DM work in #853/#854.
+- **Implementation:** `_menu` and `_home` immediately defer component updates before draft autosave, preserving CAS and private-only edits. Add six polished, fully editable server announcement layouts (Minecraft Relaunch, Modded Adventure, Game Night, Tournament, Server Update, Recruitment), mobile picker descriptions, and a compact Game Server Details modal with bounded address/platform/mod/join values and no unrelated field loss. Private panel footer explains the 15-minute expiry/reopen path.
+- **Validation:** New regression suite for acknowledgement order, modal and option contracts, Discord text limits, all six designs, no auto publishing, quick details field preservation and invalid updates. Existing Post Builder, SQL, security, publication confirmation and full CI must pass on immutable PR head. No Discloud deployment, live canary or schema change yet.
+- **Acceptance:** confirm Look & Images and other menu actions acknowledge in a newly opened editor, test Minecraft draft on Discord Android, add actual banner, confirm preview with server address `23.109.125.116:20229` and verified Cobblemon details, and verify resulting production SHA. Do not assume Bedrock port or current mod set without checking server config.
+
+---
+
 ## LIVE TOKE BUTTON ACKNOWLEDGEMENT INCIDENT (2026-11-16)
 
 - **Observed incident:** User-provided live Discloud log at 17:20:35 recorded `DANK-CBE96B12`, `component_unacknowledged` after 2.5 seconds, `dank:toke:v2:cheers`; the bot-authored message was current, but no acknowledgement was observed. This does **not** prove a CPU/RAM failure: heartbeats around the incident show 1.3–3.1% of one core, 261–271 MB RSS, ~34–38 tasks, and successful ten-guild metrics/activity cycles.
