@@ -1,3 +1,12 @@
+## TOKE GIF CAPTURE: SUPPRESS REDUNDANT CREATOR DM (2026-11-16)
+
+- **Report and confirmed cause:** `stoney_verify/toke_live_ui.py::_on_toke_media_message` sent the message author an unconditional `Your Toke call is ready` direct message after publishing a captured GIF/picture. This is unnecessary because the same member just submitted the source message and the card was posted to the configured channel.
+- **Change:** Successful media-capture publishing no longer DMs its creator. The original source GIF is still deleted only after successful publication; an unsuccessful publish keeps the source message and the existing private failure DM. Slash-command acknowledgments, explicit opt-in session reminders, membership checks and release/ownership logic remain unchanged.
+- **Validation:** added three behavioral paths in `tests/test_toke_live_sessions.py` (success/no DM; failure/DM + source retained; success with denied source deletion/no DM). Exact-head CI and post-merge Discloud verification are required. No hosting or database modifications.
+- **Integration:** independent branch `fix/toke-capture-creator-dm-noise-20261116` based on confirmed main `c4e22706c0741dd3d268142237e239dc4ee8b443`. Recheck overlapping PRs and current SHA before merge.
+
+---
+
 ## LIVE TOKE BUTTON ACKNOWLEDGEMENT INCIDENT (2026-11-16)
 
 - **Observed incident:** User-provided live Discloud log at 17:20:35 recorded `DANK-CBE96B12`, `component_unacknowledged` after 2.5 seconds, `dank:toke:v2:cheers`; the bot-authored message was current, but no acknowledgement was observed. This does **not** prove a CPU/RAM failure: heartbeats around the incident show 1.3–3.1% of one core, 261–271 MB RSS, ~34–38 tasks, and successful ten-guild metrics/activity cycles.
