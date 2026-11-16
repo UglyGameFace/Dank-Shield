@@ -791,6 +791,14 @@ def _update_event_details_fields(
     project: dict[str, Any], index: int, values: dict[str, str],
 ) -> None:
     """Edit time, location, program and participation without erasing the rest."""
+    limits = {"when": 180, "where": 180, "topic": 700, "join": 500}
+    # Enforce the same limits as the visible modal at the model boundary.
+    # Otherwise direct callers could accept values Discord itself rejects.
+    for key, limit in limits.items():
+        if len(str(values.get(key, "")).strip()) > limit:
+            raise StudioValidationError(
+                f"Event {key} must be {limit} characters or fewer."
+            )
     fields = project["embeds"][index]["fields"]
     for key, label, aliases in _EVENT_DETAILS_FIELD_ALIASES:
         value = values.get(key, "").strip()
