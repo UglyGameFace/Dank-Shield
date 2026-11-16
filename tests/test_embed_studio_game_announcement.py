@@ -145,7 +145,7 @@ def test_post_builder_acknowledges_before_autosave_or_render(monkeypatch, route)
     asyncio.run(action)
     assert [kind for kind, _value in events] == ["ack", "autosave", "edit"]
     assert events[0][1] == {}  # Deferred component update, no public message.
-    assert events[-1][1]["allowed_mentions"] == discord.AllowedMentions.none()
+    assert events[-1][1]["allowed_mentions"].to_dict() == discord.AllowedMentions.none().to_dict()
 
 
 def test_modal_editor_navigation_deferred_ephemerally_and_not_twice(monkeypatch):
