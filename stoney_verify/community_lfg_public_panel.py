@@ -17,6 +17,8 @@ from typing import Any
 
 import discord
 
+from .startup_guards.discord_api_safety import fetch_message_with_api_safety
+
 from . import community_hub_service as hub
 from .guild_config import get_guild_config, compare_and_swap_guild_config_key
 
@@ -190,7 +192,7 @@ async def refresh_one(guild: Any, *, force: bool = False) -> str:
     if not force and _RENDERED.get(key) == checksum:
         return "unchanged"
     try:
-        message = await channel.fetch_message(record["message_id"])
+        message = await fetch_message_with_api_safety(channel, record["message_id"], label="lfg panel refresh")
         if not force and message.embeds and _fingerprint(message.embeds[0]) == checksum:
             _RENDERED[key] = checksum
             return "unchanged"
@@ -259,7 +261,7 @@ async def install_public_board(guild: Any, channel: Any) -> str:
                 try:
                     previous = guild.get_channel(current["channel_id"])
                     if isinstance(previous, discord.TextChannel):
-                        old_message = await previous.fetch_message(current["message_id"])
+                        old_message = await fetch_message_with_api_safety(previous, current["message_id"], label="lfg prior panel removal")
                         if old_message.author.id == guild.me.id:
                             await old_message.delete()
                 except (discord.NotFound, discord.Forbidden, discord.HTTPException):
@@ -300,7 +302,7 @@ async def remove_public_board(guild: Any) -> bool:
     channel = guild.get_channel(record["channel_id"])
     if isinstance(channel, discord.TextChannel):
         try:
-            message = await channel.fetch_message(record["message_id"])
+            message = await fetch_message_with_api_safety(channel, record["message_id"], label="lfg panel removal")
             if getattr(getattr(message, "author", None), "id", None) == guild.me.id:
                 await message.delete()
         except (discord.NotFound, discord.Forbidden, discord.HTTPException):
