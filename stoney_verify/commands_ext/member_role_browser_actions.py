@@ -160,7 +160,7 @@ class MemberActionView(OwnedView):
                 message = "⚠️ Discord could not confirm current membership. No action was taken."
             await reply_ephemeral(interaction, message)
             return None
-        except (discord.Forbidden, discord.HTTPException, Exception):
+        except Exception:
             await reply_ephemeral(
                 interaction, "⚠️ Live member lookup failed. No action was taken; try again.",
             )
