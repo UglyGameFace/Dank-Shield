@@ -8,7 +8,7 @@ from discord import app_commands
 
 from ..globals import *  # noqa: F401,F403
 from ..globals import now_utc
-from ..guild_config import get_guild_config
+from ..guild_config import get_modlog_channel_id
 from ..members_new.join_removal_safety import block_or_run_bot_removal
 
 from .common import (
@@ -200,8 +200,7 @@ async def _resolve_ban_toggle_target(
 
 async def _configured_modlog_channel(guild: discord.Guild) -> Optional[discord.TextChannel]:
     try:
-        cfg = await get_guild_config(guild.id)
-        channel_id = int(getattr(cfg, "modlog_channel_id", 0) or 0)
+        channel_id = int(await get_modlog_channel_id(guild.id) or 0)
         if channel_id <= 0:
             return None
         channel = guild.get_channel(channel_id)
