@@ -173,8 +173,8 @@ FEATURES: tuple[NavigationFeature, ...] = (
         "Verification Reminders",
         "📩",
         "access",
-        "Set a schedule and channel or DM destination for members with the mapped Unverified role. Preview before manual sends; automatic reminders use separate safeguards. Check database health here.",
-        ("verify reminders", "unverified reminders", "verification notices", "verification database", "check database", "reminder database status", "reminder database problems", "manual reminder history", "pending members", "check scheduled due", "send due now", "send reminder now", "unverified role", "remind all unverified", "verification dm reminders", "custom verification roles", "verification reminder settings", "reminder schedule", "reminder delivery", "verification reminder channel", "preview verification reminders", "automatic verification reminders"),
+        "Schedule verified-role reminders, preview manual sends, check database health, and configure opt-in kick/ban after three confirmed scheduled deliveries.",
+        ("verify reminders", "unverified reminders", "verification notices", "verification database", "check database", "reminder database status", "reminder database problems", "manual reminder history", "pending members", "check scheduled due", "send due now", "send reminder now", "unverified role", "remind all unverified", "verification dm reminders", "custom verification roles", "verification reminder settings", "reminder schedule", "reminder delivery", "verification reminder channel", "preview verification reminders", "automatic verification reminders", "after 3 reminders", "three reminders", "unverified enforcement", "auto kick unverified", "auto ban unverified", "verification grace period", "reminder kick ban"),
         True,
     ),
     NavigationFeature(
@@ -218,8 +218,8 @@ FEATURES: tuple[NavigationFeature, ...] = (
         "Members & Moderation",
         "👮",
         "safety",
-        "Moderate members, inspect ban-related connections and activity, and use recovery tools.",
-        ("members", "moderation", "mod", "ban", "timeout", "cleanup", "purge", "member activity", "member connections", "connection intelligence", "recent ban connections", "alt accounts", "ban evasion", "investigate banned user"),
+        "Moderate current members, find missing picker entries by Discord user ID, inspect ban connections and activity, and access unverified enforcement settings.",
+        ("members", "moderation", "mod", "ban", "timeout", "cleanup", "purge", "member activity", "member connections", "connection intelligence", "recent ban connections", "alt accounts", "ban evasion", "investigate banned user", "find member by id", "member id lookup", "missing from picker", "live member lookup", "unverified enforcement", "kick after reminders"),
         True,
     ),
     NavigationFeature(
@@ -469,6 +469,7 @@ _FEATURE_BY_KEY = {item.key: item for item in FEATURES}
 
 
 # Ship notes describe *merged* public improvements, not unmerged pull requests.
+# PR #850 adds search aliases and grouping only; do not announce it as merged.
 # This remains metadata only: every button uses the canonical feature owner.
 # Update this list whenever a visible feature changes, and keep its claim true.
 @dataclass(frozen=True)
@@ -551,6 +552,8 @@ FEATURE_GROUPS: dict[str, str] = {
     "action_notification_systems": "For server moderators",
     "action_builder": "For server moderators",
     "action_safety_schedule": "For server moderators",
+    "verification_reminders": "Verification & unverified enforcement",
+    "members_moderation": "Member lookup & moderation",
     "community_pings_manager": "Roles & notifications",
     "community_tools": "Server tools",
     "share_router": "Share photos & videos",

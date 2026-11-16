@@ -71,9 +71,10 @@ def _live_members_embed(quick_roles: list[discord.Role]) -> discord.Embed:
     embed = discord.Embed(
         title="👤 Live Members",
         description=(
-            "Browse members by role or select one member directly. Role rosters "
-            "include pagination, search, sorting, filters, individual actions, "
-            "and safe bulk reminders/role changes."
+            "Browse members by role or select one member directly. The picker is "
+            "not a complete server roster: use Find Member by ID to resolve anyone "
+            "missing from it through live Discord membership. Role rosters include "
+            "search, sorting, pagination, and guarded member actions."
         ),
         color=discord.Color.blurple(),
         timestamp=discord.utils.utcnow(),
@@ -320,19 +321,23 @@ class DirectMemberSelect(discord.ui.UserSelect):
 
     async def callback(self, interaction: discord.Interaction) -> None:
         selected = self.values[0] if self.values else None
-        member = interaction.guild.get_member(int(getattr(selected, "id", 0) or 0))
-        if not isinstance(member, discord.Member):
-            await reply_ephemeral(
-                interaction,
-                "❌ That user is not currently a server member.",
-            )
+        member_id = int(getattr(selected, "id", 0) or 0)
+        if member_id <= 0:
+            return await reply_ephemeral(interaction, "❌ Select a member or use Find Member by ID.")
+        await interaction.response.defer(ephemeral=True)
+        if not await require_review(interaction):
             return
+        from .public_mod_command_center import resolve_current_mod_member, _lookup_failure
+        member, status = await resolve_current_mod_member(interaction.guild, member_id)
+        if member is None:
+            return await reply_ephemeral(interaction, _lookup_failure(status, member_id))
         view = MemberActionView(
             owner_id=self.parent_view.owner_id,
             member=member,
             browser=self.parent_view,
         )
-        await interaction.response.edit_message(
+        await _replace_panel(
+            interaction,
             embed=member_detail_embed(member, None),
             view=view,
         )
@@ -359,6 +364,21 @@ class LiveMembersMenuView(OwnedView):
 
     def render_embed(self) -> discord.Embed:
         return _live_members_embed(self.quick_roles)
+
+    @discord.ui.button(
+        label="Find Member by ID",
+        emoji="🔎",
+        style=discord.ButtonStyle.primary,
+        row=2,
+    )
+    async def find_by_id(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        if not await require_review(interaction):
+            return
+        from .public_mod_command_center import FindModMemberByIdModal
+        await interaction.response.send_modal(
+            FindModMemberByIdModal(self.owner_id, browser=self)
+        )
 
     @discord.ui.button(
         label="Command Center",
@@ -412,13 +432,21 @@ class CleanupMemberSelect(discord.ui.UserSelect):
 
     async def callback(self, interaction: discord.Interaction) -> None:
         selected = self.values[0] if self.values else None
-        member = interaction.guild.get_member(int(getattr(selected, "id", 0) or 0))
-        if not isinstance(member, discord.Member):
-            await reply_ephemeral(
-                interaction,
-                "❌ That user is not currently a server member.",
+        member_id = int(getattr(selected, "id", 0) or 0)
+        if member_id <= 0:
+            return await reply_ephemeral(interaction, "❌ Select a member first.")
+        from .public_mod_command_center import resolve_current_mod_member, _lookup_failure
+        # The cleanup command owns its own defer/confirmation. Bound this
+        # pre-check so the selection cannot silently expire on Discord mobile.
+        try:
+            member, status = await asyncio.wait_for(
+                resolve_current_mod_member(interaction.guild, member_id),
+                timeout=2.0,
             )
-            return
+        except asyncio.TimeoutError:
+            member, status = None, "unavailable"
+        if member is None:
+            return await reply_ephemeral(interaction, _lookup_failure(status, member_id))
         from .public_members_cleanup_group import members_cleanup_user
 
         await _invoke_command(members_cleanup_user, interaction, member)
@@ -1886,9 +1914,10 @@ class DirectMemberRoleActionView(MemberRoleActionView):
         button: discord.ui.Button,
     ) -> None:
         _ = button
+        await interaction.response.defer()
         target = await self.parent._fresh_target(interaction)
         if target is not None:
-            await interaction.response.edit_message(
+            await interaction.edit_original_response(
                 embed=_member_role_shortcut_embed(target),
                 view=self.parent,
                 allowed_mentions=discord.AllowedMentions.none(),

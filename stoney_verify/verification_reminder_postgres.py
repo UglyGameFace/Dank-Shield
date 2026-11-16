@@ -550,6 +550,25 @@ def apply_manual_schema_sync() -> bool:
         return False
 
 
+def apply_enforcement_schema_sync() -> bool:
+    """Operator-only migration of the opt-in action ledger, never startup DDL."""
+    from pathlib import Path
+    from .verification_reminder_enforcement import enforcement_ready_sync
+
+    sql_path = (
+        Path(__file__).resolve().parents[1]
+        / "postgres/migrations/202611160001_verify_reminder_enforcement.sql"
+    )
+    try:
+        statement = sql_path.read_text(encoding="utf-8")
+        with _connect() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(statement)
+        return enforcement_ready_sync()
+    except Exception:
+        return False
+
+
 def _operator_cli() -> int:
     """Installed with the bot even though top-level tools/ is excluded by Discloud."""
     import argparse
@@ -557,13 +576,24 @@ def _operator_cli() -> int:
     parser = argparse.ArgumentParser(
         description="Private verification reminder PostgreSQL maintenance; default is read-only."
     )
-    parser.add_argument(
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument(
         "--apply-manual", action="store_true",
         help="Explicitly apply the additive manual reminder tables after backup",
     )
+    mode.add_argument(
+        "--apply-enforcement", action="store_true",
+        help="Explicitly apply the opt-in three-reminder enforcement table after backup",
+    )
     args = parser.parse_args()
+    if args.apply_enforcement:
+        if not apply_enforcement_schema_sync():
+            print("Enforcement schema verification failed. Automatic kick/ban stays unavailable.")
+            return 1
+        print("Private verification enforcement ledger installed and verified.")
+        return 0
     if not args.apply_manual:
-        print("No database changes requested. Pass --apply-manual only after an approved backup.")
+        print("No database changes requested. Pass --apply-manual or --apply-enforcement after backup.")
         return 0
     if not apply_manual_schema_sync():
         print("Manual schema verification failed; automatic reminders remain independent.")

@@ -37,6 +37,7 @@ from .moderation import (
     _log_slash_mod_action,
     _modlog_suffix,
     _resolve_ban_toggle_target,
+    MemberLookupUnavailable,
     _staff_confirmed_ban_member,
     _staff_confirmed_extra,
     _staff_confirmed_kick,
@@ -102,8 +103,6 @@ def _actor_can_moderate_target(
         pass
 
     try:
-        if actor.guild_permissions.administrator:
-            return True, ""
         if actor.top_role <= target.top_role:
             return False, f"You can’t {action} that member because they have an equal or higher role than you."
     except Exception:
@@ -154,7 +153,7 @@ async def mod_kick_group_command(
         pass
 
     try:
-        if me.top_role <= target.top_role and not me.guild_permissions.administrator:
+        if me.top_role <= target.top_role:
             return await safe_followup(interaction, "❌ I can’t kick that member because of role hierarchy.", ephemeral=True)
     except Exception:
         pass
@@ -229,7 +228,7 @@ async def mod_timeout_group_command(
         pass
 
     try:
-        if me.top_role <= target.top_role and not me.guild_permissions.administrator:
+        if me.top_role <= target.top_role:
             return await safe_followup(interaction, "❌ I can’t timeout that member because of role hierarchy.", ephemeral=True)
     except Exception:
         pass
@@ -307,6 +306,13 @@ async def mod_ban_unban_group_command(
         user_id, target_member, ban_entry = await _resolve_ban_toggle_target(guild, member)
     except discord.Forbidden:
         return await safe_followup(interaction, "❌ I could not check bans. I need **Ban Members** permission.", ephemeral=True)
+    except MemberLookupUnavailable:
+        return await safe_followup(
+            interaction,
+            "⚠️ Discord could not confirm whether that ID is a current member. "
+            "No ban or unban was attempted, so role-hierarchy safety cannot be bypassed. Retry when Discord is available.",
+            ephemeral=True,
+        )
 
     if user_id <= 0:
         return await safe_followup(
