@@ -64,8 +64,8 @@ def _setup_action(monkeypatch, *, action="kick", pending=True, joined=None, bot_
     member = SimpleNamespace(
         id=100, joined_at=joined, pending=pending, bot=False, top_role=5,
         guild_permissions=SimpleNamespace(
-            administrator=False, manage_guild=False,
-            kick_members=False, ban_members=False,
+            administrator=False, manage_guild=False, manage_roles=False,
+            moderate_members=False, kick_members=False, ban_members=False,
         ),
     )
     actions = []
@@ -235,3 +235,14 @@ def test_only_discord_accepted_scheduled_sends_are_recorded(monkeypatch):
     recorded.clear()
     assert run(worker.scan_guild(guild, remaining=1)) == 1
     assert recorded == []
+
+
+def test_enforcement_ignores_staff_control_roles_and_moderation_permissions(monkeypatch):
+    guild, member, cfg, actions, outcomes = _setup_action(monkeypatch)
+    member.guild_permissions.manage_roles = True
+    assert run(enforcement.enforce_guild(guild)) == 0
+    member.guild_permissions.manage_roles = False
+    cfg["staff_role_id"] = "12345"
+    member.roles = [SimpleNamespace(id=12345)]
+    assert run(enforcement.enforce_guild(guild)) == 0
+    assert actions == [] and outcomes == []
