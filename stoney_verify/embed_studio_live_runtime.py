@@ -11,6 +11,8 @@ from typing import Any, Mapping
 
 import discord
 
+from .startup_guards.discord_api_safety import fetch_message_with_api_safety
+
 from .embed_studio_core import StudioValidationError, render_embeds, resolve_smart_text
 from .embed_studio_live_text import (
     claim_due, digest_project, live_enabled, live_project, mark_result,
@@ -69,7 +71,7 @@ async def _refresh_one(bot: Any, job: Mapping[str, Any]) -> tuple[str, str, bool
         digest = digest_project(resolved)
         if digest == job.get("last_hash"):
             return "unchanged", digest, False
-        message = await asyncio.wait_for(channel.fetch_message(message_id), timeout=12)
+        message = await asyncio.wait_for(fetch_message_with_api_safety(channel, message_id, label="studio live refresh"), timeout=12)
         if bot.user is None or message.author.id != bot.user.id:
             return "not_owned", "", True
         # Intentionally omit view=...: Discord preserves the existing
