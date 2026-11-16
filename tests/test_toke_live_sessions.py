@@ -351,7 +351,9 @@ def test_composer_gif_message_is_consumed_only_after_card_is_posted(isolated_ses
         embeds=[], delete=on_delete,
     )
     asyncio.run(live._on_toke_media_message(msg))
-    assert events == ["published", "deleted", "dm"]
+    # Publishing and cleaning the source are enough; the creator sees their
+    # new card in the channel and should not receive a redundant success DM.
+    assert events == ["published", "deleted"]
     assert live.pending_for(guild.id, author.id) is None
 
 
