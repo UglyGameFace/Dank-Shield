@@ -96,6 +96,9 @@ def test_render_expired_card_cannot_look_active_or_show_live_vc_count():
 
 def _bot_and_message(monkeypatch, *, fail=False):
     class FakeChannel:
+        # A real discord.TextChannel always has a positive snowflake ID.
+        id = 789
+
         def __init__(self):
             self.message = None
 
