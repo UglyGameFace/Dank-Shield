@@ -280,3 +280,48 @@ async def enforce_guild(guild: discord.Guild, *, limit: int = MAX_ACTIONS_PER_GU
                 print(f"⚠️ verify enforcement outcome ledger unavailable guild={guild.id} member={user_id}")
         await asyncio.sleep(0)
     return completed
+
+
+def stale_candidates_sync(
+    cutoff: datetime, *,
+    after: tuple[datetime, str, str, datetime] | None = None,
+    limit: int = 12,
+) -> list[tuple[str, str, datetime, datetime]]:
+    """Bounded stale operational rows; caller must prove Discord departure."""
+    if not isinstance(cutoff, datetime) or cutoff.tzinfo is None or not 1 <= limit <= 50:
+        raise ValueError("Invalid enforcement retention scan")
+    query = (
+        "select guild_id, user_id, joined_at, last_delivered_at "
+        "from public.dank_verify_reminder_enforcement "
+        "where last_delivered_at < %s "
+    )
+    params: list[Any] = [cutoff]
+    if after is not None:
+        query += (
+            "and (last_delivered_at, guild_id, user_id, joined_at) "
+            "> (%s, %s, %s, %s) "
+        )
+        params.extend(after)
+    query += "order by last_delivered_at, guild_id, user_id, joined_at limit %s"
+    params.append(limit)
+    with _connect() as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(query, tuple(params))
+            return list(cursor.fetchall())
+
+
+def delete_departed_sync(
+    guild_id: str, user_id: str, joined_at: datetime, cutoff: datetime,
+) -> bool:
+    """Only call after authoritative Discord REST Unknown Member (10007)."""
+    if joined_at.tzinfo is None or cutoff.tzinfo is None:
+        return False
+    with _connect() as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "delete from public.dank_verify_reminder_enforcement "
+                "where guild_id = %s and user_id = %s and joined_at = %s "
+                "and last_delivered_at < %s returning 1",
+                (guild_id, user_id, joined_at, cutoff),
+            )
+            return cursor.fetchone() is not None
