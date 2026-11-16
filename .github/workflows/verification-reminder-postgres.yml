@@ -10,6 +10,7 @@ on:
       - "postgres/migrations/202611160001_verify_reminder_enforcement.sql"
       - "stoney_verify/verification_reminder_enforcement.py"
       - "tests/test_verification_reminder_enforcement.py"
+      - "tests/test_verification_reminder_enforcement_pg.py"
       - "stoney_verify/verification_reminder_manual.py"
       - "stoney_verify/verification_reminder_postgres.py"
       - "stoney_verify/verification_reminders.py"
@@ -66,7 +67,7 @@ jobs:
           psql -v ON_ERROR_STOP=1 -f postgres/migrations/202611160001_verify_reminder_enforcement.sql
           psql -v ON_ERROR_STOP=1 -f postgres/migrations/202611160001_verify_reminder_enforcement.sql
       - name: Install isolated PostgreSQL test dependencies
-        run: python -m pip install -q pytest "psycopg[binary]>=3.2.0,<4.0.0"
+        run: python -m pip install -q pytest "psycopg[binary]>=3.2.0,<4.0.0" "discord.py==2.7.1"
       - name: Verify installed-app additive operator migration is idempotent
         run: |
           python -m stoney_verify.verification_reminder_postgres --apply-manual
@@ -74,4 +75,4 @@ jobs:
           python -m stoney_verify.verification_reminder_postgres --apply-enforcement
           python -m stoney_verify.verification_reminder_postgres --apply-enforcement
       - name: Verify atomic claims and replay safety on PostgreSQL 16
-        run: python -m pytest tests/test_verification_reminder_postgres.py tests/test_verification_reminder_diagnostics.py tests/test_verification_reminder_enforcement.py -q --tb=short
+        run: python -m pytest tests/test_verification_reminder_postgres.py tests/test_verification_reminder_diagnostics.py tests/test_verification_reminder_enforcement_pg.py -q --tb=short
