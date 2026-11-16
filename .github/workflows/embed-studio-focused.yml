@@ -57,6 +57,9 @@ jobs:
         run: >-
           python -m pytest -q --tb=short --disable-warnings
           tests/test_embed_studio_core.py
+          tests/test_embed_studio_moderator_ux.py
+          tests/test_embed_studio_game_announcement.py
+          tests/test_embed_studio_community_events.py
           tests/test_embed_studio_draft_recovery.py
           tests/test_embed_studio_portable_json.py
           tests/test_embed_studio_brand_themes.py
