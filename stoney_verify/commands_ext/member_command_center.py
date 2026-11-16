@@ -1906,9 +1906,10 @@ class DirectMemberRoleActionView(MemberRoleActionView):
         button: discord.ui.Button,
     ) -> None:
         _ = button
+        await interaction.response.defer()
         target = await self.parent._fresh_target(interaction)
         if target is not None:
-            await interaction.response.edit_message(
+            await interaction.edit_original_response(
                 embed=_member_role_shortcut_embed(target),
                 view=self.parent,
                 allowed_mentions=discord.AllowedMentions.none(),
