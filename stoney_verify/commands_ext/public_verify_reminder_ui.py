@@ -107,7 +107,7 @@ def _embed(guild: discord.Guild, cfg: Mapping[str, Any], policy: ReminderPolicy)
         name="After 3 successful scheduled reminders",
         value=(
             f"Action: **{policy.after_max_action.upper()}** • "
-            f"Grace period: **{policy.after_max_grace_hours}h** after the last delivery\\n"
+            f"Grace period: **{policy.after_max_grace_hours}h** after the last delivery\n"
             "Default OFF. Only confirmed scheduled sends count; failed deliveries "
             "and manual reminders do not. Staff/admin roles and newly verified "
             "members are excluded. Each action is reserved once and logged."
@@ -608,11 +608,11 @@ def _setup_menu_embed(policy: ReminderPolicy) -> discord.Embed:
         title="⚙️ Unverified Reminder Setup",
         description=(
             "**Schedule & Message:** first delay, repeat interval, maximum "
-            "reminders, and wording.\\n"
+            "reminders, and wording.\n"
             "**After 3 Reminders:** opt-in NONE / KICK / BAN, grace period, "
-            "permission checks, and delivery ledger readiness.\\n\\n"
+            "permission checks, and delivery ledger readiness.\n\n"
             f"Currently: **{policy.after_max_action.upper()}** after 3 confirmed "
-            f"scheduled deliveries; grace **{policy.after_max_grace_hours}h**.\\n"
+            f"scheduled deliveries; grace **{policy.after_max_grace_hours}h**.\n"
             "No automated action is enabled by opening this panel."
         ),
         color=discord.Color.blurple(),
@@ -784,9 +784,9 @@ class ReminderSettingsView(_OwnedView):
         enforcement_ok = await asyncio.to_thread(enforcement_ready_sync)
         await _private(
             interaction, format_reminder_ledger_diagnostics(report)
-            + ("\\nEnforcement ledger: Ready (opt-in policy still required)."
+            + ("\nEnforcement ledger: Ready (opt-in policy still required)."
                if enforcement_ok else
-               "\\nEnforcement ledger: Not ready. Apply the separate private "
+               "\nEnforcement ledger: Not ready. Apply the separate private "
                "enforcement migration before enabling kicks/bans.")
         )
 
