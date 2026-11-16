@@ -246,8 +246,8 @@ class ModerationCenterView(_OwnedView):
         _ = button
         if not await _require_staff(interaction):
             return
-        from .public_verify_reminder_ui import open_reminder_settings
-        await open_reminder_settings(interaction, self.owner_id)
+        from .public_verify_reminder_ui import open_reminder_enforcement_settings
+        await open_reminder_enforcement_settings(interaction, self.owner_id)
 
     @discord.ui.button(label="Dank Shield Home", emoji="🏠", style=discord.ButtonStyle.secondary, row=2)
     async def home(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
