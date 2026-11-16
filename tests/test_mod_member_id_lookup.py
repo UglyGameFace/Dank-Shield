@@ -11,6 +11,7 @@ from stoney_verify.commands_ext import public_mod_command_center as mod
 from stoney_verify.commands_ext import member_command_center as members
 from stoney_verify.commands_ext import moderation
 from stoney_verify.commands_ext import public_mod_group
+from stoney_verify.commands_ext import public_mod_ban_toggle_patch
 
 
 def run(coro):
@@ -175,3 +176,30 @@ def test_administrator_does_not_bypass_higher_discord_role():
     )
     assert not okay
     assert "higher role" in message
+
+
+def test_modlog_uses_canonical_guild_config_id(monkeypatch):
+    channel = Mock(spec=discord.TextChannel)
+    channel.permissions_for = lambda me: SimpleNamespace(
+        view_channel=True, send_messages=True, embed_links=True,
+    )
+    guild = SimpleNamespace(
+        id=123, me=SimpleNamespace(id=333),
+        get_channel=lambda cid: channel if cid == 789 else None,
+    )
+    reads = []
+    async def channel_id(guild_id):
+        reads.append(guild_id)
+        return 789
+
+    monkeypatch.setattr(moderation, "get_modlog_channel_id", channel_id)
+    monkeypatch.setattr(public_mod_ban_toggle_patch, "get_modlog_channel_id", channel_id)
+    assert run(moderation._configured_modlog_channel(guild)) is channel
+    assert run(public_mod_ban_toggle_patch._configured_modlog_channel(guild)) is channel
+    assert reads == [123, 123]
+
+
+def test_ban_by_id_modal_requires_explicit_action():
+    form = mod.BanUnbanByIdModal(123)
+    assert form.action.default is None
+    assert form.action.required
