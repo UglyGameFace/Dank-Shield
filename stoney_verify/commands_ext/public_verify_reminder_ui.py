@@ -567,6 +567,58 @@ class ManualPreviewView(_OwnedView):
         self.used = True
         await _private(interaction, "Cancelled. No manual reminders were authorized.")
 
+
+class ReminderSetupMenuView(_OwnedView):
+    """Keep the primary mobile reminder panel at its existing button budget."""
+
+    def __init__(self, owner_id: int, policy: ReminderPolicy) -> None:
+        super().__init__(owner_id)
+        self.policy = policy
+
+    @discord.ui.button(label="Schedule & Message", emoji="⚙️",
+                       style=discord.ButtonStyle.primary, row=0)
+    async def schedule(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        if not await _require_staff(interaction):
+            return
+        await interaction.response.send_modal(SettingsModal(self.owner_id, self.policy))
+
+    @discord.ui.button(label="After 3 Reminders", emoji="🛡️",
+                       style=discord.ButtonStyle.danger, row=0)
+    async def after_three(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        if not await _require_staff(interaction):
+            return
+        await interaction.response.send_modal(AutoActionModal(self.owner_id, self.policy))
+
+    @discord.ui.button(label="Back to Reminders", emoji="◀️",
+                       style=discord.ButtonStyle.secondary, row=1)
+    async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        if not await _require_staff(interaction):
+            return
+        await interaction.response.defer()
+        cfg, policy = await _load(interaction.guild)
+        await _replace(interaction, embed=_embed(interaction.guild, cfg, policy),
+                       view=ReminderSettingsView(self.owner_id, policy))
+
+
+def _setup_menu_embed(policy: ReminderPolicy) -> discord.Embed:
+    return discord.Embed(
+        title="⚙️ Unverified Reminder Setup",
+        description=(
+            "**Schedule & Message:** first delay, repeat interval, maximum "
+            "reminders, and wording.\\n"
+            "**After 3 Reminders:** opt-in NONE / KICK / BAN, grace period, "
+            "permission checks, and delivery ledger readiness.\\n\\n"
+            f"Currently: **{policy.after_max_action.upper()}** after 3 confirmed "
+            f"scheduled deliveries; grace **{policy.after_max_grace_hours}h**.\\n"
+            "No automated action is enabled by opening this panel."
+        ),
+        color=discord.Color.blurple(),
+    )
+
+
 class ReminderSettingsView(_OwnedView):
     def __init__(self, owner_id: int, policy: ReminderPolicy) -> None:
         super().__init__(owner_id)
@@ -598,9 +650,10 @@ class ReminderSettingsView(_OwnedView):
         _ = button
         if not await _require_staff(interaction):
             return
-        # Opening a modal must acknowledge the click immediately. Use the
-        # current displayed defaults and reload authoritative settings on submit.
-        await interaction.response.send_modal(SettingsModal(self.owner_id, self.policy))
+        # The compact submenu keeps enforcement from expanding the already
+        # dense main reminder view and works on Discord mobile.
+        await _replace(interaction, embed=_setup_menu_embed(self.policy),
+                       view=ReminderSetupMenuView(self.owner_id, self.policy))
 
     @discord.ui.button(label="Preview", emoji="✉️", style=discord.ButtonStyle.secondary, row=0)
     async def preview(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -718,13 +771,6 @@ class ReminderSettingsView(_OwnedView):
             view=ManualPreviewView(self.owner_id, preview),
         )
 
-    @discord.ui.button(label="After 3 Reminders", emoji="🛡️", style=discord.ButtonStyle.danger, row=2)
-    async def after_three(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        _ = button
-        if not await _require_staff(interaction):
-            return
-        await interaction.response.send_modal(AutoActionModal(self.owner_id, self.policy))
-
     @discord.ui.button(label="Check Database", emoji="🩺", style=discord.ButtonStyle.secondary, row=3)
     async def check_database(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
@@ -770,3 +816,13 @@ async def open_reminder_settings(interaction: discord.Interaction, owner_id: int
         await interaction.response.defer()
     cfg, policy = await _load(interaction.guild)
     await _replace(interaction, embed=_embed(interaction.guild, cfg, policy), view=ReminderSettingsView(owner_id, policy))
+
+async def open_reminder_enforcement_settings(interaction: discord.Interaction, owner_id: int) -> None:
+    """Direct Mod Center route into the compact enforcement setup submenu."""
+    if not await _require_staff(interaction):
+        return
+    if not interaction.response.is_done():
+        await interaction.response.defer()
+    cfg, policy = await _load(interaction.guild)
+    await _replace(interaction, embed=_setup_menu_embed(policy),
+                   view=ReminderSetupMenuView(owner_id, policy))
