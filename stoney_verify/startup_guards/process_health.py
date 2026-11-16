@@ -391,8 +391,54 @@ async def _loop_lag_watchdog() -> None:
             _log(f"loop lag watchdog error: {exc!r}")
 
 
+def _process_cpu_percent(previous_wall: float, previous_cpu: float, current_wall: float, current_cpu: float) -> float:
+    """Percent of one CPU core consumed during this process-health interval."""
+    elapsed = current_wall - previous_wall
+    if elapsed <= 0:
+        return 0.0
+    return max(0.0, 100.0 * (current_cpu - previous_cpu) / elapsed)
+
+
+def _resource_pressure_snapshot() -> str:
+    """Read existing module state only; never import feature modules for health."""
+    sources = (
+        ("stoney_verify.globals", "JOIN_TIMES", "join_windows"),
+        ("stoney_verify.raidguard", "_HARD_PROOF_CACHE", "proof_cache"),
+        ("stoney_verify.raidguard", "_RECENT_JOIN_PROFILES", "risk_guilds"),
+        ("stoney_verify.members_new.join_context_service", "_RECENT_JOIN_CONTEXT", "join_context"),
+        ("stoney_verify.members_new.activity_tracker", "_ACTIVITY_BUFFER", "activity_buffer"),
+        ("stoney_verify.share_router_media_resolver", "_RESOLVER_INFLIGHT", "media_inflight"),
+    )
+    observed = []
+    for module_name, attribute, label in sources:
+        module = sys.modules.get(module_name)
+        if module is None:
+            continue
+        value = getattr(module, attribute, None)
+        if value is None:
+            continue
+        try:
+            if attribute == "JOIN_TIMES":
+                size = sum(len(bucket) for bucket in value.values())
+            else:
+                size = len(value)
+            observed.append(f"{label}={size}")
+        except Exception:
+            continue
+    profile = sys.modules.get("stoney_verify.profile_card_runtime")
+    if profile is not None:
+        try:
+            cache = getattr(profile, "_SIGNATURE_CACHE", {})
+            bytes_used = sum(len(payload) for _created, payload in cache.values())
+            observed.append(f"profile_png_bytes={bytes_used}")
+        except Exception:
+            pass
+    return " resource_pressure=" + ",".join(observed) if observed else ""
+
+
 async def _health_loop() -> None:
     interval = max(30, int(_HEALTH_INTERVAL_SECONDS or 120))
+    last_wall, last_cpu = time.monotonic(), time.process_time()
     while True:
         try:
             await asyncio.sleep(interval)
@@ -405,7 +451,15 @@ async def _health_loop() -> None:
             except Exception:
                 task_count = 0
             watchdog_state = "ok" if watchdog_ok else ("off" if not external_watchdog_configured() else "failed")
-            _log(f"heartbeat uptime={uptime:.1f}s tasks={task_count} {_memory_snapshot()}{_operation_queue_snapshot()} external_watchdog={watchdog_state}")
+            sampled_wall, sampled_cpu = time.monotonic(), time.process_time()
+            cpu_percent = _process_cpu_percent(last_wall, last_cpu, sampled_wall, sampled_cpu)
+            last_wall, last_cpu = sampled_wall, sampled_cpu
+            _log(
+                f"heartbeat uptime={uptime:.1f}s tasks={task_count} "
+                f"cpu_one_core_pct={cpu_percent:.1f} "
+                f"{_memory_snapshot()}{_operation_queue_snapshot()}"
+                f"{_resource_pressure_snapshot()} external_watchdog={watchdog_state}"
+            )
         except asyncio.CancelledError:
             raise
         except Exception as e:

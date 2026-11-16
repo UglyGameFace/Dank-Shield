@@ -86,6 +86,18 @@ def _execute_db_write(op_name: str, executor, max_attempts: int = DB_MAX_ATTEMPT
 def _sync_role_metrics(guild: discord.Guild) -> int:
     payload: List[Dict[str, Any]] = []
 
+    # role.members searches the full guild cache once PER ROLE. Count the
+    # cached members' role memberships in one pass instead. Tests with minimal
+    # guild fakes can retain their historical role.members fallback.
+    cached_members = getattr(guild, "members", None)
+    counts: dict[int, int] | None = None
+    if cached_members is not None:
+        counts = {}
+        for member in cached_members:
+            for member_role in getattr(member, "roles", ()):
+                role_id = int(member_role.id)
+                counts[role_id] = counts.get(role_id, 0) + 1
+
     for role in guild.roles:
         if role.name == "@everyone":
             continue
@@ -95,7 +107,7 @@ def _sync_role_metrics(guild: discord.Guild) -> int:
                 "role_id": str(role.id),
                 "name": role.name,
                 "position": int(role.position),
-                "member_count": len(role.members),
+                "member_count": counts.get(int(role.id), 0) if counts is not None else len(role.members),
             }
         )
 

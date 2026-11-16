@@ -77,6 +77,7 @@ upsert_guild_config = _core.upsert_guild_config
 
 _SIGNATURE_CACHE_TTL_SECONDS = 300.0
 _SIGNATURE_CACHE_MAX_ITEMS = 512
+_SIGNATURE_CACHE_MAX_BYTES = 24 * 1024 * 1024
 _SIGNATURE_CACHE: dict[tuple[Any, ...], tuple[float, bytes]] = {}
 
 
@@ -346,17 +347,24 @@ def _signature_cache_get(key: tuple[Any, ...]) -> Optional[bytes]:
 
 
 def _signature_cache_put(key: tuple[Any, ...], payload: bytes) -> None:
-    if len(_SIGNATURE_CACHE) >= _SIGNATURE_CACHE_MAX_ITEMS:
-        expired_before = monotonic() - _SIGNATURE_CACHE_TTL_SECONDS
-        for stale_key, (created_at, _payload) in list(_SIGNATURE_CACHE.items()):
-            if created_at < expired_before:
-                _SIGNATURE_CACHE.pop(stale_key, None)
-        if len(_SIGNATURE_CACHE) >= _SIGNATURE_CACHE_MAX_ITEMS:
-            oldest = sorted(_SIGNATURE_CACHE.items(), key=lambda item: item[1][0])[:128]
-            for stale_key, _value in oldest:
-                _SIGNATURE_CACHE.pop(stale_key, None)
-    _SIGNATURE_CACHE[key] = (monotonic(), bytes(payload))
-
+    # PNG sizes vary wildly; an item-count cap alone can retain hundreds of MB.
+    if not payload or len(payload) > _SIGNATURE_CACHE_MAX_BYTES:
+        return
+    now = monotonic()
+    expired_before = now - _SIGNATURE_CACHE_TTL_SECONDS
+    for stale_key, (created_at, _payload) in list(_SIGNATURE_CACHE.items()):
+        if created_at < expired_before:
+            _SIGNATURE_CACHE.pop(stale_key, None)
+    _SIGNATURE_CACHE.pop(key, None)
+    total = sum(len(value) for _created, value in _SIGNATURE_CACHE.values())
+    while _SIGNATURE_CACHE and (
+        len(_SIGNATURE_CACHE) >= _SIGNATURE_CACHE_MAX_ITEMS
+        or total + len(payload) > _SIGNATURE_CACHE_MAX_BYTES
+    ):
+        oldest_key = next(iter(_SIGNATURE_CACHE))
+        _created, old_payload = _SIGNATURE_CACHE.pop(oldest_key)
+        total -= len(old_payload)
+    _SIGNATURE_CACHE[key] = (now, bytes(payload))
 
 async def render_live_profile_card(
     member: discord.Member,

@@ -222,3 +222,26 @@ def test_sql_poison_isolated_without_replaying_valid_events(monkeypatch):
     assert t._DROPPED_EVENT_COUNT == 1
     assert resets == [1]
     assert t._PENDING_BATCH is None and not t._PENDING_SPLITS
+
+
+def test_activity_buffer_env_has_hard_ceiling(monkeypatch):
+    monkeypatch.setenv("DANK_ACTIVITY_BUFFER_MAX_ENTRIES", "999999999")
+    assert t._buffer_max_entries() == t._HARD_BUFFER_MAX_ENTRIES
+    monkeypatch.setenv("DANK_ACTIVITY_BUFFER_MAX_ENTRIES", "5")
+    assert t._buffer_max_entries() == 1000
+    monkeypatch.delenv("DANK_ACTIVITY_BUFFER_MAX_ENTRIES")
+    assert t._buffer_max_entries() == 10000
+
+
+def test_activity_drain_uses_recent_insertion_order_without_sort(monkeypatch):
+    seen = []
+    monkeypatch.setattr(
+        t, "_rpc_sync",
+        lambda name, args: seen.extend(e["user_id"] for e in args["p_events"])
+        if name == "record_member_activity_batch" else None,
+    )
+    add(user=11)
+    add(user=12)
+    add(user=11, count=2)  # Updating 11 puts it after 12.
+    assert asyncio.run(t._flush_once())
+    assert seen == ["12", "11"]

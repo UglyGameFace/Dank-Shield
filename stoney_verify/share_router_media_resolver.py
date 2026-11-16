@@ -15,6 +15,7 @@ from html.parser import HTMLParser
 import os
 import re
 import shutil
+import threading
 import time
 from dataclasses import dataclass, replace
 
@@ -152,6 +153,7 @@ _PROVIDER_KEYS = frozenset(item.key for item in PROVIDERS)
 _ALL_POLICY_KEYS = frozenset((*_PROVIDER_KEYS, "direct"))
 
 _DEFAULT_EXTRACT_CONCURRENCY = 2
+_MAX_INFLIGHT_EXTRACT_REQUESTS = 12
 _DEFAULT_EXTRACT_TIMEOUT_SECONDS = 12.0
 _DEFAULT_CACHE_MAX = 256
 _POSITIVE_CACHE_TTL_SECONDS = 15 * 60.0
@@ -205,6 +207,11 @@ def _cache_max() -> int:
         minimum=32,
         maximum=2048,
     )
+
+
+# Protect real threads even after asyncio.wait_for times out. Unlike the
+# async semaphore, this is not released until yt-dlp actually returns.
+_EXTRACT_THREAD_SLOTS = threading.BoundedSemaphore(_extract_concurrency())
 
 
 def _extract_timeout_seconds() -> float:
@@ -924,6 +931,15 @@ def select_media_resolution(
     )
 
 
+def _extract_info_guarded_sync(canonical_url: str) -> Any:
+    if not _EXTRACT_THREAD_SLOTS.acquire(blocking=False):
+        return ExtractionFailure("extractor_thread_capacity_busy")
+    try:
+        return _extract_info_sync(canonical_url)
+    finally:
+        _EXTRACT_THREAD_SLOTS.release()
+
+
 def _extract_info_sync(canonical_url: str) -> Any:
     try:
         import yt_dlp
@@ -1052,7 +1068,7 @@ async def _resolve_extracted(
     async with semaphore:
         try:
             info = await asyncio.wait_for(
-                asyncio.to_thread(_extract_info_sync, canonical),
+                asyncio.to_thread(_extract_info_guarded_sync, canonical),
                 timeout=_extract_timeout_seconds(),
             )
         except asyncio.TimeoutError:
@@ -1201,6 +1217,16 @@ async def resolve_media_url(value: str, *, max_bytes: int) -> MediaResolution:
     if existing is not None and not existing.done():
         _record(provider, "coalesced")
         return await asyncio.shield(existing)
+
+    if len(_RESOLVER_INFLIGHT) >= _MAX_INFLIGHT_EXTRACT_REQUESTS:
+        return MediaResolution(
+            source_url=source,
+            canonical_url=canonical,
+            identity=identity,
+            provider=provider,
+            delivery="link",
+            reason="extractor_queue_full",
+        )
 
     task = asyncio.create_task(
         _resolve_extracted(source, canonical, provider, int(max_bytes or 0)),

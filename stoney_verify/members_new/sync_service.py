@@ -24,6 +24,9 @@ from .membership_authority import collect_membership_snapshot, departure_reconci
 # - keep member truth deterministic after verification actions
 # ============================================================
 
+_FULL_SYNC_PREFETCH_SIZE = 50
+_DEPARTED_RECONCILIATION_PAGE_SIZE = 500
+_FULL_SYNC_ROW_UNFETCHED = object()
 GUILD_MEMBERS_TABLE = "guild_members"
 MEMBER_JOINS_TABLE = "member_joins"
 TICKETS_TABLE = "tickets"
@@ -636,6 +639,50 @@ def _guild_members_select_existing_sync(
     return None
 
 
+def _guild_members_prefetch_sync(
+    sb: Any,
+    guild_id: str,
+    user_ids: Sequence[str],
+) -> Dict[str, Dict[str, Any]]:
+    """Read only this bounded member chunk; never trust a truncated guild scan."""
+    if not user_ids:
+        return {}
+    wanted = set(map(str, user_ids))
+    response = (
+        sb.table(GUILD_MEMBERS_TABLE)
+        .select("*")
+        .eq("guild_id", str(guild_id))
+        .in_("user_id", list(wanted))
+        .limit(len(wanted))
+        .execute()
+    )
+    records = getattr(response, "data", None)
+    if records is None:
+        raise RuntimeError("member prefetch returned no row collection")
+    result: Dict[str, Dict[str, Any]] = {}
+    for record in records:
+        if not isinstance(record, dict):
+            raise RuntimeError("member prefetch returned a malformed row")
+        user_id = str(record.get("user_id") or "")
+        if user_id in wanted:
+            _learn_optional_column_support_from_full_row(record)
+            result[user_id] = dict(record)
+    return result
+
+
+async def _guild_members_prefetch_async(
+    sb: Any,
+    guild_id: str,
+    user_ids: Sequence[str],
+) -> Optional[Dict[str, Dict[str, Any]]]:
+    try:
+        return await _run_blocking_db(_guild_members_prefetch_sync, sb, guild_id, user_ids)
+    except Exception:
+        # Older PostgREST installations or incomplete test doubles may not
+        # support IN filters. Keep the original exact per-member read.
+        return None
+
+
 async def _sync_get_existing_member_row_async(
     sb: Any,
     guild_id: str,
@@ -705,20 +752,33 @@ async def _guild_members_update_member_async(
     )
 
 
-def _guild_members_select_guild_rows_sync(sb: Any, guild_id: str):
+def _guild_members_select_guild_rows_sync(
+    sb: Any,
+    guild_id: str,
+    offset: int = 0,
+    limit: int = _DEPARTED_RECONCILIATION_PAGE_SIZE,
+):
+    # PostgREST silently caps unpaginated table reads at its server row limit.
+    # A stable ordered page is mandatory for guilds with >1,000 known members.
     return (
         sb.table(GUILD_MEMBERS_TABLE)
         .select("*")
         .eq("guild_id", str(guild_id))
+        .order("user_id")
+        .range(int(offset), int(offset) + int(limit) - 1)
         .execute()
     )
 
 
-async def _guild_members_select_guild_rows_async(sb: Any, guild_id: str):
+async def _guild_members_select_guild_rows_async(
+    sb: Any,
+    guild_id: str,
+    offset: int = 0,
+    limit: int = _DEPARTED_RECONCILIATION_PAGE_SIZE,
+):
     return await _run_blocking_db(
         _guild_members_select_guild_rows_sync,
-        sb,
-        guild_id,
+        sb, guild_id, offset, limit,
     )
 
 
@@ -1249,6 +1309,8 @@ async def sync_member_to_supabase(
     member: discord.Member,
     in_guild: bool = True,
     risk_profile: Optional[Dict[str, Any]] = None,
+    *,
+    existing_member_row: Any = _FULL_SYNC_ROW_UNFETCHED,
 ) -> None:
     try:
         sb = get_supabase()
@@ -1258,7 +1320,11 @@ async def sync_member_to_supabase(
         guild_id = str(member.guild.id)
         user_id = str(member.id)
 
-        existing = await _sync_get_existing_member_row_async(sb, guild_id, user_id) or {}
+        existing = (
+            await _sync_get_existing_member_row_async(sb, guild_id, user_id) or {}
+            if existing_member_row is _FULL_SYNC_ROW_UNFETCHED
+            else dict(existing_member_row or {})
+        )
         latest_join = await _member_joins_select_latest_async(sb, guild_id, user_id)
         latest_ticket_rows = await _tickets_select_latest_for_member_async(sb, guild_id, user_id)
 
@@ -1634,65 +1700,73 @@ async def _bulk_mark_departed_members_async(
     guild_id: str,
     active_ids: set[str],
 ) -> int:
-    try:
-        res = await _guild_members_select_guild_rows_async(sb, guild_id)
-        rows = getattr(res, "data", None) or []
-    except Exception:
-        rows = []
-
     marked = 0
     now_iso = _sync_iso_now()
+    offset = 0
+    page_size = _DEPARTED_RECONCILIATION_PAGE_SIZE
 
-    for row in rows:
-        try:
-            if not isinstance(row, dict):
-                continue
-
-            uid = str(row.get("user_id") or "")
-            if not uid or uid in active_ids:
-                continue
-
-            already_departed = bool(
-                not _safe_bool(row.get("in_guild"), True)
-                and _safe_str(row.get("data_health")).strip().lower() == "left_guild"
-                and _safe_str(row.get("role_state")).strip().lower() == "left_guild"
-            )
-            if already_departed:
-                continue
-
-            payload = {
-                "in_guild": False,
-                "data_health": "left_guild",
-                "synced_at": now_iso,
-                "updated_at": now_iso,
-                "role_state": "left_guild",
-                "role_state_reason": "Member left or was removed from guild.",
-                "in_voice": False,
-                "voice_channel_id": None,
-                "voice_channel_name": None,
-                "voice_muted": False,
-                "voice_deafened": False,
-                "voice_self_muted": False,
-                "voice_self_deafened": False,
-                "voice_streaming": False,
-                "voice_video": False,
-                "voice_suppressed": False,
-            }
-
-            if row.get("in_guild") is not False:
-                payload["left_at"] = now_iso
-                payload["times_left"] = int(row.get("times_left") or 0) + 1
-
+    while True:
+        # Never interpret a failed or incomplete database read as proof that
+        # other members are absent. A read failure propagates to the caller.
+        res = await _guild_members_select_guild_rows_async(
+            sb, guild_id, offset=offset, limit=page_size,
+        )
+        rows = getattr(res, "data", None)
+        if not isinstance(rows, list):
+            raise RuntimeError("departed reconciliation page unavailable")
+        for row in rows:
             try:
-                await _guild_members_update_safe_async(sb, str(guild_id), uid, payload)
-                marked += 1
+                if not isinstance(row, dict):
+                    continue
+
+                uid = str(row.get("user_id") or "")
+                if not uid or uid in active_ids:
+                    continue
+
+                already_departed = bool(
+                    not _safe_bool(row.get("in_guild"), True)
+                    and _safe_str(row.get("data_health")).strip().lower() == "left_guild"
+                    and _safe_str(row.get("role_state")).strip().lower() == "left_guild"
+                )
+                if already_departed:
+                    continue
+
+                payload = {
+                    "in_guild": False,
+                    "data_health": "left_guild",
+                    "synced_at": now_iso,
+                    "updated_at": now_iso,
+                    "role_state": "left_guild",
+                    "role_state_reason": "Member left or was removed from guild.",
+                    "in_voice": False,
+                    "voice_channel_id": None,
+                    "voice_channel_name": None,
+                    "voice_muted": False,
+                    "voice_deafened": False,
+                    "voice_self_muted": False,
+                    "voice_self_deafened": False,
+                    "voice_streaming": False,
+                    "voice_video": False,
+                    "voice_suppressed": False,
+                }
+
+                if row.get("in_guild") is not False:
+                    payload["left_at"] = now_iso
+                    payload["times_left"] = int(row.get("times_left") or 0) + 1
+
+                try:
+                    await _guild_members_update_safe_async(sb, str(guild_id), uid, payload)
+                    marked += 1
+                except Exception:
+                    continue
             except Exception:
                 continue
-        except Exception:
-            continue
+
+        if len(rows) < page_size:
+            break
+        offset += len(rows)
 
     return marked
-
 
 async def run_full_member_sync_for_guild(guild: discord.Guild) -> Dict[str, Any]:
     summary: Dict[str, Any] = {
@@ -1710,7 +1784,7 @@ async def run_full_member_sync_for_guild(guild: discord.Guild) -> Dict[str, Any]
             return summary
 
         snapshot = await collect_membership_snapshot(guild)
-        members = list(snapshot.members)
+        members = snapshot.members  # The snapshot already owns a tuple; avoid a second full-guild list.
         summary["membership_source"] = snapshot.source
         summary["membership_authoritative"] = bool(snapshot.authoritative)
         if snapshot.error:
@@ -1718,21 +1792,45 @@ async def run_full_member_sync_for_guild(guild: discord.Guild) -> Dict[str, Any]
         summary["checked"] = len(members)
 
         active_ids: set[str] = set()
-        for idx, member in enumerate(members, start=1):
-            try:
-                member_id = int(getattr(member, "id", 0) or 0)
-                if member_id <= 0:
+        prefetch_enabled = True
+        prefetched_chunks = 0
+        # A small, bounded IN query replaces one existing-row GET per member.
+        # Joins, tickets, and write semantics remain member-exact.
+        for offset in range(0, len(members), _FULL_SYNC_PREFETCH_SIZE):
+            chunk = members[offset:offset + _FULL_SYNC_PREFETCH_SIZE]
+            ids = [
+                str(int(member.id))
+                for member in chunk
+                if int(getattr(member, "id", 0) or 0) > 0
+            ]
+            prefetched = None
+            if prefetch_enabled and ids:
+                prefetched = await _guild_members_prefetch_async(sb, str(guild.id), ids)
+                if prefetched is None:
+                    prefetch_enabled = False
+                else:
+                    prefetched_chunks += 1
+            for member in chunk:
+                try:
+                    member_id = int(getattr(member, "id", 0) or 0)
+                    if member_id <= 0:
+                        summary["errors"] += 1
+                        continue
+                    active_ids.add(str(member_id))
+                    if prefetched is None:
+                        await sync_member_to_supabase(member, in_guild=True)
+                    else:
+                        await sync_member_to_supabase(
+                            member, in_guild=True,
+                            existing_member_row=prefetched.get(str(member_id)),
+                        )
+                    summary["active_members_synced"] += 1
+                    if summary["active_members_synced"] % 10 == 0:
+                        await asyncio.sleep(0)
+                except Exception:
                     summary["errors"] += 1
                     continue
-                active_ids.add(str(member_id))
-                await sync_member_to_supabase(member, in_guild=True)
-                summary["active_members_synced"] += 1
-
-                if idx % 10 == 0:
-                    await asyncio.sleep(0)
-            except Exception:
-                summary["errors"] += 1
-                continue
+        summary["prefetched_member_chunks"] = prefetched_chunks
 
         if not departure_reconciliation_allowed(snapshot):
             summary["errors"] += 1

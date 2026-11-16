@@ -359,3 +359,22 @@ def test_paused_download_worker_never_fetches_request_message(monkeypatch):
     monkeypatch.setattr(runtime, "guild_download_delivery", paused)
     asyncio.run(queue._process_job(bot, queue.DownloadJob(1, 400, 500, 200, 600)))
     assert not fetched
+
+
+def test_queue_idle_worker_wakes_immediately_after_submission() -> None:
+    async def scenario():
+        event = queue._wake_event()
+        event.clear()
+        waiter = asyncio.create_task(queue._idle_wait(30))
+        await asyncio.sleep(0)
+        event.set()  # enqueue_download_request signals after durable _submit
+        assert await asyncio.wait_for(waiter, 1) is True
+        assert not event.is_set()
+    asyncio.run(scenario())
+
+
+def test_queue_idle_timeout_still_checks_storage_for_recovered_jobs() -> None:
+    async def scenario():
+        queue._wake_event().clear()
+        assert await queue._idle_wait(0.01) is False
+    asyncio.run(scenario())

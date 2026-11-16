@@ -224,8 +224,8 @@ def test_bulk_departed_reconciliation_skips_rows_already_departed(monkeypatch: p
         },
     ]
 
-    async def fake_select(_sb, _guild_id):
-        return SimpleNamespace(data=rows)
+    async def fake_select(_sb, _guild_id, offset=0, limit=500):
+        return SimpleNamespace(data=rows[offset:offset + limit])
 
     updates: list[tuple[str, dict]] = []
 
@@ -248,3 +248,143 @@ def test_bulk_departed_reconciliation_skips_rows_already_departed(monkeypatch: p
     assert updates[0][1]["in_guild"] is False
     assert updates[0][1]["role_state"] == "left_guild"
     assert updates[0][1]["times_left"] == 1
+
+
+def test_member_prefetch_reads_exact_chunk_and_skips_unmatched_rows(monkeypatch: pytest.MonkeyPatch) -> None:
+    class Query:
+        def select(self, *_args):
+            return self
+        def eq(self, field, value):
+            assert (field, value) == ("guild_id", "123")
+            return self
+        def in_(self, field, value):
+            assert field == "user_id" and set(value) == {"10", "20"}
+            return self
+        def limit(self, value):
+            assert value == 2
+            return self
+        def execute(self):
+            return SimpleNamespace(data=[
+                {"user_id": "10", "username": "actual"},
+                {"user_id": "99", "username": "not-requested"},
+            ])
+    class DB:
+        def table(self, name):
+            assert name == "guild_members"
+            return Query()
+    result = sync_service._guild_members_prefetch_sync(DB(), "123", ["10", "20"])
+    assert result == {"10": {"user_id": "10", "username": "actual"}}
+
+
+def test_full_member_sync_prefetches_once_per_chunk_and_preserves_authority(monkeypatch: pytest.MonkeyPatch) -> None:
+    guild = FakeGuild()
+    snapshot = MembershipSnapshot(
+        members=(FakeMember(10), FakeMember(20)),
+        authoritative=True,
+        source="discord_fetch_members",
+    )
+    async def fake_collect(_guild):
+        return snapshot
+    prefetched = []
+    async def fake_prefetch(_db, gid, ids):
+        prefetched.append((gid, ids))
+        return {"10": {"username": "prior"}}
+    received = []
+    async def fake_sync(member, *, in_guild=True, existing_member_row=None):
+        received.append((member.id, existing_member_row, in_guild))
+    active = []
+    async def fake_mark(_db, gid, ids):
+        active.append((gid, ids))
+        return 0
+    monkeypatch.setattr(sync_service, "collect_membership_snapshot", fake_collect)
+    monkeypatch.setattr(sync_service, "get_supabase", lambda: object())
+    monkeypatch.setattr(sync_service, "_guild_members_prefetch_async", fake_prefetch)
+    monkeypatch.setattr(sync_service, "sync_member_to_supabase", fake_sync)
+    monkeypatch.setattr(sync_service, "_bulk_mark_departed_members_async", fake_mark)
+    result = asyncio.run(sync_service.run_full_member_sync_for_guild(guild))
+    assert result["prefetched_member_chunks"] == 1
+    assert prefetched == [("123", ["10", "20"])]
+    assert received == [(10, {"username": "prior"}, True), (20, None, True)]
+    assert active == [("123", {"10", "20"})]
+
+
+def test_full_member_sync_prefetch_failure_falls_back_only_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    guild = FakeGuild()
+    snapshot = MembershipSnapshot(
+        members=tuple(FakeMember(i) for i in range(1, 53)),
+        authoritative=False,
+        source="discord_member_cache",
+    )
+    async def fake_collect(_guild):
+        return snapshot
+    attempts = []
+    async def unavailable(_db, gid, ids):
+        attempts.append((gid, len(ids)))
+        return None
+    synced = []
+    async def exact_sync(member, *, in_guild=True):
+        synced.append(member.id)
+    monkeypatch.setattr(sync_service, "collect_membership_snapshot", fake_collect)
+    monkeypatch.setattr(sync_service, "get_supabase", lambda: object())
+    monkeypatch.setattr(sync_service, "_guild_members_prefetch_async", unavailable)
+    monkeypatch.setattr(sync_service, "sync_member_to_supabase", exact_sync)
+    result = asyncio.run(sync_service.run_full_member_sync_for_guild(guild))
+    assert attempts == [("123", 50)]
+    assert result["active_members_synced"] == 52
+    assert result["departure_reconciliation_skipped"] is True
+    assert synced == list(range(1, 53))
+
+
+def test_departure_reconciliation_scans_beyond_default_postgrest_1000_rows(monkeypatch: pytest.MonkeyPatch) -> None:
+    page_calls = []
+    all_rows = [
+        {"user_id": str(i), "in_guild": True, "data_health": "ok",
+         "role_state": "verified", "times_left": 0}
+        for i in range(1205)
+    ]
+    async def paged(_sb, _guild, offset=0, limit=500):
+        page_calls.append((offset, limit))
+        return SimpleNamespace(data=all_rows[offset:offset + limit])
+    updates = []
+    async def update(_sb, _guild, uid, payload):
+        updates.append((uid, payload))
+    monkeypatch.setattr(sync_service, "_guild_members_select_guild_rows_async", paged)
+    monkeypatch.setattr(sync_service, "_guild_members_update_safe_async", update)
+    active = {str(i) for i in range(1204)}
+    marked = asyncio.run(sync_service._bulk_mark_departed_members_async(object(), "123", active))
+    assert marked == 1
+    assert [uid for uid, _payload in updates] == ["1204"]
+    assert page_calls == [(0, 500), (500, 500), (1000, 500)]
+
+
+def test_departure_reconciliation_read_failure_is_not_silent_success(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def fail_after_first(_sb, _guild, offset=0, limit=500):
+        if offset == 0:
+            return SimpleNamespace(data=[{"user_id": str(i), "in_guild": True} for i in range(500)])
+        raise RuntimeError("storage timeout")
+    monkeypatch.setattr(sync_service, "_guild_members_select_guild_rows_async", fail_after_first)
+    import pytest as local_pytest
+    with local_pytest.raises(RuntimeError, match="storage timeout"):
+        asyncio.run(sync_service._bulk_mark_departed_members_async(
+            object(), "123", {str(i) for i in range(500)},
+        ))
+
+
+def test_departed_page_query_is_stable_and_bounded() -> None:
+    seen = []
+    class Query:
+        def select(self, *_cols): return self
+        def eq(self, *_args): return self
+        def order(self, field):
+            assert field == "user_id"
+            return self
+        def range(self, start, end):
+            seen.append((start, end))
+            return self
+        def execute(self): return SimpleNamespace(data=[])
+    class DB:
+        def table(self, table):
+            assert table == "guild_members"
+            return Query()
+    sync_service._guild_members_select_guild_rows_sync(DB(), "123", 1000, 500)
+    assert seen == [(1000, 1499)]

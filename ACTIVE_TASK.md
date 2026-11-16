@@ -1,3 +1,27 @@
+## OPTIMIZATION CONTINUATION: LARGE GUILD & IDLE WORK (2026-11-16)
+
+- **Further changes in PR #851:** departure reconciliation now pages guild DB records by stable user ID (500 per page), so PostgREST's default row cap does not silently truncate large-guild reconciliation; failed page fetch propagates instead of falsely reporting complete coverage. Share Router Download queue workers wake on admitted jobs and use bounded idle backoff with periodic SQLite fallback polling, preserving cross-restart durable queue behavior and no duplicate DM replay.
+- **Testing:** added page-boundary / failure-path / idle-wake regressions. Final PR-head CI and production canary are required after this push. No deployed resources or database schema mutated.
+
+---
+
+## OPTIMIZATION CONTINUATION (2026-11-16)
+
+- **Scope:** Extend existing PR #851 rather than start a competing resource PR. Current focus is reducing full-sync DB round trips and activity flush CPU without weakening membership authority, join/ticket history, or fail-closed activity coverage.
+- **Implementation:** member row prefetch in bounded 50-ID chunks with fallback to existing exact reads, no redundant Discord enumeration list, activity buffer 10k default/50k hard cap, O(500) chunk selection by insertion order instead of O(n log n) sort. Regression tests cover prefetch success/failure and activity ordering/caps.
+- **Validation and deployment:** new pushed head CI required, earlier green #851 checks don't validate this continuation. No production/DB/Discloud changes; live SHA and CPU measurements still unverified. Do not mistake task notes for deployment proof.
+
+---
+
+## RESOURCE PRESSURE STABILIZATION (2026-11-16, in progress)
+
+- **Objective:** correct confirmed long-lived memory retention and CPU pressure on the existing Dank Shield runtime; no duplicate daemons, no Discord protection-policy changes.
+- **Current work:** PR #851, branch `fix/resource-pressure-bounds-20261116`, initialized from main `01de81cb71dcebccc7caaf346fb0fd06766c292f`. Bound joins, proof/alert/context caches and PNG bytes, switch member locks to weak ownership, cut role-count scans, limit timed-out yt-dlp threads and in-flight extraction, reuse member snapshot tuple, and expose read-only resource CPU/cache metrics.
+- **Validation:** initial PR compilation and SQL/security checks passed; full PR tests and production acceptance remain to be proven on the final immutable head. Compare exact-head checks before integration. Live Discloud process SHA, CPU/RSS measurements, restart causes, canary and rollback are not verified. No merge, DB/host changes or deployment has been performed in this task.
+- **Next:** resolve failures, complete exact-head CI, integrate only when safe, check operational metrics on the actual deployment. Historical checkpoints below are not task locks.
+
+---
+
 ## PRODUCTION STABILIZATION CHECKPOINT (2026-11-05)
 
 - **Objective / branch / PR:** stabilize Discord acknowledgements and integrate native birthdays plus welcome/activity setup on `fix/production-stabilization-20261105`, PR #831. PR #830 merged into `d0811f94f6da0fcdbb6356c045cd8b18d388fa98` during this assignment, so the remaining cohesive work uses a follow-up PR from that main. PR #828 and #829 are also merged. This checkpoint supersedes historical task locks for this authorized assignment; independent work remains preserved.
