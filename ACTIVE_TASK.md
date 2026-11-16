@@ -1,3 +1,12 @@
+## LIVE TOKE BUTTON ACKNOWLEDGEMENT INCIDENT (2026-11-16)
+
+- **Observed incident:** User-provided live Discloud log at 17:20:35 recorded `DANK-CBE96B12`, `component_unacknowledged` after 2.5 seconds, `dank:toke:v2:cheers`; the bot-authored message was current, but no acknowledgement was observed. This does **not** prove a CPU/RAM failure: heartbeats around the incident show 1.3–3.1% of one core, 261–271 MB RSS, ~34–38 tasks, and successful ten-guild metrics/activity cycles.
+- **Working diagnosis:** Toke views are restored by message ID from durable session records. A missing/stale message-specific ViewStore entry can leave a surviving Toke button without an owner after reconnect/restart. The log's persistent view count alone does not prove an exact message had a matching callback.
+- **Repair in PR #852:** register one canonical global `TokeCheersView` fallback before Toke runtime startup is marked complete; it only handles these existing custom IDs and still rechecks exact guild/message/session, current roles and current session state before state mutation. Existing per-message views retain precedence. Dynamic regressions verify one-time installation, acknowledgement before storage, rejection of nonexistent sessions. Add `view_store_owner` to passive incident logging to differentiate unknown ownership from delayed callbacks if incidents recur.
+- **Remaining:** final exact-head CI, review and merge; then verify Discloud deploy SHA and any recurrence of the `dank:toke:v2:cheers` unacknowledged event. Do not claim a proven root cause until runtime evidence supports it.
+
+---
+
 ## DISCORD FETCH EFFICIENCY CONTINUATION (2026-11-16)
 
 - **Verified integration:** PR #851 (RAM/CPU pressure, bounded caching, member prefetch, activity buffer/linear flush, departed reconciliation and idle download work) merged into `main` as `04730f44d94d30672312641220ea7c4dcb7bad43`, after all ten PR-head workflows passed. Exact-main CI and deployed Discloud SHA are separately tracked, not assumed.
