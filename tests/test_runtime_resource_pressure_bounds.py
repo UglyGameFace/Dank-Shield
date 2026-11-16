@@ -136,3 +136,17 @@ def test_process_cpu_percent_and_resource_pressure_snapshot(monkeypatch):
     snapshot = process_health._resource_pressure_snapshot()
     assert "resource_pressure=" in snapshot
     assert "proof_cache=" in snapshot
+
+
+def test_raid_burst_counter_does_not_iterate_entire_history():
+    class NoIterDeque(deque):
+        def __iter__(self):
+            raise AssertionError("raid counter must not scan the entire window")
+    gid = 998000008
+    now = raidguard._utcnow()
+    JOIN_TIMES[gid] = NoIterDeque([now - timedelta(hours=1), now, now])
+    try:
+        assert raidguard._recent_join_burst_count(gid) == 2
+        assert len(JOIN_TIMES[gid]) == 2
+    finally:
+        JOIN_TIMES.pop(gid, None)

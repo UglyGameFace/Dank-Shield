@@ -615,9 +615,10 @@ def _recent_join_burst_count(guild_id: int) -> int:
             return 0
 
         cutoff = _utcnow() - timedelta(seconds=_raid_window_seconds())
-        count = 0
 
-        # Expire old joins instead of rescanning the entire process lifetime.
+        # Join timestamps are appended in time order by the gateway. Drop old
+        # entries from the left, then count in O(1) instead of visiting every
+        # historical join for every new member during a raid.
         while dq:
             try:
                 expired = dq[0] < cutoff
@@ -629,13 +630,7 @@ def _recent_join_burst_count(guild_id: int) -> int:
                 dq.popleft()
             else:
                 del dq[0]
-        for ts in dq:
-            try:
-                if ts >= cutoff:
-                    count += 1
-            except Exception:
-                continue
-        return count
+        return len(dq)
     except Exception:
         return 0
 
