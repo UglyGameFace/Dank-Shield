@@ -9,6 +9,8 @@ from typing import Any, Awaitable, Callable, Mapping, Optional
 
 import discord
 
+from .startup_guards.discord_api_safety import fetch_message_with_api_safety
+
 from .guild_config import get_guild_config, upsert_guild_config
 from .profile_card_service import (
     PLATFORM_SPECS,
@@ -558,7 +560,7 @@ class LiveProfileCardRuntime:
 
     async def _delete_stored_message(self, channel: discord.TextChannel, message_id: int) -> bool:
         try:
-            message = await channel.fetch_message(int(message_id))
+            message = await fetch_message_with_api_safety(channel, int(message_id), label="profile card cleanup")
         except discord.NotFound:
             return True
         except Exception:
@@ -843,7 +845,7 @@ class LiveProfileCardRuntime:
             if not stored_message_id:
                 continue
             try:
-                stored_message = await channel.fetch_message(stored_message_id)
+                stored_message = await fetch_message_with_api_safety(channel, stored_message_id, label="profile card reconciliation")
             except discord.NotFound:
                 stored_message = None
             except Exception:

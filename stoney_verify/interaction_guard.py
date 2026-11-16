@@ -721,6 +721,10 @@ async def _observe_component_ack(bot: Any, interaction: discord.Interaction) -> 
             ),
             "persistent_view_count": persistent_count,
             "persistent_view_types": persistent_names,
+            # A view being present in the list does not prove this exact
+            # component was registered for this message. The pinned ViewStore
+            # probe distinguishes missing ownership from a slow callback.
+            "view_store_owner": _view_store_component_owner_state(bot, interaction),
         }
         if not _observer_log_allowed():
             return
@@ -751,7 +755,8 @@ async def _observe_component_ack(bot: Any, interaction: discord.Interaction) -> 
             f"age_ms={extra['interaction_age_ms']} "
             f"message_author={message_author_id} bot_user={bot_user_id} "
             f"application_id={application_id} "
-            f"persistent_views={persistent_count}"
+            f"persistent_views={persistent_count} "
+            f"view_store_owner={extra['view_store_owner']}"
         )
     except Exception as exc:
         if _observer_log_allowed():

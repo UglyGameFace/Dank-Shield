@@ -12,6 +12,8 @@ from datetime import datetime, timezone, timedelta
 from typing import Any
 import discord
 
+from .startup_guards.discord_api_safety import fetch_message_with_api_safety
+
 from .globals import get_supabase
 from .invite_trusted_advertisers import (
     trusted_rule, is_advert_like, expires_at, retention_deadline,
@@ -172,7 +174,7 @@ async def process_claim(bot: Any, record: dict[str, Any]) -> str:
             await _finish(record, "pending", error="missing_manage_messages")
             return "no-permission"
         try:
-            message = await channel.fetch_message(mid)
+            message = await fetch_message_with_api_safety(channel, mid, label="trusted advert cleanup")
         except discord.NotFound:
             await _finish(record, "done")
             return "already-removed"

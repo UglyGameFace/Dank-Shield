@@ -22,6 +22,8 @@ from typing import Any, Awaitable, Callable, Mapping, Optional
 
 import discord
 
+from .startup_guards.discord_api_safety import fetch_message_with_api_safety
+
 from . import profile_card_runtime_core as _core
 from .profile_card_service import (
     PLATFORM_SPECS,
@@ -634,7 +636,7 @@ class LiveProfileCardRuntime(_core.LiveProfileCardRuntime):
             if message_id <= 0:
                 continue
             try:
-                stored = await channel.fetch_message(message_id)
+                stored = await fetch_message_with_api_safety(channel, message_id, label="profile card ownership")
             except discord.NotFound:
                 continue
             except Exception as exc:

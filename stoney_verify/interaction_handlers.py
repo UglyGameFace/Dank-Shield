@@ -7,6 +7,8 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 import discord
 
+from .startup_guards.discord_api_safety import fetch_message_with_api_safety
+
 from .globals import *  # noqa: F401,F403
 
 from .tickets import (
@@ -1085,7 +1087,7 @@ async def handle_possible_submission(message: discord.Message) -> None:
     if not token:
         try:
             await asyncio.sleep(1.2)
-            fresh = await message.channel.fetch_message(message.id)
+            fresh = await fetch_message_with_api_safety(message.channel, message.id, label="ticket token webhook refresh")
             token = extract_token_from_message(fresh)
         except Exception:
             token = None

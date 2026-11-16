@@ -488,3 +488,84 @@ def test_toke_extension_rechecks_host_authority_at_click_time(monkeypatch):
         assert events[0] == "deferred"
         assert "no longer manage" in events[1]
     asyncio.run(run())
+
+
+def test_toke_runtime_registers_global_persistent_button_fallback(isolated_sessions):
+    """Old live cards need a callback even without a message-specific ViewStore entry."""
+    class Bot:
+        def __init__(self):
+            self.views = []
+            self.listeners = []
+        def add_view(self, view, message_id=None):
+            self.views.append((view, message_id))
+        def add_listener(self, callback, event):
+            self.listeners.append((callback, event))
+
+    bot = Bot()
+    live.register_toke_runtime(bot)
+    live.register_toke_runtime(bot)
+    assert len(bot.views) == 1
+    view, message_id = bot.views[0]
+    assert message_id is None
+    assert isinstance(view, live.TokeCheersView)
+    assert view.timeout is None
+    assert {item.custom_id for item in view.children if getattr(item, "custom_id", None)} >= {
+        "dank:toke:v2:cheers", "dank:toke:v2:going",
+        "dank:toke:v2:withdraw", "dank:toke:v2:refresh",
+    }
+    assert [event for _callback, event in bot.listeners] == [
+        "on_message", "on_voice_state_update", "on_ready",
+    ]
+
+
+def test_global_toke_fallback_acknowledges_before_store_and_checks_session(isolated_sessions, monkeypatch):
+    class Member:
+        id = 789
+        roles = [SimpleNamespace(id=22)]
+    monkeypatch.setattr(live.discord, "Member", Member)
+    recorded = []
+
+    async def fake_get(guild_id, message_id):
+        recorded.append(("get", guild_id, message_id))
+        if message_id != 456:
+            return None
+        return {
+            **_session(), "active": True, "cheers_ids": [],
+            "going_ids": [], "reminder_ids": [],
+        }
+
+    async def fake_react(guild_id, message_id, user_id, action, **kwargs):
+        recorded.append(("react", guild_id, message_id, user_id, action))
+        return {**_session(), "active": True}, ""
+
+    async def fake_refresh(*args, **kwargs):
+        recorded.append(("refresh",))
+        return True
+
+    monkeypatch.setattr(toke_sessions, "get", fake_get)
+    monkeypatch.setattr(toke_sessions, "react", fake_react)
+    monkeypatch.setattr(live, "refresh_card", fake_refresh)
+
+    async def scenario(message_id):
+        async def defer(**kwargs):
+            recorded.append(("defer", kwargs))
+        async def edit(**kwargs):
+            recorded.append(("edit", kwargs.get("content")))
+        interaction = SimpleNamespace(
+            guild=SimpleNamespace(id=123), user=Member(),
+            message=SimpleNamespace(id=message_id), client=object(),
+            response=SimpleNamespace(defer=defer), edit_original_response=edit,
+        )
+        fallback = live.TokeCheersView(starter_id=0, stoner_role_id=0)
+        await fallback.cheers.callback(interaction)
+
+    asyncio.run(scenario(456))
+    assert recorded[0] == ("defer", {"ephemeral": True, "thinking": True})
+    assert ("react", 123, 456, 789, "cheers") in recorded
+    assert recorded[-1] == ("edit", "💨 Cheers recorded.")
+    recorded.clear()
+    asyncio.run(scenario(999))
+    assert recorded[0] == ("defer", {"ephemeral": True, "thinking": True})
+    assert recorded[1] == ("get", 123, 999)
+    assert not any(row[0] == "react" for row in recorded)
+    assert "no longer available" in recorded[-1][1]

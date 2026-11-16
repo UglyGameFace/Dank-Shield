@@ -11,6 +11,8 @@ from typing import Any, Mapping
 
 import discord
 
+from .startup_guards.discord_api_safety import fetch_message_with_api_safety
+
 from stoney_verify import toke_sessions
 from stoney_verify.share_router_media_network import is_safe_media_download_url
 
@@ -306,7 +308,7 @@ async def refresh_card(bot: Any, session: Mapping[str, Any], interaction: discor
         message = interaction.message
     else:
         try:
-            message = await channel.fetch_message(int(session["message_id"]))
+            message = await fetch_message_with_api_safety(channel, int(session["message_id"]), label="toke live attendance")
         except discord.NotFound:
             if not current.get("active", False):
                 await toke_sessions.mark_closed_synced(int(session["guild_id"]), int(session["message_id"]))
@@ -1593,6 +1595,15 @@ def register_toke_runtime(bot: Any) -> None:
     ident = id(bot)
     if ident in _STARTED_BOTS:
         return
+
+    # These fixed custom IDs are shared by plain embeds and V2 media layouts.
+    # Per-message registrations still win, but a generic persistent view must
+    # catch valid older cards when their message-specific ViewStore entry is
+    # missing after reconnect/restart. All callbacks resolve the actual guild
+    # and message ID against the durable sesh store before any mutation.
+    # Register before marking the runtime started: failure must not suppress
+    # future attempts or pretend that the button handler is available.
+    bot.add_view(TokeCheersView(starter_id=0, stoner_role_id=0))
     _STARTED_BOTS.add(ident)
 
     async def on_ready() -> None:

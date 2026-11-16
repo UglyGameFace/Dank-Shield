@@ -11,6 +11,8 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Deque, Dict, List, Optional, Set, Tuple
 
 import discord
+
+from .startup_guards.discord_api_safety import fetch_message_with_api_safety
 from discord import app_commands
 from discord.ext import tasks
 
@@ -1597,7 +1599,7 @@ async def _rerender_panel_message(
     view = SpamGuardPanelView.build(page=page, settings=settings)
 
     try:
-        msg = await channel.fetch_message(int(message_id))
+        msg = await fetch_message_with_api_safety(channel, int(message_id), label="spam guard panel refresh")
         await msg.edit(embed=embed, view=view)
     except Exception as e:
         _debug(f"rerender failed guild={guild.id} page={page} message={message_id} error={repr(e)}")
