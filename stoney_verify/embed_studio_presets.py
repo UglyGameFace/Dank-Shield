@@ -66,8 +66,8 @@ _EVENT_PRESET_SPECS: dict[str, dict[str, str]] = {
         "author_name": "COMMUNITY CINEMA • MOVIE NIGHT",
         "title": "🎬 LIGHTS DOWN • MOVIE NIGHT IS ON",
         "description": (
-            "**Grab your popcorn, find a seat and join the watch party.**\\n\\n"
-            "🍿 Movie picks • 💬 Reactions • 🎞️ Good company\\n"
+            "**Grab your popcorn, find a seat and join the watch party.**\n\n"
+            "🍿 Movie picks • 💬 Reactions • 🎞️ Good company\n"
             "Set the actual movie and start time before announcing."
         ),
         "extra": "🎞️ MOVIE PICK",
@@ -79,7 +79,7 @@ _EVENT_PRESET_SPECS: dict[str, dict[str, str]] = {
         "author_name": "LIVE WATCH PARTY • COMMUNITY STREAM",
         "title": "📺 WATCH TOGETHER • THE SHOW STARTS HERE",
         "description": (
-            "**Big moment? Better with the whole server.**\\n\\n"
+            "**Big moment? Better with the whole server.**\n\n"
             "🎥 Shared reactions • 🎙️ Live chat • ⚡ Hype together"
         ),
         "extra": "📡 WHAT WE'RE WATCHING",
@@ -91,7 +91,7 @@ _EVENT_PRESET_SPECS: dict[str, dict[str, str]] = {
         "author_name": "TRIVIA NIGHT • COMMUNITY QUIZ",
         "title": "🧠 TRIVIA NIGHT • THINK YOU KNOW IT ALL?",
         "description": (
-            "**Teams, tough questions, and excellent wrong answers.**\\n\\n"
+            "**Teams, tough questions, and excellent wrong answers.**\n\n"
             "❓ Trivia rounds • 🏆 Friendly competition • 🤝 New teammates"
         ),
         "extra": "🎯 TOPICS & FORMAT",
@@ -103,7 +103,7 @@ _EVENT_PRESET_SPECS: dict[str, dict[str, str]] = {
         "author_name": "OPEN MIC • KARAOKE NIGHT",
         "title": "🎤 TAKE THE MIC • KARAOKE NIGHT",
         "description": (
-            "**Your stage, your song, your moment.**\\n\\n"
+            "**Your stage, your song, your moment.**\n\n"
             "🎶 Sing together • 💖 Cheer each other on • 🎙️ No pressure"
         ),
         "extra": "🎵 SONG QUEUE",
@@ -115,7 +115,7 @@ _EVENT_PRESET_SPECS: dict[str, dict[str, str]] = {
         "author_name": "COMMUNITY HANGOUT • OPEN LOUNGE",
         "title": "💬 COME HANG OUT • EVERYONE'S INVITED",
         "description": (
-            "**No competition, no schedule pressure, just community time.**\\n\\n"
+            "**No competition, no schedule pressure, just community time.**\n\n"
             "☕ Meet the crew • 🎧 Chill in voice • ✨ Stay as long as you like"
         ),
         "extra": "🛋️ THE VIBE",
@@ -127,7 +127,7 @@ _EVENT_PRESET_SPECS: dict[str, dict[str, str]] = {
         "author_name": "COMMUNITY REWARDS • GIVEAWAY",
         "title": "🎁 COMMUNITY GIVEAWAY • JOIN THE FUN",
         "description": (
-            "**A little something for our community.**\\n\\n"
+            "**A little something for our community.**\n\n"
             "Check the verified prize, eligibility, deadline and official entry rules."
         ),
         "extra": "🎁 CONFIRMED PRIZE & RULES",
@@ -139,7 +139,7 @@ _EVENT_PRESET_SPECS: dict[str, dict[str, str]] = {
         "author_name": "LIVE Q&A • ASK ME ANYTHING",
         "title": "❓ ASK US ANYTHING • COMMUNITY Q&A",
         "description": (
-            "**Get answers from the people behind the community.**\\n\\n"
+            "**Get answers from the people behind the community.**\n\n"
             "💡 Questions welcome • 🎙️ Live discussion • 🤝 Meet the hosts"
         ),
         "extra": "🎙️ HOST & TOPICS",
@@ -151,7 +151,7 @@ _EVENT_PRESET_SPECS: dict[str, dict[str, str]] = {
         "author_name": "CREATOR SHOWCASE • COMMUNITY CHALLENGE",
         "title": "🎨 SHOW WHAT YOU'VE GOT • CREATOR CONTEST",
         "description": (
-            "**Artists, builders, editors and makers, this one's for you.**\\n\\n"
+            "**Artists, builders, editors and makers, this one's for you.**\n\n"
             "🖼️ Share your work • 👀 Discover talent • 💫 Inspire the crew"
         ),
         "extra": "🖌️ THEME, RULES & JUDGING",
