@@ -3,7 +3,7 @@
 ## Behavior and scope
 
 Visible routes: `/mod → Unverified Enforcement` and
-`/dank home → Verification Center → Unverified Reminders → After 3 Reminders`.
+`/dank home → Verification Center → Unverified Reminders → Configure → After 3 Reminders`.
 
 Owners and authorized server managers choose **NONE**, **KICK**, or **BAN**
 and a 1–720 hour grace period. Existing deployments are **NONE/OFF** by
