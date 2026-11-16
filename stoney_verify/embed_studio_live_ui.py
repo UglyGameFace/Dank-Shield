@@ -7,6 +7,8 @@ from typing import Any, Mapping
 
 import discord
 
+from .startup_guards.discord_api_safety import fetch_message_with_api_safety
+
 from .embed_studio_core import StudioValidationError
 from .embed_studio_live_text import enroll,disable,live_enabled,live_project
 from .embed_studio_ui import (
@@ -69,7 +71,7 @@ class LiveTextChoice(_StudioView):
             channel=interaction.guild.get_channel(channel_id)
             if not isinstance(channel,discord.TextChannel) or _post_blockers(interaction,channel):
                 return await _say(interaction,"Bot permissions or channel settings changed.")
-            message=await asyncio.wait_for(channel.fetch_message(message_id),timeout=12)
+            message=await asyncio.wait_for(fetch_message_with_api_safety(channel, message_id, label="studio live enrollment"),timeout=12)
             if interaction.client.user is None or message.author.id!=interaction.client.user.id:
                 return await _say(interaction,"Only Dank Shield-owned messages can use Live Text.")
             old_nonce=str(row.get("live_nonce") or "")
