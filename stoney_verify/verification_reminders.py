@@ -186,6 +186,7 @@ class ReminderWorker:
         # budgets are durable in PostgreSQL and never reset by cleanup.
         self.cleanup_cursor: tuple[datetime, str, str] | None = None
         self.manual_cleanup_cursor: tuple[datetime, str, str] | None = None
+        self.enforcement_cleanup_cursor: tuple[datetime, str, str, datetime] | None = None
         # Do not add cleanup traffic to Discord's busy startup window.
         self.cleanup_due = time.monotonic() + CLEANUP_INTERVAL_SECONDS
 
@@ -520,6 +521,62 @@ class ReminderWorker:
             self.manual_cleanup_cursor = None
         return deleted
 
+    async def cleanup_stale_enforcement_history(self) -> int:
+        """Remove stale action records only after a REST-confirmed departure.
+
+        This opt-in ledger is independent of automatic/manual reminder budgets.
+        """
+        from .verification_reminder_enforcement import (
+            stale_candidates_sync as _stale_enforcement,
+            delete_departed_sync as _delete_enforcement,
+        )
+
+        cutoff = datetime.now(timezone.utc) - timedelta(days=RETENTION_DAYS)
+        try:
+            rows = await asyncio.to_thread(
+                _stale_enforcement, cutoff,
+                after=self.enforcement_cleanup_cursor,
+                limit=CLEANUP_BATCH_SIZE,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            # The enforcement migration is optional and never run on startup.
+            return 0
+
+        deleted = 0
+        for guild_id, user_id, joined_at, last_delivered_at in rows:
+            guild = self.bot.get_guild(int(guild_id))
+            if guild is None:
+                continue
+            try:
+                await guild.fetch_member(int(user_id))
+            except discord.NotFound as exc:
+                if getattr(exc, "code", None) != 10007:
+                    continue
+                try:
+                    removed = await asyncio.to_thread(
+                        _delete_enforcement, guild_id, user_id, joined_at, cutoff,
+                    )
+                    deleted += int(bool(removed))
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    continue
+            except (discord.Forbidden, discord.HTTPException):
+                continue
+            await asyncio.sleep(0)
+
+        if rows and len(rows) == CLEANUP_BATCH_SIZE:
+            guild_id, user_id, joined_at, delivered_at = rows[-1]
+            self.enforcement_cleanup_cursor = (
+                delivered_at, guild_id, user_id, joined_at,
+            )
+        else:
+            self.enforcement_cleanup_cursor = None
+        return deleted
+
+
     async def run(self) -> None:
         await self.bot.wait_until_ready()
         while not self.bot.is_closed():
@@ -529,6 +586,7 @@ class ReminderWorker:
                     self.cleanup_due = time.monotonic() + CLEANUP_INTERVAL_SECONDS
                     await self.cleanup_stale_history()
                     await self.cleanup_stale_manual_history()
+                    await self.cleanup_stale_enforcement_history()
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
