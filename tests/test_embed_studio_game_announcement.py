@@ -44,7 +44,7 @@ def test_game_presets_are_distinct_editable_and_discord_safe():
 def test_mobile_layout_picker_explains_each_choice_and_preserves_existing_options():
     session = ui.StudioSession(guild_id=111, owner_id=222)
     choices = ui.StarterSelect(session).options
-    assert len(choices) == 12
+    assert len(choices) == 20
     assert {opt.value for opt in choices} == {key for key, _ in PRESETS}
     assert all(opt.description and len(opt.description) <= 100 for opt in choices)
     assert all(len(opt.label) <= 100 for opt in choices)
