@@ -569,3 +569,78 @@ def test_global_toke_fallback_acknowledges_before_store_and_checks_session(isola
     assert recorded[1] == ("get", 123, 999)
     assert not any(row[0] == "react" for row in recorded)
     assert "no longer available" in recorded[-1][1]
+
+
+@pytest.mark.parametrize("success", [True, False])
+def test_toke_media_capture_does_not_dm_creator_on_success_but_reports_failure(
+    isolated_sessions, monkeypatch, success,
+):
+    """The invoker already sees the card; failures must still be explained."""
+    from stoney_verify.commands_ext import public_toke
+
+    created = []
+    sent_dms = []
+    deleted = []
+    async def send_dm(content):
+        sent_dms.append(content)
+    async def delete_source():
+        deleted.append(True)
+    author = SimpleNamespace(id=222, bot=False, send=send_dm)
+    guild = SimpleNamespace(id=123)
+    channel = SimpleNamespace(id=777)
+    message = SimpleNamespace(
+        guild=guild, channel=channel, author=author,
+        webhook_id=None, delete=delete_source,
+    )
+    monkeypatch.setattr(live, "_has_gif_media", lambda *_args, **_kwargs: True)
+
+    async def publish(guild_arg, author_arg, pending_arg, message_arg):
+        created.append((guild_arg, author_arg, pending_arg, message_arg))
+        if not success:
+            raise OSError("media unavailable")
+        return SimpleNamespace(jump_url="https://discord.com/channels/123/777/456")
+
+    monkeypatch.setattr(public_toke, "publish_toke_from_draft", publish)
+    live.begin_capture(123, 222, 777, 777, "join us")
+    asyncio.run(live._on_toke_media_message(message))
+
+    assert len(created) == 1
+    assert created[0][0] is guild and created[0][1] is author
+    assert created[0][3] is message
+    assert live.pending_for(123, 222) is None
+    if success:
+        assert deleted == [True]
+        assert sent_dms == []
+    else:
+        assert deleted == []
+        assert len(sent_dms) == 1
+        assert "Toke could not post your media" in sent_dms[0]
+        assert "Your original GIF was kept" in sent_dms[0]
+
+
+def test_toke_capture_success_with_source_delete_denied_does_not_dm(
+    isolated_sessions, monkeypatch,
+):
+    """No success DM even if a posted card's temporary GIF can't be removed."""
+    from stoney_verify.commands_ext import public_toke
+
+    sent_dms = []
+    async def send_dm(content):
+        sent_dms.append(content)
+    async def delete_source():
+        raise discord.Forbidden(
+            SimpleNamespace(status=403, reason="Forbidden"), "Delete denied",
+        )
+    async def publish(*_args):
+        return SimpleNamespace(jump_url="https://discord.com/channels/123/777/456")
+    author = SimpleNamespace(id=222, bot=False, send=send_dm)
+    message = SimpleNamespace(
+        guild=SimpleNamespace(id=123), channel=SimpleNamespace(id=777),
+        author=author, webhook_id=None, delete=delete_source,
+    )
+    monkeypatch.setattr(live, "_has_gif_media", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(public_toke, "publish_toke_from_draft", publish)
+    live.begin_capture(123, 222, 777, 777, "join us")
+    asyncio.run(live._on_toke_media_message(message))
+    assert sent_dms == []
+    assert live.pending_for(123, 222) is None
