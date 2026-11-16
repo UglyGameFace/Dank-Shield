@@ -263,9 +263,8 @@ class BanUnbanByIdModal(discord.ui.Modal, title="Ban / Unban by User ID"):
         max_length=20,
     )
     action = discord.ui.TextInput(
-        label="Action: BAN, UNBAN, or AUTO",
-        placeholder="AUTO",
-        default="AUTO",
+        label="Type BAN or UNBAN (AUTO optional)",
+        placeholder="Enter an explicit action",
         max_length=5,
     )
     reason = discord.ui.TextInput(
@@ -289,7 +288,7 @@ class BanUnbanByIdModal(discord.ui.Modal, title="Ban / Unban by User ID"):
             return await _private(interaction, "❌ Only the staff member who opened this form can submit it.")
         if not await _require_staff(interaction):
             return
-        raw_action = str(self.action.value or "AUTO").strip().lower()
+        raw_action = str(self.action.value or "").strip().lower()
         if raw_action not in {"ban", "unban", "auto"}:
             return await _private(interaction, "❌ Action must be **BAN**, **UNBAN**, or **AUTO**.")
         try:
