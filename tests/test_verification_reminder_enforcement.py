@@ -162,10 +162,13 @@ def test_manual_configuration_requires_server_manager_and_action_permission():
 
 
 def test_mod_and_verify_centers_expose_action_settings():
-    from stoney_verify.commands_ext.public_verify_reminder_ui import ReminderSettingsView
+    from stoney_verify.commands_ext.public_verify_reminder_ui import ReminderSettingsView, ReminderSetupMenuView
     from stoney_verify.commands_ext.public_mod_command_center import ModerationCenterView
 
-    assert any(b.label == "After 3 Reminders" for b in ReminderSettingsView(123, reminders.ReminderPolicy()).children)
+    assert any(b.label == "Configure" for b in ReminderSettingsView(123, reminders.ReminderPolicy()).children)
+    assert any(b.label == "After 3 Reminders" for b in ReminderSetupMenuView(123, reminders.ReminderPolicy()).children)
+    assert len([b for b in ReminderSettingsView(123, reminders.ReminderPolicy()).children
+                if isinstance(b, discord.ui.Button)]) <= 11
     assert any(b.label == "Unverified Enforcement" for b in ModerationCenterView(123).children)
 
 
