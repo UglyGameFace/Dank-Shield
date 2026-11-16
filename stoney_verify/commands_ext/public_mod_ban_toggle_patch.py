@@ -20,7 +20,7 @@ import discord
 from discord import app_commands
 
 from ..globals import now_utc
-from ..guild_config import get_guild_config
+from ..guild_config import get_modlog_channel_id
 from .common import (
     _staff_check,
     RUNTIME_STATS,
@@ -102,8 +102,7 @@ def _target_reply_label(user: Any, fallback_id: int = 0) -> str:
 
 async def _configured_modlog_channel(guild: discord.Guild) -> Optional[discord.TextChannel]:
     try:
-        cfg = await get_guild_config(guild.id)
-        channel_id = int(getattr(cfg, "modlog_channel_id", 0) or 0)
+        channel_id = int(await get_modlog_channel_id(guild.id) or 0)
         if channel_id <= 0:
             return None
         channel = guild.get_channel(channel_id)
