@@ -19,6 +19,8 @@ from typing import Any, Optional
 
 import discord
 
+from .startup_guards.discord_api_safety import fetch_message_with_api_safety
+
 from .share_router_private_downloads import (
     _reply_problem,
     _valid_request_url,
@@ -312,7 +314,7 @@ async def _process_job(bot: Any, job: DownloadJob) -> None:
     if not isinstance(channel, discord.TextChannel):
         return
     try:
-        message = await channel.fetch_message(job.message_id)
+        message = await fetch_message_with_api_safety(channel, job.message_id, label="share download dequeue")
     except (discord.Forbidden, discord.NotFound, discord.HTTPException):
         return
     if (
