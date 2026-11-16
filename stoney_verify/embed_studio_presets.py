@@ -23,6 +23,14 @@ PRESETS: tuple[tuple[str, str], ...] = (
     ("tournament", "Tournament • Join the Challenge"),
     ("server_update", "Game Server • Patch Notes"),
     ("recruitment", "Players Wanted • Join the Crew"),
+    ("movie_night", "Movie Night • Lights Out"),
+    ("watch_party", "Live Watch Party • Tune In"),
+    ("trivia", "Trivia Night • Brain Battle"),
+    ("karaoke", "Karaoke • Open Mic"),
+    ("hangout", "Community Hangout • Chill VC"),
+    ("giveaway", "Giveaway • Community Rewards"),
+    ("ama", "AMA • Ask Us Anything"),
+    ("art_contest", "Creative Contest • Show Your Work"),
 )
 
 # Short mobile picker descriptions make layouts distinguishable before loading.
@@ -39,7 +47,135 @@ PRESET_DESCRIPTIONS: dict[str, str] = {
     "tournament": "Compete with clear rules and prizes",
     "server_update": "What's new, fixed, and coming next",
     "recruitment": "Attract players with a clear join guide",
+    "movie_night": "Movie, watch location, time and access requirements",
+    "watch_party": "Live streams, esports and shared watch sessions",
+    "trivia": "Questions, teams, times and how to play",
+    "karaoke": "Voice channel, song queue and microphone rules",
+    "hangout": "Casual voice chat and a welcoming event invite",
+    "giveaway": "Verified prize, entry rules and close time",
+    "ama": "Hosted questions, speakers and how to participate",
+    "art_contest": "Creative theme, submissions, deadline and judging",
 }
+
+
+# Event copy stays generic until staff fill in real dates, channel locations,
+# lawful media access and prizes. These are drafts, not scheduled Discord events.
+_EVENT_PRESET_SPECS: dict[str, dict[str, str]] = {
+    "movie_night": {
+        "color": "D86EFF",
+        "author_name": "COMMUNITY CINEMA • MOVIE NIGHT",
+        "title": "🎬 LIGHTS DOWN • MOVIE NIGHT IS ON",
+        "description": (
+            "**Grab your popcorn, find a seat and join the watch party.**\\n\\n"
+            "🍿 Movie picks • 💬 Reactions • 🎞️ Good company\\n"
+            "Set the actual movie and start time before announcing."
+        ),
+        "extra": "🎞️ MOVIE PICK",
+        "hint": "Movie title, rating and any content notes.",
+        "footer": "Use only a stream or watch method you are authorized to share",
+    },
+    "watch_party": {
+        "color": "38BDF8",
+        "author_name": "LIVE WATCH PARTY • COMMUNITY STREAM",
+        "title": "📺 WATCH TOGETHER • THE SHOW STARTS HERE",
+        "description": (
+            "**Big moment? Better with the whole server.**\\n\\n"
+            "🎥 Shared reactions • 🎙️ Live chat • ⚡ Hype together"
+        ),
+        "extra": "📡 WHAT WE'RE WATCHING",
+        "hint": "Stream, match, creator or event and where viewers can access it.",
+        "footer": "Check stream permissions and viewer access before sharing",
+    },
+    "trivia": {
+        "color": "F5C242",
+        "author_name": "TRIVIA NIGHT • COMMUNITY QUIZ",
+        "title": "🧠 TRIVIA NIGHT • THINK YOU KNOW IT ALL?",
+        "description": (
+            "**Teams, tough questions, and excellent wrong answers.**\\n\\n"
+            "❓ Trivia rounds • 🏆 Friendly competition • 🤝 New teammates"
+        ),
+        "extra": "🎯 TOPICS & FORMAT",
+        "hint": "Topics, teams, scoring and approximate rounds.",
+        "footer": "No automatic quiz or prize is created by this layout",
+    },
+    "karaoke": {
+        "color": "FB7185",
+        "author_name": "OPEN MIC • KARAOKE NIGHT",
+        "title": "🎤 TAKE THE MIC • KARAOKE NIGHT",
+        "description": (
+            "**Your stage, your song, your moment.**\\n\\n"
+            "🎶 Sing together • 💖 Cheer each other on • 🎙️ No pressure"
+        ),
+        "extra": "🎵 SONG QUEUE",
+        "hint": "How to queue songs and who is hosting; follow music rights/rules.",
+        "footer": "Be respectful • Use audio you are allowed to share",
+    },
+    "hangout": {
+        "color": "64D3A1",
+        "author_name": "COMMUNITY HANGOUT • OPEN LOUNGE",
+        "title": "💬 COME HANG OUT • EVERYONE'S INVITED",
+        "description": (
+            "**No competition, no schedule pressure, just community time.**\\n\\n"
+            "☕ Meet the crew • 🎧 Chill in voice • ✨ Stay as long as you like"
+        ),
+        "extra": "🛋️ THE VIBE",
+        "hint": "Topics, activities and which members the hangout is for.",
+        "footer": "Welcome newcomers and follow the server rules",
+    },
+    "giveaway": {
+        "color": "FCD34D",
+        "author_name": "COMMUNITY REWARDS • GIVEAWAY",
+        "title": "🎁 COMMUNITY GIVEAWAY • JOIN THE FUN",
+        "description": (
+            "**A little something for our community.**\\n\\n"
+            "Check the verified prize, eligibility, deadline and official entry rules."
+        ),
+        "extra": "🎁 CONFIRMED PRIZE & RULES",
+        "hint": "Only list a real prize, eligibility, entry method and winner process.",
+        "footer": "No prizes, entries or winners are automated by this draft",
+    },
+    "ama": {
+        "color": "A78BFA",
+        "author_name": "LIVE Q&A • ASK ME ANYTHING",
+        "title": "❓ ASK US ANYTHING • COMMUNITY Q&A",
+        "description": (
+            "**Get answers from the people behind the community.**\\n\\n"
+            "💡 Questions welcome • 🎙️ Live discussion • 🤝 Meet the hosts"
+        ),
+        "extra": "🎙️ HOST & TOPICS",
+        "hint": "Confirmed guests or hosts, topics and question guidelines.",
+        "footer": "Add the real event date and hosts before posting",
+    },
+    "art_contest": {
+        "color": "FF83C4",
+        "author_name": "CREATOR SHOWCASE • COMMUNITY CHALLENGE",
+        "title": "🎨 SHOW WHAT YOU'VE GOT • CREATOR CONTEST",
+        "description": (
+            "**Artists, builders, editors and makers, this one's for you.**\\n\\n"
+            "🖼️ Share your work • 👀 Discover talent • 💫 Inspire the crew"
+        ),
+        "extra": "🖌️ THEME, RULES & JUDGING",
+        "hint": "Theme, allowed formats, submission deadline, prizes and judging.",
+        "footer": "Only announce confirmed rewards, dates and entry rules",
+    },
+}
+
+
+def _event_layout(key: str) -> dict[str, Any]:
+    spec = _EVENT_PRESET_SPECS[key]
+    return {
+        "color": spec["color"],
+        "author_name": spec["author_name"],
+        "title": spec["title"],
+        "description": spec["description"],
+        "fields": [
+            {"name": "📅 WHEN", "value": "Add date, time and timezone.", "inline": True},
+            {"name": "📍 WHERE", "value": "Discord voice/text channel or event location.", "inline": True},
+            {"name": spec["extra"], "value": spec["hint"], "inline": False},
+            {"name": "✅ HOW TO JOIN", "value": "RSVP instructions or how members can take part.", "inline": False},
+        ],
+        "footer": spec["footer"],
+    }
 
 
 def project_for_preset(key: str) -> dict[str, Any]:
@@ -206,4 +342,6 @@ def project_for_preset(key: str) -> dict[str, Any]:
             ],
             footer="Avoid fake player counts or unsupported gameplay claims",
         )
+    elif key in _EVENT_PRESET_SPECS:
+        e.update(_event_layout(key))
     return validate_project(deepcopy(p))
