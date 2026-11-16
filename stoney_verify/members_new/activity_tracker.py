@@ -16,6 +16,7 @@ inactivity proof because they can be inaccurate or caused by staff actions.
 """
 
 import asyncio
+from itertools import islice
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import math
@@ -71,7 +72,8 @@ _LOCAL_SCOPE_ERRORS: dict[int, str] = {}
 # state; per-window counts are preserved via p_event_count. Exact flush cost
 # is ceil(deduped_entries / 500) RPCs per window — measure, don't assume.
 _DEFAULT_FLUSH_SECONDS = 15.0
-_DEFAULT_BUFFER_MAX_ENTRIES = 50000
+_DEFAULT_BUFFER_MAX_ENTRIES = 10000
+_HARD_BUFFER_MAX_ENTRIES = 50000
 _DEFAULT_BREAKER_THRESHOLD = 3
 _DEFAULT_BREAKER_COOLDOWN_SECONDS = 120.0
 
@@ -117,14 +119,19 @@ def _flush_seconds() -> float:
 
 
 def _buffer_max_entries() -> int:
+    # Keep an absolute RAM ceiling even if a host variable is misconfigured.
+    # On overflow, existing explicit coverage-loss accounting fails closed.
     return max(
         1000,
-        _safe_int(
-            os.getenv(
-                "DANK_ACTIVITY_BUFFER_MAX_ENTRIES",
-                str(_DEFAULT_BUFFER_MAX_ENTRIES),
+        min(
+            _HARD_BUFFER_MAX_ENTRIES,
+            _safe_int(
+                os.getenv(
+                    "DANK_ACTIVITY_BUFFER_MAX_ENTRIES",
+                    str(_DEFAULT_BUFFER_MAX_ENTRIES),
+                ),
+                _DEFAULT_BUFFER_MAX_ENTRIES,
             ),
-            _DEFAULT_BUFFER_MAX_ENTRIES,
         ),
     )
 
@@ -789,9 +796,10 @@ async def _flush_once() -> bool:
         if _PENDING_BATCH is None and _PENDING_SPLITS:
             _PENDING_BATCH = _PENDING_SPLITS.pop(0)
         if _PENDING_BATCH is None and _ACTIVITY_BUFFER:
-            items = sorted(
-                _ACTIVITY_BUFFER.items(), key=lambda pair: pair[1]["order"]
-            )[:_BATCH_CHUNK_SIZE]
+            # _stage_event always removes/reinserts updated keys: dict
+            # insertion order is already the last-arrival order. Taking only
+            # the first 500 avoids sorting up to 50,000 entries each flush.
+            items = list(islice(_ACTIVITY_BUFFER.items(), _BATCH_CHUNK_SIZE))
             snapshot = dict(items)
             for key, _ in items:
                 _ACTIVITY_BUFFER.pop(key, None)

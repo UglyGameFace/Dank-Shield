@@ -52,17 +52,13 @@ async def collect_membership_snapshot(guild: discord.Guild) -> MembershipSnapsho
             recovery_request_weight(member_count, page_size=1000),
             label=f"member fetch guild={int(guild.id)} members={member_count}",
         )
-        fetched_members = [
-            member
-            async for member in guild.fetch_members(limit=None)
-        ]
         return MembershipSnapshot(
-            members=tuple(fetched_members),
+            members=tuple(member async for member in guild.fetch_members(limit=None)),
             authoritative=True,
             source="discord_fetch_members",
         )
     except Exception as exc:
-        cached = tuple(list(getattr(guild, "members", []) or []))
+        cached = tuple(getattr(guild, "members", ()) or ())
         return MembershipSnapshot(
             members=cached,
             authoritative=False,

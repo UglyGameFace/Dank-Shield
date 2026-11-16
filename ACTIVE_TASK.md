@@ -1,3 +1,11 @@
+## OPTIMIZATION CONTINUATION (2026-11-16)
+
+- **Scope:** Extend existing PR #851 rather than start a competing resource PR. Current focus is reducing full-sync DB round trips and activity flush CPU without weakening membership authority, join/ticket history, or fail-closed activity coverage.
+- **Implementation:** member row prefetch in bounded 50-ID chunks with fallback to existing exact reads, no redundant Discord enumeration list, activity buffer 10k default/50k hard cap, O(500) chunk selection by insertion order instead of O(n log n) sort. Regression tests cover prefetch success/failure and activity ordering/caps.
+- **Validation and deployment:** new pushed head CI required, earlier green #851 checks don't validate this continuation. No production/DB/Discloud changes; live SHA and CPU measurements still unverified. Do not mistake task notes for deployment proof.
+
+---
+
 ## RESOURCE PRESSURE STABILIZATION (2026-11-16, in progress)
 
 - **Objective:** correct confirmed long-lived memory retention and CPU pressure on the existing Dank Shield runtime; no duplicate daemons, no Discord protection-policy changes.
