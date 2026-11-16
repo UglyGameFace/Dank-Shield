@@ -12,3 +12,5 @@ Scope: memory retention and CPU pressure on the single 1,000 MB Discloud process
 - Full-member synchronization reuses its existing authoritative tuple without making another full-guild list.
 
 No new daemon, deletion of persistent member evidence, changes to moderation policy, database migration, change to Discloud RAM, or production deploy. The 1,000 MB figure is a configured limit, not a measured RSS. Verify live memory/CPU/loop lag and real Discloud commit separately after gated release.
+
+The process-health heartbeat now reports CPU consumption as a percentage of one CPU core, plus resource-pressure cardinalities (join windows, proof cache, recent context, activity buffer, inflight extraction, cached PNG bytes). This is read-only, imports no new feature modules, and supports before/after performance verification without private member data.

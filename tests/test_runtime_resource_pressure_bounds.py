@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import gc
-import threading
 import weakref
 from collections import deque
 from datetime import timedelta
@@ -126,3 +125,14 @@ def test_extractor_thread_guard_rejects_when_workers_are_busy(monkeypatch):
     finally:
         for _ in range(held):
             media._EXTRACT_THREAD_SLOTS.release()
+
+
+def test_process_cpu_percent_and_resource_pressure_snapshot(monkeypatch):
+    from stoney_verify.startup_guards import process_health
+
+    assert process_health._process_cpu_percent(10.0, 2.0, 20.0, 4.0) == 20.0
+    assert process_health._process_cpu_percent(20.0, 4.0, 20.0, 5.0) == 0.0
+    assert process_health._process_cpu_percent(20.0, 4.0, 30.0, 3.0) == 0.0
+    snapshot = process_health._resource_pressure_snapshot()
+    assert "resource_pressure=" in snapshot
+    assert "proof_cache=" in snapshot

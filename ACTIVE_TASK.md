@@ -1,3 +1,12 @@
+## RESOURCE PRESSURE STABILIZATION (2026-11-16, in progress)
+
+- **Objective:** correct confirmed long-lived memory retention and CPU pressure on the existing Dank Shield runtime; no duplicate daemons, no Discord protection-policy changes.
+- **Current work:** PR #851, branch `fix/resource-pressure-bounds-20261116`, initialized from main `01de81cb71dcebccc7caaf346fb0fd06766c292f`. Bound joins, proof/alert/context caches and PNG bytes, switch member locks to weak ownership, cut role-count scans, limit timed-out yt-dlp threads and in-flight extraction, reuse member snapshot tuple, and expose read-only resource CPU/cache metrics.
+- **Validation:** initial PR compilation and SQL/security checks passed; full PR tests and production acceptance remain to be proven on the final immutable head. Compare exact-head checks before integration. Live Discloud process SHA, CPU/RSS measurements, restart causes, canary and rollback are not verified. No merge, DB/host changes or deployment has been performed in this task.
+- **Next:** resolve failures, complete exact-head CI, integrate only when safe, check operational metrics on the actual deployment. Historical checkpoints below are not task locks.
+
+---
+
 ## PRODUCTION STABILIZATION CHECKPOINT (2026-11-05)
 
 - **Objective / branch / PR:** stabilize Discord acknowledgements and integrate native birthdays plus welcome/activity setup on `fix/production-stabilization-20261105`, PR #831. PR #830 merged into `d0811f94f6da0fcdbb6356c045cd8b18d388fa98` during this assignment, so the remaining cohesive work uses a follow-up PR from that main. PR #828 and #829 are also merged. This checkpoint supersedes historical task locks for this authorized assignment; independent work remains preserved.
