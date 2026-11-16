@@ -432,13 +432,21 @@ class CleanupMemberSelect(discord.ui.UserSelect):
 
     async def callback(self, interaction: discord.Interaction) -> None:
         selected = self.values[0] if self.values else None
-        member = interaction.guild.get_member(int(getattr(selected, "id", 0) or 0))
-        if not isinstance(member, discord.Member):
-            await reply_ephemeral(
-                interaction,
-                "❌ That user is not currently a server member.",
+        member_id = int(getattr(selected, "id", 0) or 0)
+        if member_id <= 0:
+            return await reply_ephemeral(interaction, "❌ Select a member first.")
+        from .public_mod_command_center import resolve_current_mod_member, _lookup_failure
+        # The cleanup command owns its own defer/confirmation. Bound this
+        # pre-check so the selection cannot silently expire on Discord mobile.
+        try:
+            member, status = await asyncio.wait_for(
+                resolve_current_mod_member(interaction.guild, member_id),
+                timeout=2.0,
             )
-            return
+        except asyncio.TimeoutError:
+            member, status = None, "unavailable"
+        if member is None:
+            return await reply_ephemeral(interaction, _lookup_failure(status, member_id))
         from .public_members_cleanup_group import members_cleanup_user
 
         await _invoke_command(members_cleanup_user, interaction, member)
