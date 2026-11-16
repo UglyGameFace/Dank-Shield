@@ -52,8 +52,13 @@ async def collect_membership_snapshot(guild: discord.Guild) -> MembershipSnapsho
             recovery_request_weight(member_count, page_size=1000),
             label=f"member fetch guild={int(guild.id)} members={member_count}",
         )
+        # A completed REST enumeration is the only authority for departures.
+        # Build the immutable snapshot only after the whole iterator succeeds.
+        fetched_members = [
+            member async for member in guild.fetch_members(limit=None)
+        ]
         return MembershipSnapshot(
-            members=tuple(member async for member in guild.fetch_members(limit=None)),
+            members=tuple(fetched_members),
             authoritative=True,
             source="discord_fetch_members",
         )
