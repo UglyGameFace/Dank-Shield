@@ -1,3 +1,12 @@
+## TOKE CREATOR NOTIFICATION CLEANUP (2026-11-16)
+
+- **User report:** `/toke` GIF/photo composer automatically DMed the creator `💨 Your Toke call is ready: ...` immediately after it successfully published the public card. This is redundant because the creator initiated the event and the new card is already visible.
+- **Root cause / change:** `_on_toke_media_message` in `stoney_verify/toke_live_ui.py` unconditionally sent this success DM. Remove only the success DM, retaining both successful card publication and attempted deletion of the temporary GIF. Preserve failure DM for publishing errors and original GIF retention; preserve explicit opt-in Toke end reminders, plus slash command/ephemeral draft confirmations.
+- **Tests:** successful capture publishes/deletes without DM, forbidden source deletion does not create an unnecessary DM, failed card publication keeps its source and sends the existing failure notice.
+- **Release state:** PR #851 merged as `04730f44`; PR #852 merged as `c4e22706` after 11/11 PR-head checks passed. This new branch is `fix/toke-redundant-creator-success-dm-20261116`. Verify exact-head CI before merge; Discloud live SHA, restart behavior and confirmed mobile canary remain independently unverified. Historical checkpoints below are not task locks.
+
+---
+
 ## LIVE TOKE BUTTON ACKNOWLEDGEMENT INCIDENT (2026-11-16)
 
 - **Observed incident:** User-provided live Discloud log at 17:20:35 recorded `DANK-CBE96B12`, `component_unacknowledged` after 2.5 seconds, `dank:toke:v2:cheers`; the bot-authored message was current, but no acknowledgement was observed. This does **not** prove a CPU/RAM failure: heartbeats around the incident show 1.3–3.1% of one core, 261–271 MB RSS, ~34–38 tasks, and successful ten-guild metrics/activity cycles.
