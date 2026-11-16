@@ -25,11 +25,41 @@
       "historical_reuse": "Enforce this member's per-join reminder cap after restarts; never infer hostile behavior from an incomplete verification alone",
       "review_interval_days": 180
     },
+    "public.dank_verify_reminder_enforcement": {
+      "feature": "Opt-in automatic moderation after three confirmed scheduled verification reminder deliveries",
+      "owner": "stoney_verify.verification_reminders.ReminderWorker.cleanup_stale_enforcement_history",
+      "purpose": "Per-join durable success receipts and one-shot action reservation to prevent duplicate kicks/bans across restarts",
+      "stored_fields": [
+        "guild_id",
+        "user_id",
+        "joined_at",
+        "delivered_count",
+        "last_delivered_at",
+        "action_claimed_at",
+        "action_result"
+      ],
+      "contains_message_content": false,
+      "retention_rule": "Retain while the user is still a guild member; delete after 90 days without a delivery only after Discord REST confirms Unknown Member (10007), matching join generation and stale delivery time",
+      "cleanup_interval_seconds": 3600,
+      "max_candidates_per_cleanup": 12,
+      "expiry_index": "idx_dank_verify_reminder_enforcement_due",
+      "preserve_when": "Member remains in guild, Discord access or guild unavailable, join generation changed or DB update failed",
+      "backup_class": "operational_counters",
+      "migration": "postgres/migrations/202611160001_verify_reminder_enforcement.sql",
+      "retention_class": "operational_control",
+      "historical_reuse": "Prevent reprocessing confirmed-delivery count or issuing a second automatic removal after restart/shard failover",
+      "review_interval_days": 180
+    },
     "public.dank_verify_manual_guild_budget": {
       "feature": "Staff-confirmed manual Simple Verify reminders",
       "owner": "stoney_verify.verification_reminder_postgres.reserve_manual_batch_sync",
       "purpose": "One minute between manual batches and at most four batches per hour per guild",
-      "stored_fields": ["guild_id", "last_claimed_at", "window_started_at", "window_claims"],
+      "stored_fields": [
+        "guild_id",
+        "last_claimed_at",
+        "window_started_at",
+        "window_claims"
+      ],
       "contains_message_content": false,
       "retention_rule": "One budget row per participating guild; never delete active guild rate limits automatically",
       "cleanup_interval_seconds": 86400,
@@ -46,7 +76,13 @@
       "feature": "Staff-confirmed manual Simple Verify reminders",
       "owner": "stoney_verify.verification_reminders.ReminderWorker.cleanup_stale_manual_history",
       "purpose": "Independent durable six-hour manual member cooldown for server-selected channel or DM batches, with legacy capped attempt counter",
-      "stored_fields": ["guild_id", "user_id", "joined_at", "last_claimed_at", "attempts"],
+      "stored_fields": [
+        "guild_id",
+        "user_id",
+        "joined_at",
+        "last_claimed_at",
+        "attempts"
+      ],
       "contains_message_content": false,
       "retention_rule": "Retain while Discord membership remains; only delete after 90 days idle AND REST-confirmed Unknown Member (10007), matching join generation",
       "cleanup_interval_seconds": 3600,
