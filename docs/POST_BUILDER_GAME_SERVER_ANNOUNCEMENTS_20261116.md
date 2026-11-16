@@ -36,3 +36,22 @@ The user supplied the public server address `23.109.125.116:20229` and named Cob
 Run the exact-head Toke, Embed Studio, Mobile Panel, full Python suite, SQL and public command contracts before merging. Post-merge GitHub checks and Discloud live SHA require independent verification. In production, test Look & Images, Pick a Layout, Game Server Details, modal submit, Undo, Save/Restore, and Preview & Post using a fresh and a recovered private editor. An expired private panel still must be reopened.
 
 No new worker, database migration, persistent ViewStore patch, command root, external service or environment setting.
+
+## Discord movie nights and regular community events
+
+The original gaming layouts were missing obvious Discord social formats. The same unified **Pick a Layout** dropdown now includes eight additional event designs, 20 total (below Discord's 25-option maximum):
+
+- **Movie Night:** film pick, permitted watch method, venue, time, and RSVP
+- **Live Watch Party:** stream/esports/event info, meeting place and participation
+- **Trivia Night:** topics, rules, teams, time, and play location
+- **Karaoke:** song queue, microphone/voice rules, time and channel
+- **Community Hangout:** casual voice lounge, topics, and newcomer guidance
+- **Giveaway:** real prize and eligibility, entry steps, and close time
+- **AMA / Q&A:** hosts, subjects, question instructions and schedule
+- **Creative Contest:** theme, allowed submissions, judging, and deadline
+
+Each design has its own title, accent, short promotion, organizer label, four usable fields, and footer. These are **editable announcements**, not automatic Discord Scheduled Events, giveaway winners, music playback, or movie streams. Staff must fill in a real time and location, and provide only watch methods or media access they have permission to use.
+
+The shared **Look & Images → Event Details** form edits the four things members need to know: **when, where, what is happening, and how to join**. It updates corresponding event-specific fields rather than adding duplicates, and doesn't erase extra fields, existing art, URLs, or saved copy. Use **Write Message** for the event headline and custom description; use **Add Pictures** for permitted artwork, and **Add Buttons** to link a legitimate event/RSVP page. Publication still requires the existing explicit preview and confirmation.
+
+To build The 420 Lobby movie night, select **Movie Night**, open **Event Details**, fill in the actual movie title/rating, date/time/timezone, authorized watch location and participation instructions, add a poster image if licensed for use, then preview and confirm in announcements. Do not promise simultaneous streaming access without verifying the platform and viewing rights.
