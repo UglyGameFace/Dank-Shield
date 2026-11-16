@@ -1,3 +1,12 @@
+## POST BUILDER: DISCORD SOCIAL EVENTS EXPANSION (2026-11-16)
+
+- **Continuation on the existing open PR #855** (no separate competing branch): added eight more mobile-ready Discord event layouts: Movie Night, Live Watch Party, Trivia, Karaoke, Community Hangout, Giveaway, AMA/Q&A, and Creative Contest. The combined picker now has 20 editable options, below Discord's 25-option limit.
+- **Unified editing:** Look & Images now offers a separate Event Details modal (when, where, activity/film/host/prize details, how to join), preserving existing copy, styling, and unrelated sections. Movie content/streams, music access, giveaways and scheduled events are **not** automatically provided; staff enter actual event details and publish only after preview confirmation.
+- **Evidence:** Regression contracts added for all eight event designs, no auto-publishing/phantom prizes, valid embeds and selection, mobile row limits, quick form updates, no duplicate fields, copy preservation and fail-closed invalid sizes. Exact final-head CI must re-run; previous green results for an earlier PR head are superseded.
+- **Release:** PR #855 remains the review/integration owner for both response-timing improvements and new layouts. After merge, confirm exact main branch and Discloud live deployed fingerprint; exercise the button and modal on Discord Android. No changes to independent #853/#854 Toke PRs.
+
+---
+
 ## POST BUILDER MOBILE ACK & GAMING LAYOUTS (2026-11-16)
 
 - **User report:** Screenshot of private Post Builder (old Feature Showcase draft in announcements) shows `Dank Shield didn't respond in time` beside Look & Images. Without a matching callback traceback the precise cause is unproven; one identified risk is starting menu render/autosave before Discord acknowledgement, while private views also naturally expire after 15 minutes.
