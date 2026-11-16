@@ -146,7 +146,7 @@ class FindModMemberByIdModal(discord.ui.Modal, title="Find Member by Discord ID"
     user_id = discord.ui.TextInput(
         label="Current server member ID or mention",
         placeholder="Paste the full numeric Discord ID",
-        max_length=23,
+        max_length=24,
     )
 
     def __init__(self, owner_id: int, *, browser: Any = None) -> None:
