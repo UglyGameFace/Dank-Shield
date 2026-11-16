@@ -57,6 +57,8 @@ class ReminderPolicy:
     message: str = ""
     delivery: str = "dm"
     reminder_channel_id: int = 0
+    after_max_action: str = "none"  # none, kick, ban; never opt in implicitly
+    after_max_grace_hours: int = 24
 
     def to_payload(self) -> dict[str, Any]:
         return {
@@ -67,6 +69,8 @@ class ReminderPolicy:
             "message": self.message,
             "delivery": self.delivery,
             "reminder_channel_id": str(self.reminder_channel_id) if self.reminder_channel_id else "",
+            "after_max_action": self.after_max_action,
+            "after_max_grace_hours": self.after_max_grace_hours,
         }
 
 
@@ -83,6 +87,8 @@ def parse_policy(cfg: Mapping[str, Any]) -> ReminderPolicy:
         message=str(raw.get("message") or "").strip()[:240],
         delivery="channel" if raw.get("delivery") == "channel" else "dm",
         reminder_channel_id=max(0, _as_int(raw.get("reminder_channel_id"), 0)),
+        after_max_action=(raw.get("after_max_action") if raw.get("after_max_action") in ("kick", "ban") else "none"),
+        after_max_grace_hours=max(1, min(720, _as_int(raw.get("after_max_grace_hours"), 24))),
     )
 
 
@@ -355,6 +361,15 @@ class ReminderWorker:
                             reminder_text(guild, channel, cfg, policy),
                             allowed_mentions=discord.AllowedMentions.none(),
                         )
+                    # Only Discord-acknowledged scheduled deliveries count. Manual
+                    # sends and failed DMs never qualify someone for removal.
+                    if policy.after_max_action in {"kick", "ban"} and policy.max_reminders == 3:
+                        from .verification_reminder_enforcement import record_delivery_sync
+                        recorded = await asyncio.to_thread(
+                            record_delivery_sync, guild.id, current.id, current.joined_at,
+                        )
+                        if not recorded:
+                            print(f"⚠️ verify enforcement delivery receipt unavailable guild={guild.id} member={current.id}")
                 except (discord.Forbidden, discord.HTTPException) as exc:
                     print(f"ℹ️ verify reminder delivery unavailable guild={guild.id} kind={type(exc).__name__}")
                 await asyncio.sleep(0.5)
@@ -387,6 +402,18 @@ class ReminderWorker:
             visited += 1
             claimed += await self.scan_guild(guild, remaining=MAX_DELIVERIES_PER_PASS - claimed)
             await asyncio.sleep(0)
+        # Enforcement is a separate bounded, automatic-only pass; pressing the
+        # staff "Check Scheduled Due" button must never execute a removal.
+        from .verification_reminder_enforcement import enforce_guild
+        actions_remaining = 3
+        for guild in batch:
+            if actions_remaining <= 0:
+                break
+            if not getattr(guild, "me", None) or not callable(getattr(guild, "fetch_member", None)):
+                continue
+            actions_remaining -= await enforce_guild(
+                guild, limit=min(2, actions_remaining),
+            )
         # Resume at the first guild we could not scan when the global budget
         # was exhausted. Otherwise advance the normal batch window. A complete
         # sweep of a small guild set also rotates its first guild, so one busy
