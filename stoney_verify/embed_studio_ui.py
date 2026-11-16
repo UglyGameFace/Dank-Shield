@@ -718,30 +718,33 @@ class StudioGameServerModal(_ProjectModal):
     def __init__(self, session: StudioSession) -> None:
         super().__init__(session, "Game Server Details")
         current = session.project["embeds"][session.active]["fields"]
-        def previous(keys: tuple[str, ...]) -> str:
-            return next((f["value"] for f in current if f["name"] in keys), "")
+        def previous(keys: tuple[str, ...], limit: int) -> str:
+            value = next((f["value"] for f in current if f["name"] in keys), "")
+            # A long value edited in Extra Text Sections must not crash this
+            # smaller quick form or get silently truncated on submission.
+            return value if len(value) <= limit else ""
 
         self.address = discord.ui.TextInput(
             label="Server address / IP:port", required=False, max_length=180,
             placeholder="play.example.net:25565",
-            default=previous(_GAME_DETAIL_FIELDS[0][2]),
+            default=previous(_GAME_DETAIL_FIELDS[0][2], 180),
         )
         self.platforms = discord.ui.TextInput(
             label="Supported editions or platforms", required=False, max_length=180,
             placeholder="Java / Bedrock / PC / console • only what works",
-            default=previous(_GAME_DETAIL_FIELDS[1][2]),
+            default=previous(_GAME_DETAIL_FIELDS[1][2], 180),
         )
         self.features = discord.ui.TextInput(
             label="Verified mods and best features", required=False,
             max_length=700, style=discord.TextStyle.paragraph,
             placeholder="Installed mods, custom worlds, events, gameplay",
-            default=previous(_GAME_DETAIL_FIELDS[2][2]),
+            default=previous(_GAME_DETAIL_FIELDS[2][2], 700),
         )
         self.join = discord.ui.TextInput(
             label="How to join", required=False, max_length=500,
             style=discord.TextStyle.paragraph,
             placeholder="Game version, modpack, steps to connect",
-            default=previous(_GAME_DETAIL_FIELDS[3][2]),
+            default=previous(_GAME_DETAIL_FIELDS[3][2], 500),
         )
         for item in (self.address, self.platforms, self.features, self.join):
             self.add_item(item)
