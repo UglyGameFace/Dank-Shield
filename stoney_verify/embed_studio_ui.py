@@ -310,6 +310,10 @@ class StudioDesignTools(_StudioView):
     async def theme(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
         await _themes(interaction, self.session)
 
+    @discord.ui.button(label="Game Server Details", emoji="🎮", style=discord.ButtonStyle.primary, row=1)
+    async def game_details(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        await interaction.response.send_modal(StudioGameServerModal(self.session))
+
     @discord.ui.button(label="Back to My Post", emoji="◀️", style=discord.ButtonStyle.secondary, row=2)
     async def back(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
         await _home(interaction, self.session)
@@ -322,6 +326,7 @@ async def _design_tools(interaction: discord.Interaction, session: StudioSession
             "Choose **Colors & Style** to change how the post looks. "
             "**Add Pictures** for new image links, **Saved Pictures** to reuse images, "
             "or **Reuse Server Style** for a look your staff already saved. "
+            "**Game Server Details** quickly edits address, editions, mods and join steps. "
             "None of these options posts anything."
         ),
         view=StudioDesignTools(session),
@@ -683,6 +688,77 @@ class StudioAppearanceModal(_ProjectModal):
     async def on_submit(self, interaction: discord.Interaction) -> None:
         values = {key: str(item.value or "") for key, item in self.inputs.items()}
         await self.commit(interaction, lambda p: p["embeds"][self.session.active].update(values))
+
+
+_GAME_DETAIL_FIELDS = (
+    ("address", "🌍 SERVER ADDRESS", ("🌍 SERVER ADDRESS",)),
+    ("platforms", "🎮 SUPPORTED EDITIONS", ("🎮 SUPPORTED EDITIONS", "🕹️ GAMES & PLATFORMS")),
+    ("features", "🧩 WHAT'S INSIDE", ("🧩 WHAT'S INSIDE", "🧩 FEATURED MODS", "🌟 WHY JOIN?")),
+    ("join", "🚪 START PLAYING", ("🚪 START PLAYING", "📥 HOW TO CONNECT", "🔗 HOW TO JOIN")),
+)
+
+
+def _update_game_server_fields(project: dict[str, Any], index: int, values: dict[str, str]) -> None:
+    """Update only supplied details; preserve other fields, art, buttons and copy."""
+    fields = project["embeds"][index]["fields"]
+    for key, title, aliases in _GAME_DETAIL_FIELDS:
+        value = values.get(key, "").strip()
+        if not value:
+            continue
+        existing = next((field for field in fields if field["name"] in aliases), None)
+        if existing is not None:
+            existing["value"] = value
+        else:
+            fields.append({"name": title, "value": value, "inline": False})
+
+
+class StudioGameServerModal(_ProjectModal):
+    """One mobile-friendly form for the facts people actually need to join."""
+
+    def __init__(self, session: StudioSession) -> None:
+        super().__init__(session, "Game Server Details")
+        current = session.project["embeds"][session.active]["fields"]
+        def previous(keys: tuple[str, ...]) -> str:
+            return next((f["value"] for f in current if f["name"] in keys), "")
+
+        self.address = discord.ui.TextInput(
+            label="Server address / IP:port", required=False, max_length=180,
+            placeholder="play.example.net:25565",
+            default=previous(_GAME_DETAIL_FIELDS[0][2]),
+        )
+        self.platforms = discord.ui.TextInput(
+            label="Supported editions or platforms", required=False, max_length=180,
+            placeholder="Java / Bedrock / PC / console • only what works",
+            default=previous(_GAME_DETAIL_FIELDS[1][2]),
+        )
+        self.features = discord.ui.TextInput(
+            label="Verified mods and best features", required=False,
+            max_length=700, style=discord.TextStyle.paragraph,
+            placeholder="Installed mods, custom worlds, events, gameplay",
+            default=previous(_GAME_DETAIL_FIELDS[2][2]),
+        )
+        self.join = discord.ui.TextInput(
+            label="How to join", required=False, max_length=500,
+            style=discord.TextStyle.paragraph,
+            placeholder="Game version, modpack, steps to connect",
+            default=previous(_GAME_DETAIL_FIELDS[3][2]),
+        )
+        for item in (self.address, self.platforms, self.features, self.join):
+            self.add_item(item)
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        values = {
+            "address": str(self.address.value or ""),
+            "platforms": str(self.platforms.value or ""),
+            "features": str(self.features.value or ""),
+            "join": str(self.join.value or ""),
+        }
+        if not any(value.strip() for value in values.values()):
+            return await _say(interaction, "Add at least one server detail. Your draft is unchanged.")
+        index = self.session.active
+        await self.commit(
+            interaction, lambda project: _update_game_server_fields(project, index, values),
+        )
 
 
 class MediaSaveModal(discord.ui.Modal, title="Save Image or GIF Link"):
