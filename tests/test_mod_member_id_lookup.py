@@ -5,9 +5,12 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 
 import discord
+import pytest
 
 from stoney_verify.commands_ext import public_mod_command_center as mod
 from stoney_verify.commands_ext import member_command_center as members
+from stoney_verify.commands_ext import moderation
+from stoney_verify.commands_ext import public_mod_group
 
 
 def run(coro):
@@ -128,3 +131,47 @@ def test_live_members_picker_queries_rest_even_when_cache_is_empty(monkeypatch):
     run(picker.callback(interaction))
     assert events[0:2] == ["deferred", "rest"]
     assert any("could not verify" in str(item) for item in events)
+
+
+def test_ban_id_resolution_does_not_treat_discord_errors_as_absence():
+    class Guild:
+        def __init__(self, failure):
+            self.failure = failure
+        async def fetch_ban(self, obj):
+            raise _not_found(10026)
+        async def fetch_member(self, member_id):
+            raise self.failure
+        def get_member(self, uid):
+            raise AssertionError("Do not trust a possibly stale member cache")
+
+    with pytest.raises(moderation.MemberLookupUnavailable):
+        run(moderation._resolve_ban_toggle_target(
+            Guild(_forbidden()), "1531117218291646605",
+        ))
+    with pytest.raises(moderation.MemberLookupUnavailable):
+        run(moderation._resolve_ban_toggle_target(
+            Guild(_not_found(10004)), "1531117218291646605",
+        ))
+
+    uid, member, ban_entry = run(moderation._resolve_ban_toggle_target(
+        Guild(_not_found(10007)), "1531117218291646605",
+    ))
+    assert uid == 1531117218291646605 and member is None and ban_entry is None
+
+
+def test_administrator_does_not_bypass_higher_discord_role():
+    actor = Mock(spec=discord.Member)
+    actor.id = 20
+    actor.top_role = 10
+    actor.guild_permissions.administrator = True
+    target = Mock(spec=discord.Member)
+    target.id = 30
+    target.top_role = 15
+    interaction = SimpleNamespace(
+        user=actor, guild=SimpleNamespace(owner_id=99),
+    )
+    okay, message = public_mod_group._actor_can_moderate_target(
+        interaction=interaction, target=target, action="kick",
+    )
+    assert not okay
+    assert "higher role" in message
