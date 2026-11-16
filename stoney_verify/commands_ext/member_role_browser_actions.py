@@ -147,18 +147,30 @@ class MemberActionView(OwnedView):
         self,
         interaction: discord.Interaction,
     ) -> Optional[discord.Member]:
-        target = self._member(interaction.guild)
-        if target is not None:
-            return target
+        guild = interaction.guild
+        if guild is None:
+            await reply_ephemeral(interaction, "❌ This moderation action requires a server.")
+            return None
         try:
-            fetched = await interaction.guild.fetch_member(self.member_id)
-            return fetched if isinstance(fetched, discord.Member) else None
-        except Exception:
+            fetched = await guild.fetch_member(self.member_id)
+        except discord.NotFound as exc:
+            if getattr(exc, "code", None) == 10007:
+                message = "ℹ️ Discord confirms that member is no longer in the server."
+            else:
+                message = "⚠️ Discord could not confirm current membership. No action was taken."
+            await reply_ephemeral(interaction, message)
+            return None
+        except (discord.Forbidden, discord.HTTPException, Exception):
             await reply_ephemeral(
-                interaction,
-                "❌ That member is no longer in the server.",
+                interaction, "⚠️ Live member lookup failed. No action was taken; try again.",
             )
             return None
+        if isinstance(fetched, discord.Member):
+            return fetched
+        await reply_ephemeral(
+            interaction, "⚠️ Discord returned incomplete membership data. No action was taken.",
+        )
+        return None
 
     @discord.ui.button(
         label="Verify",
@@ -172,6 +184,7 @@ class MemberActionView(OwnedView):
         button: discord.ui.Button,
     ) -> None:
         _ = button
+        await interaction.response.defer(ephemeral=True, thinking=True)
         target = await self._fresh_target(interaction)
         if target is None:
             return
@@ -187,7 +200,6 @@ class MemberActionView(OwnedView):
                 "❌ Verification blocked:\n• " + "\n• ".join(blockers),
             )
             return
-        await interaction.response.defer(ephemeral=True, thinking=True)
         async with action_lock(interaction.guild.id, target.id, "verify"):
             ok, message = await apply_staff_basic_verification(
                 interaction.guild,
@@ -218,6 +230,7 @@ class MemberActionView(OwnedView):
         button: discord.ui.Button,
     ) -> None:
         _ = button
+        await interaction.response.defer(ephemeral=True, thinking=True)
         target = await self._fresh_target(interaction)
         if target is not None:
             await open_review_panel(interaction, target)
@@ -342,9 +355,10 @@ class MemberActionView(OwnedView):
         button: discord.ui.Button,
     ) -> None:
         _ = button
+        await interaction.response.defer()
         target = await self._fresh_target(interaction)
         if target is not None:
-            await interaction.response.edit_message(
+            await interaction.edit_original_response(
                 embed=member_detail_embed(target, self.browser.role),
                 view=self,
             )
@@ -381,6 +395,7 @@ class MemberRoleSelect(discord.ui.RoleSelect):
 
     async def callback(self, interaction: discord.Interaction) -> None:
         role = self.values[0] if self.values else None
+        await interaction.response.defer(ephemeral=True, thinking=True)
         target = await self.parent_view.parent._fresh_target(interaction)
         if not isinstance(role, discord.Role) or target is None:
             return
@@ -397,7 +412,6 @@ class MemberRoleSelect(discord.ui.RoleSelect):
                 "❌ Role action blocked:\n• " + "\n• ".join(blockers),
             )
             return
-        await interaction.response.defer(ephemeral=True, thinking=True)
         action_label = (
             "added" if self.parent_view.action == "add_role" else "removed"
         )
@@ -467,9 +481,10 @@ class MemberRoleActionView(OwnedView):
         button: discord.ui.Button,
     ) -> None:
         _ = button
+        await interaction.response.defer()
         target = await self.parent._fresh_target(interaction)
         if target is not None:
-            await interaction.response.edit_message(
+            await interaction.edit_original_response(
                 embed=member_detail_embed(target, self.parent.browser.role),
                 view=self.parent,
             )
@@ -488,6 +503,7 @@ class MemberMessageModal(discord.ui.Modal, title="Message member"):
         self.parent = parent
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
+        await interaction.response.defer(ephemeral=True, thinking=True)
         if not await require_review(interaction):
             return
         target = await self.parent._fresh_target(interaction)
@@ -505,7 +521,6 @@ class MemberMessageModal(discord.ui.Modal, title="Message member"):
                 "❌ Message blocked:\n• " + "\n• ".join(blockers),
             )
             return
-        await interaction.response.defer(ephemeral=True, thinking=True)
         text = str(self.message.value or "").strip()
         try:
             await target.send(text)
@@ -587,6 +602,7 @@ class MemberTimeoutModal(discord.ui.Modal, title="Timeout member"):
         return str(getattr(self.reason.component, "value", "") or "").strip()
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
+        await interaction.response.defer(ephemeral=True, thinking=True)
         if not await require_review(interaction):
             return
         target = await self.parent._fresh_target(interaction)
@@ -609,7 +625,6 @@ class MemberTimeoutModal(discord.ui.Modal, title="Timeout member"):
             )
             return
         reason = self._reason_text()
-        await interaction.response.defer(ephemeral=True, thinking=True)
         async with action_lock(interaction.guild.id, target.id, "timeout"):
             try:
                 until = discord.utils.utcnow() + timedelta(minutes=minutes)
