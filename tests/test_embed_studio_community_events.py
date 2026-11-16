@@ -139,9 +139,9 @@ def test_event_modal_loads_real_values_and_never_invents_a_date():
 def test_quick_event_modal_preserves_long_existing_custom_copy():
     session = ui.StudioSession(guild_id=111, owner_id=222)
     session.project = project_for_preset("giveaway")
-    session.apply(lambda p: ui._update_event_details_fields(p, 0, {
-        "topic": "x" * 900,
-    }))
+    # Simulate content authored earlier in the full Extra Text Sections editor.
+    # The compact Event Details modal is intentionally limited to 700 chars.
+    session.apply(lambda p: p["embeds"][0]["fields"][2].update(value="x" * 900))
     form = ui.StudioEventDetailsModal(session)
     assert not form.topic.default
     assert session.project["embeds"][0]["fields"][2]["value"] == "x" * 900
