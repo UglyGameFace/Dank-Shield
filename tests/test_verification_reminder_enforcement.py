@@ -246,5 +246,3 @@ def test_enforcement_ignores_staff_control_roles_and_moderation_permissions(monk
     member.roles = [SimpleNamespace(id=12345)]
     assert run(enforcement.enforce_guild(guild)) == 0
     assert actions == [] and outcomes == []
-
-
