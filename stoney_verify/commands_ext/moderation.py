@@ -119,6 +119,10 @@ async def _fetch_ban_entry_by_id(guild: discord.Guild, user_id: int) -> Optional
         return None
 
 
+class MemberLookupUnavailable(RuntimeError):
+    """Discord could not confirm whether a supplied ID is a current member."""
+
+
 async def _resolve_ban_toggle_target(
     guild: discord.Guild,
     raw_target: str,
@@ -152,20 +156,19 @@ async def _resolve_ban_toggle_target(
                 ban_entry,
             )
 
+        # Cache absence is NOT proof that a target is outside the guild.
+        # Otherwise a transient REST failure could bypass role-hierarchy checks
+        # by falling back to a bare discord.Object ban-by-ID.
         try:
-            target_member = guild.get_member(
-                int(user_id)
-            )
-        except Exception:
+            target_member = await guild.fetch_member(int(user_id))
+        except discord.NotFound as exc:
+            if getattr(exc, "code", None) != 10007:
+                raise MemberLookupUnavailable from exc
             target_member = None
-
-        if target_member is None:
-            try:
-                target_member = await guild.fetch_member(
-                    int(user_id)
-                )
-            except Exception:
-                target_member = None
+        except (discord.Forbidden, discord.HTTPException) as exc:
+            raise MemberLookupUnavailable from exc
+        except Exception as exc:
+            raise MemberLookupUnavailable from exc
     else:
         target_member = await resolve_member_from_target(
             guild,
