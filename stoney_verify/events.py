@@ -8,6 +8,7 @@ import asyncio
 import os
 import traceback
 from collections import deque
+from weakref import WeakValueDictionary
 from datetime import timedelta
 from typing import Any, Deque, Dict, List, Optional, Tuple
 
@@ -128,26 +129,17 @@ def _ensure_gid_dict(container: Any, gid: int) -> None:
             pass
 
 
+# A join burst needs only a bounded recent window, never every join since boot.
+_MAX_RAID_JOIN_TIMESTAMPS = 4096
+
+
 def _ensure_gid_join_deque(container: Any, gid: int) -> None:
     try:
-        if gid not in container or container.get(gid) is None:
-            container[gid] = deque()
-            return
-
-        current = container[gid]
-        if isinstance(current, deque):
-            return
-
-        if isinstance(current, list):
-            container[gid] = deque(current)
-            return
-
-        container[gid] = deque()
+        current = container.get(gid)
+        if not isinstance(current, deque) or current.maxlen != _MAX_RAID_JOIN_TIMESTAMPS:
+            container[gid] = deque(current if isinstance(current, (list, deque)) else (), maxlen=_MAX_RAID_JOIN_TIMESTAMPS)
     except Exception:
-        try:
-            container[gid] = deque()
-        except Exception:
-            pass
+        container[gid] = deque(maxlen=_MAX_RAID_JOIN_TIMESTAMPS)
 
 
 def _member_has_role_id(member: discord.Member, role_id: int) -> bool:
@@ -710,7 +702,7 @@ async def _maybe_finish_vc_sessions_after_voice_change(
 # Guards
 _AUTO_UV_REMOVAL_TS: Dict[Tuple[int, int], Any] = {}
 _JOIN_VERIFY_TASKS: Dict[Tuple[int, int], asyncio.Task] = {}
-_JOIN_PROCESS_LOCKS: Dict[Tuple[int, int], asyncio.Lock] = {}
+_JOIN_PROCESS_LOCKS: WeakValueDictionary[Tuple[int, int], asyncio.Lock] = WeakValueDictionary()
 
 
 def _member_runtime_key(guild_id: Any, member_id: Any) -> Tuple[int, int]:
@@ -1569,6 +1561,8 @@ async def on_member_remove(member: discord.Member):
         # Live member changes invalidate cached *stored* evidence. This is
         # cheap, non-I/O, and never replaces the Discord REST status lookup.
         invalidate_member_intelligence(gid, int(member.id))
+        from .members_new.join_context_service import forget_recent_join_context
+        forget_recent_join_context(gid, int(member.id))
 
         try:
             _ensure_gid_dict(RAID_RECENT_JOINERS, gid)

@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import re
 import traceback
-from collections import defaultdict, deque
+from collections import OrderedDict, defaultdict, deque
 from datetime import datetime, timedelta, timezone
 from difflib import SequenceMatcher
 from typing import Any, Deque, Dict, List, Optional, Set, Tuple
@@ -18,12 +18,27 @@ from .member_risk_engine import enrich_member_risk_profile
 # Internal caches
 # ============================================================
 
-_RECENT_JOIN_PROFILES: Dict[int, Deque[Dict[str, Any]]] = defaultdict(deque)
+_RECENT_JOIN_PROFILE_LIMIT = 512
+_RECENT_JOIN_PROFILES: Dict[int, Deque[Dict[str, Any]]] = defaultdict(
+    lambda: deque(maxlen=_RECENT_JOIN_PROFILE_LIMIT)
+)
 _LAST_RAID_ALERT_AT: Dict[int, datetime] = {}
 _LAST_CLUSTER_ALERT_AT: Dict[Tuple[int, str], datetime] = {}
 
-_HARD_PROOF_CACHE: Dict[Tuple[int, int], Tuple[datetime, Dict[str, Any]]] = {}
+_HARD_PROOF_CACHE: OrderedDict[Tuple[int, int], Tuple[datetime, Dict[str, Any]]] = OrderedDict()
 _PROOF_CACHE_TTL_SECONDS = 60
+_PROOF_CACHE_MAX_ENTRIES = 2048
+_CLUSTER_ALERT_CACHE_MAX_ENTRIES = 2048
+
+
+def _prune_hard_proof_cache() -> None:
+    while _HARD_PROOF_CACHE:
+        key = next(iter(_HARD_PROOF_CACHE))
+        recorded_at = _HARD_PROOF_CACHE[key][0]
+        if _proof_cache_valid(recorded_at) and len(_HARD_PROOF_CACHE) <= _PROOF_CACHE_MAX_ENTRIES:
+            break
+        _HARD_PROOF_CACHE.popitem(last=False)
+
 
 _USERNAME_TOKEN_RE = re.compile(r"[a-z0-9]+")
 _REPEAT_CHAR_RE = re.compile(r"(.)\1{3,}")
@@ -401,6 +416,7 @@ def _query_manual_alt_links_sync(guild_id: int, user_id: int) -> List[Dict[str, 
 
 def _load_hard_identity_context(guild_id: int, user_id: int) -> Dict[str, Any]:
     cache_key = (int(guild_id), int(user_id))
+    _prune_hard_proof_cache()
     cached = _HARD_PROOF_CACHE.get(cache_key)
     if cached and _proof_cache_valid(cached[0]):
         return dict(cached[1])
@@ -478,7 +494,9 @@ def _load_hard_identity_context(guild_id: int, user_id: int) -> Dict[str, Any]:
         "manual_not_linked_ids": set(manual_not_linked_ids),
     }
 
+    _HARD_PROOF_CACHE.pop(cache_key, None)
     _HARD_PROOF_CACHE[cache_key] = (_utcnow(), dict(context))
+    _prune_hard_proof_cache()
     return dict(context)
 
 
@@ -599,13 +617,24 @@ def _recent_join_burst_count(guild_id: int) -> int:
         cutoff = _utcnow() - timedelta(seconds=_raid_window_seconds())
         count = 0
 
-        for ts in list(dq):
+        # Expire old joins instead of rescanning the entire process lifetime.
+        while dq:
+            try:
+                expired = dq[0] < cutoff
+            except Exception:
+                expired = True
+            if not expired:
+                break
+            if isinstance(dq, deque):
+                dq.popleft()
+            else:
+                del dq[0]
+        for ts in dq:
             try:
                 if ts >= cutoff:
                     count += 1
             except Exception:
                 continue
-
         return count
     except Exception:
         return 0
@@ -692,7 +721,7 @@ def _record_join_profile(member: discord.Member, profile: Dict[str, Any]) -> Non
 
         # Remove any stale copies of the same member first so the cache
         # cannot self-inflate cluster counts later in the join flow.
-        kept: Deque[Dict[str, Any]] = deque()
+        kept: Deque[Dict[str, Any]] = deque(maxlen=_RECENT_JOIN_PROFILE_LIMIT)
         for row in list(dq):
             try:
                 row_uid = int(str(row.get("user_id") or "0") or 0)
@@ -1524,6 +1553,9 @@ def track_member_join_risk(member: discord.Member) -> Dict[str, Any]:
             now = _utcnow()
             if last_alert is None or (now - last_alert).total_seconds() >= _cluster_alert_cooldown_seconds():
                 _LAST_CLUSTER_ALERT_AT[cache_key] = now
+                if len(_LAST_CLUSTER_ALERT_AT) > _CLUSTER_ALERT_CACHE_MAX_ENTRIES:
+                    oldest = min(_LAST_CLUSTER_ALERT_AT, key=_LAST_CLUSTER_ALERT_AT.__getitem__)
+                    _LAST_CLUSTER_ALERT_AT.pop(oldest, None)
     except Exception:
         pass
 

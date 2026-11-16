@@ -37,6 +37,30 @@ _INVITE_USES_CACHE: Dict[int, Dict[str, int]] = {}
 _INVITE_META_CACHE: Dict[int, Dict[str, Dict[str, Any]]] = {}
 _VANITY_USES_CACHE: Dict[int, Optional[int]] = {}
 _RECENT_JOIN_CONTEXT: Dict[Tuple[int, int], Tuple[float, Dict[str, Any]]] = {}
+_RECENT_JOIN_CONTEXT_MAX_ENTRIES = 2048
+_RECENT_JOIN_CONTEXT_TTL_SECONDS = 180
+
+
+def _prune_recent_join_context(now: float) -> None:
+    # Insertion-ordered dict: the oldest record can be discarded in O(1).
+    while _RECENT_JOIN_CONTEXT:
+        key = next(iter(_RECENT_JOIN_CONTEXT))
+        recorded_at = _RECENT_JOIN_CONTEXT[key][0]
+        if now - recorded_at <= _RECENT_JOIN_CONTEXT_TTL_SECONDS and len(_RECENT_JOIN_CONTEXT) <= _RECENT_JOIN_CONTEXT_MAX_ENTRIES:
+            break
+        _RECENT_JOIN_CONTEXT.pop(key, None)
+
+
+def _remember_recent_join_context(guild_id: int, user_id: int, context: Dict[str, Any]) -> None:
+    key = (int(guild_id), int(user_id))
+    now = time.monotonic()
+    _RECENT_JOIN_CONTEXT.pop(key, None)  # Rejoins move to newest position.
+    _RECENT_JOIN_CONTEXT[key] = (now, dict(context))
+    _prune_recent_join_context(now)
+
+
+def forget_recent_join_context(guild_id: int, user_id: int) -> None:
+    _RECENT_JOIN_CONTEXT.pop((int(guild_id), int(user_id)), None)
 
 
 def _log(message: str) -> None:
@@ -242,6 +266,7 @@ def get_recent_join_context(guild_id: int, user_id: int, *, max_age_seconds: int
     """
 
     try:
+        _prune_recent_join_context(time.monotonic())
         key = (int(guild_id), int(user_id))
         saved = _RECENT_JOIN_CONTEXT.get(key)
         if not saved:
@@ -586,7 +611,7 @@ async def persist_member_join_context(
         except Exception:
             context = normalize_join_context(context)
         try:
-            _RECENT_JOIN_CONTEXT[(int(member.guild.id), int(member.id))] = (time.monotonic(), dict(context or {}))
+            _remember_recent_join_context(member.guild.id, member.id, dict(context or {}))
         except Exception:
             pass
         risk_payload = _build_risk_payload_from_profile(risk_profile, now_iso=now_iso)
@@ -734,6 +759,7 @@ __all__ = [
     "build_join_context",
     "detect_join_entry_context",
     "get_recent_join_context",
+    "forget_recent_join_context",
     "invite_meta",
     "join_truth_quality",
     "persist_member_join_context",

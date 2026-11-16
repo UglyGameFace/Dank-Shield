@@ -1710,7 +1710,7 @@ async def run_full_member_sync_for_guild(guild: discord.Guild) -> Dict[str, Any]
             return summary
 
         snapshot = await collect_membership_snapshot(guild)
-        members = list(snapshot.members)
+        members = snapshot.members  # The snapshot already owns a tuple; avoid a second full-guild list.
         summary["membership_source"] = snapshot.source
         summary["membership_authoritative"] = bool(snapshot.authoritative)
         if snapshot.error:
