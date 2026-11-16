@@ -14,6 +14,8 @@ from typing import Any, Mapping, Optional
 
 import discord
 
+from .startup_guards.discord_api_safety import fetch_message_with_api_safety
+
 from .guild_config import get_guild_config, invalidate_guild_config
 from .commands_ext.public_setup_group import _upsert_config
 
@@ -190,7 +192,7 @@ async def _fetch_message(channel: discord.TextChannel, message_id: int) -> Optio
     if message_id <= 0:
         return None
     try:
-        return await channel.fetch_message(int(message_id))
+        return await fetch_message_with_api_safety(channel, int(message_id), label="welcome post ownership")
     except Exception:
         return None
 
