@@ -157,6 +157,14 @@ class ModerationCenterView(_OwnedView):
         from .public_mod_group import mod_debug_intents_group_command
         await _invoke(mod_debug_intents_group_command, interaction)
 
+    @discord.ui.button(label="Unverified Enforcement", emoji="🛡️", style=discord.ButtonStyle.secondary, row=2)
+    async def unverified_enforcement(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        if not await _require_staff(interaction):
+            return
+        from .public_verify_reminder_ui import open_reminder_settings
+        await open_reminder_settings(interaction, self.owner_id)
+
     @discord.ui.button(label="Dank Shield Home", emoji="🏠", style=discord.ButtonStyle.secondary, row=2)
     async def home(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
