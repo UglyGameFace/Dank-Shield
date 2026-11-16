@@ -103,6 +103,21 @@ class _StudioView(discord.ui.View):
         return True
 
 
+async def _ack_editor_navigation(interaction: discord.Interaction) -> None:
+    """Claim the component before rendering or any potentially slow autosave.
+
+    The editor uses a transient, private View; never replay a stale click or
+    acknowledge it twice. Discord panel updates use a deferred message update
+    while modal/command origins need a private thinking response.
+    """
+    if interaction.response.is_done():
+        return
+    if interaction.message is not None:
+        await interaction.response.defer()
+    else:
+        await interaction.response.defer(ephemeral=True, thinking=True)
+
+
 def _summary(session: StudioSession) -> discord.Embed:
     """A short, actionable checklist rather than a map of developer features."""
     project = session.project
@@ -149,7 +164,7 @@ def _summary(session: StudioSession) -> discord.Embed:
         ),
         inline=False,
     )
-    embed.set_footer(text="Need more options? Open the grouped menus. Changes stay private until confirmed.")
+    embed.set_footer(text="Private controls expire after 15 minutes • Reopen Post Builder to resume your saved draft.")
     return embed
 
 def _preview_embed(session: StudioSession) -> discord.Embed:
@@ -157,6 +172,7 @@ def _preview_embed(session: StudioSession) -> discord.Embed:
 
 
 async def _home(interaction: discord.Interaction, session: StudioSession, *, notice: str = "") -> None:
+    await _ack_editor_navigation(interaction)
     autosave_warning = await _autosave(interaction, session)
     message = (
         ("✅ " + notice + "\n" if notice else "")
@@ -520,11 +536,15 @@ async def _portable_menu(interaction: discord.Interaction, session: StudioSessio
 
 class StarterSelect(discord.ui.Select):
     def __init__(self, session: StudioSession) -> None:
-        from .embed_studio_presets import PRESETS
+        from .embed_studio_presets import PRESETS, PRESET_DESCRIPTIONS
         self.session = session
         super().__init__(
-            placeholder="Pick a ready-to-edit layout…",
-            options=[discord.SelectOption(label=name, value=key) for key, name in PRESETS],
+            placeholder="Choose a post style • gaming, news, events…",
+            options=[
+                discord.SelectOption(
+                    label=name, value=key, description=PRESET_DESCRIPTIONS[key],
+                ) for key, name in PRESETS
+            ],
             row=0,
         )
 
@@ -598,8 +618,11 @@ async def _starters(interaction: discord.Interaction, session: StudioSession) ->
         interaction,
         heading="✨ Start with a Layout",
         description=(
-            "Choose an announcement, rules, event, server info, FAQ, "
-            "or feature showcase. Everything is editable, and nothing posts automatically."
+            "**Gaming:** Minecraft Relaunch, Modded Adventure, Game Night, "
+            "Tournament, Patch Notes and Players Wanted.\n"
+            "**Community:** Announcements, Rules, Events, Info, FAQs and Showcase.\n\n"
+            "Choose a design from the list. Change the server address, features, "
+            "colors and banner before posting. All layouts are private drafts until confirmed."
         ),
         view=StarterMenu(session),
     )
@@ -1211,6 +1234,9 @@ class StudioImagesModal(_ProjectModal):
 
 
 async def _menu(interaction: discord.Interaction, *, heading: str, description: str, view: discord.ui.View) -> None:
+    # Menu changes must not wait for guild-config reads or autosave before
+    # Discord receives the acknowledgement, especially on mobile.
+    await _ack_editor_navigation(interaction)
     session = getattr(view, "session", None)
     if isinstance(session, StudioSession):
         warning = await _autosave(interaction, session)
