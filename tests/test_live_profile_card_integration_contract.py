@@ -27,7 +27,16 @@ def test_registration_uses_commands_py_and_no_startup_guard():
     assert "register_public_profile_cards" in COMMANDS
     assert COMMANDS.count("register_public_profile_cards(bot,") == 2
     assert "startup_guards" not in PROFILE_COMMANDS
-    assert "startup_guards" not in PROFILE_RUNTIME
+    # The shared API safety module is an import-inert service, not an
+    # installer or a second profile runtime owner. Keep other startup guards
+    # forbidden here, including any future attempt to reintroduce a patch.
+    safe_import = (
+        "from .startup_guards.discord_api_safety import "
+        "fetch_message_with_api_safety"
+    )
+    assert safe_import in PROFILE_RUNTIME
+    assert "startup_guards" not in PROFILE_RUNTIME.replace(safe_import, "")
+    assert "install_discord_api_safety(" not in PROFILE_RUNTIME
     assert "monkey" not in PROFILE_COMMANDS.lower()
     assert "monkey" not in PROFILE_RUNTIME.lower()
 
