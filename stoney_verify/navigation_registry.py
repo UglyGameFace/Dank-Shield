@@ -509,6 +509,10 @@ RECENT_UPDATES: tuple[RecentFeatureUpdate, ...] = (
         "Choose the current channel with one tap in Reminders and other setup menus, "
         "or search for another channel. Existing permission checks still apply.", "2026-10-25",
     ),
+    # PR #857 (2026-11-17) fixed the Write Message modal: the Description input
+    # used max_length=4096 but Discord caps modal text inputs at 4000, so the
+    # modal never opened. Repair of this already-advertised flow, not a new
+    # feature, so no new entry here.
     RecentFeatureUpdate(
         "embed_studio", "Post Builder is easier for moderators",
         "Make an announcement in 4 steps with simple menus. Saved Pictures shows "
