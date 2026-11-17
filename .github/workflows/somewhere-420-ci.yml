@@ -8,6 +8,7 @@ on:
       - 'stoney_verify/commands_ext/public_toke.py'
       - 'stoney_verify/app.py'
       - 'tests/test_somewhere_420*.py'
+      - 'tests/test_toke_420_home.py'
       - 'supabase/migrations/*somewhere_420*.sql'
       - 'supabase_fresh/migrations/*somewhere_420*.sql'
       - '.github/workflows/somewhere-420-ci.yml'
@@ -17,6 +18,7 @@ on:
       - 'stoney_verify/somewhere_420_*.py'
       - 'stoney_verify/commands_ext/public_somewhere_420*.py'
       - 'tests/test_somewhere_420*.py'
+      - 'tests/test_toke_420_home.py'
       - 'supabase/migrations/*somewhere_420*.sql'
       - 'supabase_fresh/migrations/*somewhere_420*.sql'
       - '.github/workflows/somewhere-420-ci.yml'
@@ -57,7 +59,7 @@ jobs:
       - name: Compile and test feature and navigation
         run: |
           python -m compileall -q stoney_verify/somewhere_420_clock.py stoney_verify/somewhere_420_schedules.py stoney_verify/somewhere_420_runtime.py stoney_verify/somewhere_420_role_headsup.py stoney_verify/commands_ext/public_somewhere_420.py stoney_verify/commands_ext/public_somewhere_420_settings.py stoney_verify/commands_ext/public_toke.py
-          python -m pytest tests/test_somewhere_420.py tests/test_somewhere_420_v2.py tests/test_somewhere_420_role_headsup.py tests/test_navigation_registry_runtime.py -q --tb=short
+          python -m pytest tests/test_somewhere_420.py tests/test_somewhere_420_v2.py tests/test_somewhere_420_role_headsup.py tests/test_toke_420_home.py tests/test_navigation_registry_runtime.py -q --tb=short
       - name: Validate SQL migration twice and atomic once-per-day claim
         run: |
           psql -v ON_ERROR_STOP=1 <<'SQL'
