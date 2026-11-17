@@ -179,6 +179,22 @@ def test_mobile_studio_has_clear_separate_sections_and_one_confirmation() -> Non
     assert isinstance(LinkMenu(session), discord.ui.View)
 
 
+def test_studio_text_modal_respects_discord_modal_input_cap() -> None:
+    # Regression: the Description input used max_length=4096 (the embed limit),
+    # but Discord caps modal text inputs at 4000, so every Write Message click
+    # died in send_modal with 40035. A stored description may legitimately be
+    # 4096 chars, so the prefill must be sliced to the cap as well.
+    session = StudioSession(guild_id=111, owner_id=222)
+    session.project["embeds"][0]["description"] = "x" * 4096
+    modal = StudioTextModal(session)
+    inputs = [item for item in modal.children if isinstance(item, discord.ui.TextInput)]
+    assert len(inputs) == 3
+    for item in inputs:
+        assert item.max_length <= 4000
+        assert len(item.default or "") <= item.max_length
+    assert len(modal.body_input.default) == 4000
+
+
 def test_one_canonical_editor_replaces_parallel_community_and_setup_modals() -> None:
     community = (ROOT / "stoney_verify/commands_ext/public_community_tools.py").read_text()
     setup = (ROOT / "stoney_verify/embed_builder_services.py").read_text()
