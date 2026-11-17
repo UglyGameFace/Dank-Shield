@@ -248,12 +248,7 @@ class Somewhere420View(discord.ui.View):
         # and opens the existing media composer. No second session/send owner.
         await open_toke_command(interaction, message="It's 4:20 somewhere! 🌍💨")
 
-    @discord.ui.button(label="Quick Text-Only Sesh", emoji="⚡", style=discord.ButtonStyle.success, row=2)
-    async def quick(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        from .public_toke import open_toke_quick_command
-        await open_toke_quick_command(interaction, message="It's 4:20 somewhere! 🌎💨")
-
-    @discord.ui.button(label="Join Active Sesh", emoji="🔊", style=discord.ButtonStyle.primary, row=2)
+    @discord.ui.button(label="Join Active Sesh", emoji="🔊", style=discord.ButtonStyle.primary, row=1)
     async def join(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         guild = interaction.guild
         if guild is None:
@@ -274,7 +269,7 @@ class Somewhere420View(discord.ui.View):
                 continue
             visible.append(session)
         if not visible:
-            return await _feedback(interaction, "No active sesh is visible to you. Use Start /toke or Quick Sesh to call one.")
+            return await _feedback(interaction, "No active sesh is visible to you. Use Start /toke to call one (Post Without Media for a text-only sesh).")
         current = max(visible, key=lambda item: float(item.get("created_at") or 0))
         channel_id = int(current.get("channel_id") or 0)
         message_id = int(current.get("message_id") or 0)
