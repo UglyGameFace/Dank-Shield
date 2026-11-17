@@ -123,14 +123,16 @@ def test_user_and_server_settings_require_explicit_enable() -> None:
     assert runtime.MAX_PARALLEL <= 8
 
 
-def test_public_toke_command_unchanged_and_quick_uses_internal_owner() -> None:
+def test_public_toke_command_remains_one_owner_without_duplicate_quick_path() -> None:
     import inspect
-    from stoney_verify.commands_ext.public_toke import open_toke_command, open_toke_quick_command
-    public_parameters = inspect.signature(open_toke_command).parameters
+    from stoney_verify.commands_ext import public_toke
+    public_parameters = inspect.signature(public_toke.open_toke_command).parameters
     assert "quick_text_only" not in public_parameters
     assert "message" in public_parameters
     assert "voice" in public_parameters
-    assert inspect.iscoroutinefunction(open_toke_quick_command)
+    assert "media" not in public_parameters
+    assert "upload" in public_parameters
+    assert not hasattr(public_toke, "open_toke_quick_command")
 
 
 def test_worker_is_not_a_per_guild_scan() -> None:
