@@ -344,6 +344,14 @@ def test_design_has_direct_embed_studio_without_second_editor() -> None:
     assert registry.search_features("embed builder")[0].key == "embed_studio"
     assert registry.search_features("create announcement")[0].key == "embed_studio"
     assert registry.search_features("json embed")[0].key == "embed_studio"
+    # All newly editable gaming and Discord event layouts should lead staff
+    # to the one canonical Post Builder, not a second events command.
+    for query in (
+        "post builder", "movie night", "watch party", "trivia night",
+        "karaoke night", "community hangout", "minecraft relaunch",
+        "game server announcement", "event details", "giveaway announcement",
+    ):
+        assert registry.search_features(query)[0].key == "embed_studio"
     from pathlib import Path
     source = Path(surface.__file__).read_text(encoding="utf-8")
     assert 'if key == "embed_studio":' in source
@@ -363,7 +371,7 @@ def test_category_groups_have_readable_tasks_and_fit_mobile() -> None:
     }
     design_groups = registry.grouped_features("design")
     assert [name for name, _ in design_groups] == [
-        "Create messages", "Server appearance",
+        "Announcements & events", "Server appearance",
     ]
     for category in registry.CATEGORIES:
         keys = [f.key for _group, features in registry.grouped_features(category.key) for f in features]
