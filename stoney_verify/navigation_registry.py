@@ -338,8 +338,8 @@ FEATURES: tuple[NavigationFeature, ...] = (
         "Post Builder",
         "📣",
         "design",
-        "Make a server announcement in four steps. Extra tools are tucked into simple menus.",
-        ("embed", "embed builder", "embed studio", "announcement builder", "create announcement", "message designer", "design a message", "embed editor", "custom embed", "json embed", "save embed", "brand themes", "server themes", "branding", "embed color palettes", "media library", "saved images", "image storage", "upload limit", "artwork usage", "smart text", "embed placeholders", "feedback form", "private response inbox", "create form", "questionnaire", "staff review", "private feedback forms", "team review", "scheduled posts", "recurring campaigns", "repeat announcement", "daily announcement", "weekly announcement", "live text", "hourly updates", "dynamic embeds", "auto refresh"),
+        "Build private, preview-first server announcements, gaming promos, movie nights and other community event posts with editable artwork, location and RSVP details.",
+        ("embed", "embed builder", "embed studio", "announcement builder", "create announcement", "message designer", "design a message", "embed editor", "custom embed", "json embed", "save embed", "brand themes", "server themes", "branding", "embed color palettes", "media library", "saved images", "image storage", "upload limit", "artwork usage", "smart text", "embed placeholders", "feedback form", "private response inbox", "create form", "questionnaire", "staff review", "private feedback forms", "team review", "scheduled posts", "recurring campaigns", "repeat announcement", "daily announcement", "weekly announcement", "live text", "hourly updates", "dynamic embeds", "auto refresh", "post builder", "movie night", "movie event", "watch party", "trivia night", "karaoke night", "community hangout", "giveaway announcement", "creative contest", "ama event", "game server announcement", "minecraft relaunch", "game night announcement", "event details", "discord events", "event templates", "post templates"),
         True,
     ),
     NavigationFeature(
@@ -469,7 +469,9 @@ _FEATURE_BY_KEY = {item.key: item for item in FEATURES}
 
 
 # Ship notes describe *merged* public improvements, not unmerged pull requests.
-# PR #850 adds search aliases and grouping only; do not announce it as merged.
+# Keep New & Updated entries limited to *already merged* public improvements.
+# PR #855 only updates discoverability aliases/grouping here. The new event
+# layouts must not be advertised as live until integration and deploy are verified.
 # This remains metadata only: every button uses the canonical feature owner.
 # Update this list whenever a visible feature changes, and keep its claim true.
 @dataclass(frozen=True)
@@ -561,7 +563,7 @@ FEATURE_GROUPS: dict[str, str] = {
     "toke_settings": "Events & meetups",
     "somewhere_420": "Events & meetups",
     "community_hub": "Events & meetups",
-    "embed_studio": "Create messages",
+    "embed_studio": "Announcements & events",
     "server_design": "Server appearance",
     "card_assets": "Welcome & Exit",
     "status": "Check bot health",

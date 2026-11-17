@@ -1,3 +1,29 @@
+## POST BUILDER PR #855: CI AND BASE RECONCILIATION (2026-11-16)
+
+- The failing full Dank Shield CI job at head `4f54f9d2` was `tools/test_recent_feature_nav_contract.py`: the Post Builder menu changed without corresponding `stoney_verify/navigation_registry.py` metadata. Fix added explicit movie/game/event search aliases, current categorization and *non-premature* recent-release wording. All seven other workflows on the previous head passed; exact new-head CI must pass before merge.
+- Main advanced independently to `996619b5ebf1572c90454c8893d2ee24b2404354` (merged #853 creator notification cleanup). This branch must include its Toke source/test changes, retain the new Post Builder implementation, and reconcile ACTIVE_TASK.md without duplicate historical checkpoints or unmerged feature announcements. The PR remains unmerged until exact-head validation.
+
+---
+
+## POST BUILDER: DISCORD SOCIAL EVENTS EXPANSION (2026-11-16)
+
+- **Continuation on the existing open PR #855** (no separate competing branch): added eight more mobile-ready Discord event layouts: Movie Night, Live Watch Party, Trivia, Karaoke, Community Hangout, Giveaway, AMA/Q&A, and Creative Contest. The combined picker now has 20 editable options, below Discord's 25-option limit.
+- **Unified editing:** Look & Images now offers a separate Event Details modal (when, where, activity/film/host/prize details, how to join), preserving existing copy, styling, and unrelated sections. Movie content/streams, music access, giveaways and scheduled events are **not** automatically provided; staff enter actual event details and publish only after preview confirmation.
+- **Evidence:** Regression contracts added for all eight event designs, no auto-publishing/phantom prizes, valid embeds and selection, mobile row limits, quick form updates, no duplicate fields, copy preservation and fail-closed invalid sizes. Exact final-head CI must re-run; previous green results for an earlier PR head are superseded.
+- **Release:** PR #855 remains the review/integration owner for both response-timing improvements and new layouts. After merge, confirm exact main branch and Discloud live deployed fingerprint; exercise the button and modal on Discord Android. No changes to independent #853/#854 Toke PRs.
+
+---
+
+## POST BUILDER MOBILE ACK & GAMING LAYOUTS (2026-11-16)
+
+- **User report:** Screenshot of private Post Builder (old Feature Showcase draft in announcements) shows `Dank Shield didn't respond in time` beside Look & Images. Without a matching callback traceback the precise cause is unproven; one identified risk is starting menu render/autosave before Discord acknowledgement, while private views also naturally expire after 15 minutes.
+- **Current branch:** `fix/embed-post-builder-ack-gaming-layouts-20261116`, based on `c4e22706` (merged and verified #852). Do not conflict with independent Toke no-DM work in #853/#854.
+- **Implementation:** `_menu` and `_home` immediately defer component updates before draft autosave, preserving CAS and private-only edits. Add six polished, fully editable server announcement layouts (Minecraft Relaunch, Modded Adventure, Game Night, Tournament, Server Update, Recruitment), mobile picker descriptions, and a compact Game Server Details modal with bounded address/platform/mod/join values and no unrelated field loss. Private panel footer explains the 15-minute expiry/reopen path.
+- **Validation:** New regression suite for acknowledgement order, modal and option contracts, Discord text limits, all six designs, no auto publishing, quick details field preservation and invalid updates. Existing Post Builder, SQL, security, publication confirmation and full CI must pass on immutable PR head. No Discloud deployment, live canary or schema change yet.
+- **Acceptance:** confirm Look & Images and other menu actions acknowledge in a newly opened editor, test Minecraft draft on Discord Android, add actual banner, confirm preview with server address `23.109.125.116:20229` and verified Cobblemon details, and verify resulting production SHA. Do not assume Bedrock port or current mod set without checking server config.
+
+---
+
 ## TOKE CREATOR NOTIFICATION CLEANUP (2026-11-16)
 
 - **User report:** `/toke` GIF/photo composer automatically DMed the creator `💨 Your Toke call is ready: ...` immediately after it successfully published the public card. This is redundant because the creator initiated the event and the new card is already visible.

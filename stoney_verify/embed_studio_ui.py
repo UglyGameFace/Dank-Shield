@@ -103,6 +103,21 @@ class _StudioView(discord.ui.View):
         return True
 
 
+async def _ack_editor_navigation(interaction: discord.Interaction) -> None:
+    """Claim the component before rendering or any potentially slow autosave.
+
+    The editor uses a transient, private View; never replay a stale click or
+    acknowledge it twice. Discord panel updates use a deferred message update
+    while modal/command origins need a private thinking response.
+    """
+    if interaction.response.is_done():
+        return
+    if interaction.message is not None:
+        await interaction.response.defer()
+    else:
+        await interaction.response.defer(ephemeral=True, thinking=True)
+
+
 def _summary(session: StudioSession) -> discord.Embed:
     """A short, actionable checklist rather than a map of developer features."""
     project = session.project
@@ -149,7 +164,7 @@ def _summary(session: StudioSession) -> discord.Embed:
         ),
         inline=False,
     )
-    embed.set_footer(text="Need more options? Open the grouped menus. Changes stay private until confirmed.")
+    embed.set_footer(text="Private controls expire after 15 minutes • Reopen Post Builder to resume your saved draft.")
     return embed
 
 def _preview_embed(session: StudioSession) -> discord.Embed:
@@ -157,6 +172,7 @@ def _preview_embed(session: StudioSession) -> discord.Embed:
 
 
 async def _home(interaction: discord.Interaction, session: StudioSession, *, notice: str = "") -> None:
+    await _ack_editor_navigation(interaction)
     autosave_warning = await _autosave(interaction, session)
     message = (
         ("✅ " + notice + "\n" if notice else "")
@@ -294,6 +310,14 @@ class StudioDesignTools(_StudioView):
     async def theme(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
         await _themes(interaction, self.session)
 
+    @discord.ui.button(label="Game Server Details", emoji="🎮", style=discord.ButtonStyle.primary, row=1)
+    async def game_details(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        await interaction.response.send_modal(StudioGameServerModal(self.session))
+
+    @discord.ui.button(label="Event Details", emoji="📅", style=discord.ButtonStyle.primary, row=1)
+    async def event_details(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        await interaction.response.send_modal(StudioEventDetailsModal(self.session))
+
     @discord.ui.button(label="Back to My Post", emoji="◀️", style=discord.ButtonStyle.secondary, row=2)
     async def back(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
         await _home(interaction, self.session)
@@ -306,6 +330,8 @@ async def _design_tools(interaction: discord.Interaction, session: StudioSession
             "Choose **Colors & Style** to change how the post looks. "
             "**Add Pictures** for new image links, **Saved Pictures** to reuse images, "
             "or **Reuse Server Style** for a look your staff already saved. "
+            "**Game Server Details** quickly edits address, editions, mods and join steps. "
+            "**Event Details** updates time, location, program and RSVP/entry instructions. "
             "None of these options posts anything."
         ),
         view=StudioDesignTools(session),
@@ -520,11 +546,15 @@ async def _portable_menu(interaction: discord.Interaction, session: StudioSessio
 
 class StarterSelect(discord.ui.Select):
     def __init__(self, session: StudioSession) -> None:
-        from .embed_studio_presets import PRESETS
+        from .embed_studio_presets import PRESETS, PRESET_DESCRIPTIONS
         self.session = session
         super().__init__(
-            placeholder="Pick a ready-to-edit layout…",
-            options=[discord.SelectOption(label=name, value=key) for key, name in PRESETS],
+            placeholder="Choose a post style • gaming, news, events…",
+            options=[
+                discord.SelectOption(
+                    label=name, value=key, description=PRESET_DESCRIPTIONS[key],
+                ) for key, name in PRESETS
+            ],
             row=0,
         )
 
@@ -598,8 +628,13 @@ async def _starters(interaction: discord.Interaction, session: StudioSession) ->
         interaction,
         heading="✨ Start with a Layout",
         description=(
-            "Choose an announcement, rules, event, server info, FAQ, "
-            "or feature showcase. Everything is editable, and nothing posts automatically."
+            "**Game Servers:** Minecraft Relaunch, Modded Adventure, Game Night, "
+            "Tournament, Patch Notes and Players Wanted.\n"
+            "**Discord Events:** Movie Night, Live Watch Party, Trivia, Karaoke, "
+            "Hangout, Giveaway, AMA and Creative Contest.\n"
+            "**Community:** Announcements, Rules, Events, Info, FAQs and Showcase.\n\n"
+            "Choose a design from the list, then customize details, colors, artwork "
+            "and buttons. No layout posts or schedules anything automatically."
         ),
         view=StarterMenu(session),
     )
@@ -660,6 +695,171 @@ class StudioAppearanceModal(_ProjectModal):
     async def on_submit(self, interaction: discord.Interaction) -> None:
         values = {key: str(item.value or "") for key, item in self.inputs.items()}
         await self.commit(interaction, lambda p: p["embeds"][self.session.active].update(values))
+
+
+_GAME_DETAIL_FIELDS = (
+    ("address", "🌍 SERVER ADDRESS", ("🌍 SERVER ADDRESS",)),
+    ("platforms", "🎮 SUPPORTED EDITIONS", ("🎮 SUPPORTED EDITIONS", "🕹️ GAMES & PLATFORMS")),
+    ("features", "🧩 WHAT'S INSIDE", ("🧩 WHAT'S INSIDE", "🧩 FEATURED MODS", "🌟 WHY JOIN?")),
+    ("join", "🚪 START PLAYING", ("🚪 START PLAYING", "📥 HOW TO CONNECT", "🔗 HOW TO JOIN")),
+)
+
+
+def _update_game_server_fields(project: dict[str, Any], index: int, values: dict[str, str]) -> None:
+    """Update only supplied details; preserve other fields, art, buttons and copy."""
+    fields = project["embeds"][index]["fields"]
+    for key, title, aliases in _GAME_DETAIL_FIELDS:
+        value = values.get(key, "").strip()
+        if not value:
+            continue
+        existing = next((field for field in fields if field["name"] in aliases), None)
+        if existing is not None:
+            existing["value"] = value
+        else:
+            fields.append({"name": title, "value": value, "inline": False})
+
+
+class StudioGameServerModal(_ProjectModal):
+    """One mobile-friendly form for the facts people actually need to join."""
+
+    def __init__(self, session: StudioSession) -> None:
+        super().__init__(session, "Game Server Details")
+        current = session.project["embeds"][session.active]["fields"]
+        def previous(keys: tuple[str, ...], limit: int) -> str:
+            value = next((f["value"] for f in current if f["name"] in keys), "")
+            # A long value edited in Extra Text Sections must not crash this
+            # smaller quick form or get silently truncated on submission.
+            return value if len(value) <= limit else ""
+
+        self.address = discord.ui.TextInput(
+            label="Server address / IP:port", required=False, max_length=180,
+            placeholder="play.example.net:25565",
+            default=previous(_GAME_DETAIL_FIELDS[0][2], 180),
+        )
+        self.platforms = discord.ui.TextInput(
+            label="Supported editions or platforms", required=False, max_length=180,
+            placeholder="Java / Bedrock / PC / console • only what works",
+            default=previous(_GAME_DETAIL_FIELDS[1][2], 180),
+        )
+        self.features = discord.ui.TextInput(
+            label="Verified mods and best features", required=False,
+            max_length=700, style=discord.TextStyle.paragraph,
+            placeholder="Installed mods, custom worlds, events, gameplay",
+            default=previous(_GAME_DETAIL_FIELDS[2][2], 700),
+        )
+        self.join = discord.ui.TextInput(
+            label="How to join", required=False, max_length=500,
+            style=discord.TextStyle.paragraph,
+            placeholder="Game version, modpack, steps to connect",
+            default=previous(_GAME_DETAIL_FIELDS[3][2], 500),
+        )
+        for item in (self.address, self.platforms, self.features, self.join):
+            self.add_item(item)
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        values = {
+            "address": str(self.address.value or ""),
+            "platforms": str(self.platforms.value or ""),
+            "features": str(self.features.value or ""),
+            "join": str(self.join.value or ""),
+        }
+        if not any(value.strip() for value in values.values()):
+            return await _say(interaction, "Add at least one server detail. Your draft is unchanged.")
+        index = self.session.active
+        await self.commit(
+            interaction, lambda project: _update_game_server_fields(project, index, values),
+        )
+
+
+_EVENT_DETAILS_FIELD_ALIASES = (
+    ("when", "📅 WHEN", ("📅 WHEN", "⏰ START TIME", "When")),
+    ("where", "📍 WHERE", ("📍 WHERE", "Where", "🔊 MEET HERE")),
+    ("topic", "✨ EVENT DETAILS", (
+        "✨ EVENT DETAILS", "🎞️ MOVIE PICK", "📡 WHAT WE'RE WATCHING",
+        "🎯 TOPICS & FORMAT", "🎵 SONG QUEUE", "🛋️ THE VIBE",
+        "🎁 CONFIRMED PRIZE & RULES", "🎙️ HOST & TOPICS",
+        "🖌️ THEME, RULES & JUDGING", "🎮 GAME & FORMAT", "🕹️ GAME / MODE",
+    )),
+    ("join", "✅ HOW TO JOIN", (
+        "✅ HOW TO JOIN", "How to join", "✅ HOW TO RSVP",
+        "📝 RULES & ENTRY",
+    )),
+)
+
+
+def _update_event_details_fields(
+    project: dict[str, Any], index: int, values: dict[str, str],
+) -> None:
+    """Edit time, location, program and participation without erasing the rest."""
+    limits = {"when": 180, "where": 180, "topic": 700, "join": 500}
+    # Enforce the same limits as the visible modal at the model boundary.
+    # Otherwise direct callers could accept values Discord itself rejects.
+    for key, limit in limits.items():
+        if len(str(values.get(key, "")).strip()) > limit:
+            raise StudioValidationError(
+                f"Event {key} must be {limit} characters or fewer."
+            )
+    fields = project["embeds"][index]["fields"]
+    for key, label, aliases in _EVENT_DETAILS_FIELD_ALIASES:
+        value = values.get(key, "").strip()
+        if not value:
+            continue
+        existing = next((f for f in fields if f["name"] in aliases), None)
+        if existing is None:
+            fields.append({"name": label, "value": value, "inline": key in {"when", "where"}})
+        else:
+            existing["value"] = value
+
+
+class StudioEventDetailsModal(_ProjectModal):
+    """Fast mobile editor for movie nights and typical Discord server events."""
+
+    def __init__(self, session: StudioSession) -> None:
+        super().__init__(session, "Discord Event Details")
+        current = session.project["embeds"][session.active]["fields"]
+
+        def previous(aliases: tuple[str, ...], limit: int) -> str:
+            existing = next((field["value"] for field in current if field["name"] in aliases), "")
+            return existing if len(existing) <= limit else ""
+
+        self.when = discord.ui.TextInput(
+            label="Event date, time and timezone", required=False, max_length=180,
+            placeholder="Friday at 8 PM Eastern",
+            default=previous(_EVENT_DETAILS_FIELD_ALIASES[0][2], 180),
+        )
+        self.where = discord.ui.TextInput(
+            label="Discord channel or event location", required=False, max_length=180,
+            placeholder="Movie Night voice channel / Stage channel",
+            default=previous(_EVENT_DETAILS_FIELD_ALIASES[1][2], 180),
+        )
+        self.topic = discord.ui.TextInput(
+            label="Movie, activity, theme or prize", required=False, max_length=700,
+            style=discord.TextStyle.paragraph,
+            placeholder="What's happening? Include only confirmed details.",
+            default=previous(_EVENT_DETAILS_FIELD_ALIASES[2][2], 700),
+        )
+        self.join = discord.ui.TextInput(
+            label="How to join, RSVP or enter", required=False, max_length=500,
+            style=discord.TextStyle.paragraph,
+            placeholder="Instructions, access requirements and any rules",
+            default=previous(_EVENT_DETAILS_FIELD_ALIASES[3][2], 500),
+        )
+        for control in (self.when, self.where, self.topic, self.join):
+            self.add_item(control)
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        values = {
+            "when": str(self.when.value or ""),
+            "where": str(self.where.value or ""),
+            "topic": str(self.topic.value or ""),
+            "join": str(self.join.value or ""),
+        }
+        if not any(value.strip() for value in values.values()):
+            return await _say(interaction, "Enter at least one event detail. Your draft was kept.")
+        index = self.session.active
+        await self.commit(
+            interaction, lambda p: _update_event_details_fields(p, index, values),
+        )
 
 
 class MediaSaveModal(discord.ui.Modal, title="Save Image or GIF Link"):
@@ -1211,6 +1411,9 @@ class StudioImagesModal(_ProjectModal):
 
 
 async def _menu(interaction: discord.Interaction, *, heading: str, description: str, view: discord.ui.View) -> None:
+    # Menu changes must not wait for guild-config reads or autosave before
+    # Discord receives the acknowledgement, especially on mobile.
+    await _ack_editor_navigation(interaction)
     session = getattr(view, "session", None)
     if isinstance(session, StudioSession):
         warning = await _autosave(interaction, session)

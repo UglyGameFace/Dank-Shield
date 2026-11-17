@@ -201,7 +201,7 @@ def test_one_canonical_editor_replaces_parallel_community_and_setup_modals() -> 
 
 def test_all_one_tap_layouts_are_editable_and_within_limits() -> None:
     from stoney_verify.embed_studio_presets import PRESETS, project_for_preset
-    assert len(PRESETS) == 6
+    assert len(PRESETS) == 20
     for key, name in PRESETS:
         project = project_for_preset(key)
         assert project["embeds"][0]["title"]
