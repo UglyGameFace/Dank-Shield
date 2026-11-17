@@ -340,11 +340,15 @@ async def _on_raw_message_delete(payload: discord.RawMessageDeleteEvent) -> None
         channel_id = _safe_int(getattr(payload, "channel_id", 0), 0)
         actor, reason = await _find_audit_actor(guild, "message_delete", target_id=channel_id if channel_id else None)
         embed = _base_embed("🗑️ Message Deleted", discord.Color.orange())
-        embed.description = "Uncached/raw delete event. Content may be unavailable if Discord did not have the message cached."
+        cached = getattr(payload, "cached_message", None)
+        embed.description = (
+            "Raw delete event; cached author/content recovered."
+            if cached is not None
+            else "Uncached raw delete event; original content was unavailable."
+        )
         embed.add_field(name="Channel", value=_mention_channel_id(channel_id), inline=False)
         embed.add_field(name="Message ID", value=f"`{message_id}`", inline=True)
         embed.add_field(name="Deleted By", value=actor, inline=True)
-        cached = getattr(payload, "cached_message", None)
         if cached is not None:
             author = getattr(cached, "author", None)
             if author is not None:

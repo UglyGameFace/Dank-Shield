@@ -18,6 +18,11 @@ from discord.ext import tasks
 
 from .globals import *  # noqa: F401,F403
 from .guild_sweep import run_bounded_guild_sweep
+from .spam_content_signals import (
+    classify_unsolicited_promotion,
+    recently_joined_or_created,
+    single_message_enforcement_mode,
+)
 from .settings_registry import (
     normalize_spam_guard_settings as _registry_normalize_spam_guard_settings,
     spam_guard_defaults as _registry_spam_guard_defaults,
@@ -68,6 +73,7 @@ EVIDENCE_ANY_INVITE = "invite_url"
 EVIDENCE_BLOCKED_INVITE = "blocked_invite"
 EVIDENCE_NON_INVITE_URL = "non_invite_url"
 EVIDENCE_EVERYONE_PING = "everyone_ping"
+EVIDENCE_CONTENT_PROMO = "content_promo"
 
 _SETTINGS_TABLE_AVAILABLE: Optional[bool] = None
 _CASES_TABLE_AVAILABLE: Optional[bool] = None
@@ -625,6 +631,7 @@ def _select_cleanup_refs(
     fired_everyone_rule: bool,
     fired_url_rule: bool,
     fired_channel_flood_rule: bool,
+    fired_content_rule: bool = False,
 ) -> List[Dict[str, Any]]:
     if delete_limit <= 0:
         return []
@@ -647,6 +654,9 @@ def _select_cleanup_refs(
             selected.append(row)
             if len(selected) >= delete_limit:
                 return
+
+    if fired_content_rule:
+        add_rows([r for r in ordered if _row_has_evidence(r, EVIDENCE_CONTENT_PROMO)])
 
     if fired_invite_rule:
         add_rows([r for r in ordered if _row_has_evidence(r, EVIDENCE_BLOCKED_INVITE)])
@@ -2315,7 +2325,7 @@ async def _log_trigger(
 
     embed = discord.Embed(
         title="🛡️ Spam Guard Triggered",
-        description="Probable hacked-account or spam burst was blocked.",
+        description="Suspicious promotional content or a spam burst was detected.",
         color=discord.Color.red(),
         timestamp=_now_utc(),
     )
@@ -2633,6 +2643,11 @@ async def handle_incoming_spam_message(message: discord.Message) -> bool:
 
         invite_role_bypass = _member_has_any_role(member, invite_allowed_role_ids)
         channel_bypass = str(message.channel.id) in allowed_channel_ids
+        # Explicitly allowed channels (e.g. partner advertisements) stay exempt
+        # from the content-only classifier, while existing burst rules remain.
+        content_finding = None if channel_bypass else classify_unsolicited_promotion(
+            message.content or "", mentions_everyone=_message_mentions_everyone(message)
+        )
 
         invite_codes = _extract_invite_codes(message.content or "")
         non_invite_urls = _extract_non_invite_urls(message.content or "")
@@ -2678,6 +2693,8 @@ async def handle_incoming_spam_message(message: discord.Message) -> bool:
                 non_invite_url_count=len(non_invite_urls),
                 mentions_everyone=mentions_everyone,
             )
+            if content_finding is not None:
+                message_evidence.append(EVIDENCE_CONTENT_PROMO)
 
             messages.append(
                 {
@@ -2757,6 +2774,15 @@ async def handle_incoming_spam_message(message: discord.Message) -> bool:
             fired_everyone_rule = False
             fired_url_rule = False
             fired_channel_flood_rule = False
+            fired_content_rule = False
+
+            if content_finding is not None:
+                should_fire = True
+                fired_content_rule = True
+                reasons.append(
+                    "single-message promotional spam pattern: "
+                    f"{content_finding.category} ({', '.join(content_finding.signals)})"
+                )
 
             if not invite_role_bypass and not channel_bypass:
                 if len(blocked_invite_codes) >= int(settings["multi_invite_immediate"]):
@@ -2851,6 +2877,14 @@ async def handle_incoming_spam_message(message: discord.Message) -> bool:
 
             last_action_at = float(state.get("last_action_at", 0.0) or 0.0)
             if should_fire and (now_mono - last_action_at) < float(settings["cooldown_seconds"]):
+                # Cooldown prevents repeat punishments, not removal of each new
+                # high-confidence promotional post by the same user.
+                if fired_content_rule and _normalize_mode(settings.get("mode")) != "log_only":
+                    await _delete_recent_messages(
+                        guild=guild,
+                        refs=[{"channel_id": int(message.channel.id), "message_id": int(message.id)}],
+                        reason="Spam Guard: promotional spam during action cooldown",
+                    )
                 return True
 
             if not should_fire:
@@ -2858,10 +2892,22 @@ async def handle_incoming_spam_message(message: discord.Message) -> bool:
 
             state["last_action_at"] = now_mono
 
+            other_rules_fired = any((
+                fired_invite_rule, fired_duplicate_rule, fired_everyone_rule,
+                fired_url_rule, fired_channel_flood_rule,
+            ))
+            enforcement_settings = settings
+            if fired_content_rule and not other_rules_fired:
+                enforcement_settings = dict(settings)
+                enforcement_settings["mode"] = single_message_enforcement_mode(
+                    _normalize_mode(settings.get("mode")),
+                    recent_member=recently_joined_or_created(member),
+                )
+
             cleanup_refs: List[Dict[str, Any]] = []
             delete_count = 0
 
-            if _normalize_mode(settings.get("mode")) in {"delete_only", "timeout", "quarantine", "kick", "ban"}:
+            if _normalize_mode(enforcement_settings.get("mode")) in {"delete_only", "timeout", "quarantine", "kick", "ban"}:
                 cleanup_refs = _select_cleanup_refs(
                     recent_messages=recent_messages,
                     delete_limit=int(settings["delete_history"]),
@@ -2871,6 +2917,7 @@ async def handle_incoming_spam_message(message: discord.Message) -> bool:
                     fired_everyone_rule=fired_everyone_rule,
                     fired_url_rule=fired_url_rule,
                     fired_channel_flood_rule=fired_channel_flood_rule,
+                    fired_content_rule=fired_content_rule,
                 )
                 delete_count = await _delete_recent_messages(
                     guild=guild,
@@ -2881,8 +2928,12 @@ async def handle_incoming_spam_message(message: discord.Message) -> bool:
             action_taken, quarantine_case = await _apply_mode_action(
                 guild=guild,
                 member=member,
-                settings=settings,
-                reason="Spam guard: probable hacked-account spam burst",
+                settings=enforcement_settings,
+                reason=(
+                    "Spam guard: suspicious single promotional message"
+                    if fired_content_rule and not other_rules_fired
+                    else "Spam guard: probable spam burst"
+                ),
             )
 
             try:
@@ -2906,6 +2957,7 @@ async def handle_incoming_spam_message(message: discord.Message) -> bool:
                     "mention_burst": fired_everyone_rule,
                     "url_flood": fired_url_rule,
                     "cross_channel_flood": fired_channel_flood_rule,
+                    "content_promotion": fired_content_rule,
                     "rapid_message_burst": recent_count >= int(settings["message_threshold"]),
                     "action_taken": action_taken,
                     "deleted_count": delete_count,
@@ -3689,6 +3741,14 @@ def _register_spam_guard_commands() -> None:
 @bot.listen("on_message")
 async def _spam_guard_on_message(message: discord.Message):
     await handle_incoming_spam_message(message)
+
+
+@bot.listen("on_message_edit")
+async def _spam_guard_on_message_edit(before: discord.Message, after: discord.Message):
+    # Attackers can post benign text and edit it after verification.
+    if str(getattr(before, "content", "") or "") == str(getattr(after, "content", "") or ""):
+        return
+    await handle_incoming_spam_message(after)
 
 
 def _spam_warm_concurrency() -> int:
