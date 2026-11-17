@@ -716,31 +716,17 @@ async def open_toke_command(
     )
 
 
-async def open_toke_quick_command(interaction: discord.Interaction, message: str) -> None:
-    """Internal UI-only text card; all canonical /toke guards still apply."""
-    await _open_toke_command_impl(interaction, message=message, quick_text_only=True)
-
-
 async def _open_toke_command_impl(
     interaction: discord.Interaction,
     message: Optional[str] = None,
-    media: Optional[str] = None,
     upload: Optional[discord.Attachment] = None,
     voice: Optional[discord.VoiceChannel] = None,
-    *,
-    quick_text_only: bool = False,
 ) -> None:
     guild = interaction.guild
     member = interaction.user if isinstance(interaction.user, discord.Member) else None
     if guild is None or member is None:
         return await _reply(interaction, "/toke only works inside a server.")
 
-    try:
-        clean_media = _clean_media_url(media)
-    except ValueError as exc:
-        return await _reply(interaction, str(exc))
-    if clean_media and upload is not None:
-        return await _reply(interaction, "Choose either a media URL or an upload, not both.")
     if upload is not None and not _attachment_is_supported_media(upload):
         return await _reply(
             interaction,
@@ -797,7 +783,7 @@ async def _open_toke_command_impl(
         return await _reply(interaction, f"Wait {_format_wait(remaining)} for {label}.")
 
     clean_message = _clean_member_message(message)
-    if upload is None and not clean_media and not quick_text_only:
+    if upload is None:
         if not bool(getattr(interaction.client.intents, "message_content", False)):
             return await _reply(interaction, "Dank Shield needs the Discord Message Content intent to capture normal GIFs. Use /toke upload or media instead.")
         source = interaction.channel
@@ -808,7 +794,7 @@ async def _open_toke_command_impl(
             return await _reply(
                 interaction,
                 "Dank Shield needs View Channel, Read Message History and Manage Messages here "
-                "to capture and clean up a temporary GIF. Ask staff to grant these or use /toke upload: or media:.",
+                "to capture and clean up a temporary GIF. Ask staff to grant these or use /toke upload:.",
             )
         draft = pending_for(guild.id, member.id)
         if draft is not None:
@@ -829,7 +815,7 @@ async def _open_toke_command_impl(
         sent = await _publish_toke(
             guild=guild, member=member, channel=channel, starter_role=stoner_role,
             notify_role=ping_role, message_text=clean_message,
-            clean_media=clean_media, upload=upload, settings=settings,
+            clean_media="", upload=upload, settings=settings,
             voice_channel_id=int(voice.id) if voice is not None else 0,
         )
     except (ValueError, discord.HTTPException, OSError) as exc:
@@ -865,5 +851,4 @@ __all__ = [
     "open_toke_command",
     "open_toke_home",
     "TokeHomeView",
-    "open_toke_quick_command",
 ]
