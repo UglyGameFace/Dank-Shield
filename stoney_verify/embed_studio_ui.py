@@ -659,7 +659,7 @@ class StudioTextModal(_ProjectModal):
         super().__init__(session, "Write Embed Text")
         e = session.project["embeds"][session.active]
         self.title_input = discord.ui.TextInput(label="Headline", required=False, max_length=256, default=e["title"])
-        self.body_input = discord.ui.TextInput(label="Description", required=False, style=discord.TextStyle.paragraph, max_length=4096, default=e["description"])
+        self.body_input = discord.ui.TextInput(label="Description", required=False, style=discord.TextStyle.paragraph, max_length=4000, default=e["description"][:4000])
         self.content_input = discord.ui.TextInput(label="Text above embeds (optional)", required=False, style=discord.TextStyle.paragraph, max_length=1900, default=session.project["content"][:1900])
         for control in (self.title_input, self.body_input, self.content_input):
             self.add_item(control)
