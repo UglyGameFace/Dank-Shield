@@ -785,7 +785,7 @@ async def _open_toke_command_impl(
     clean_message = _clean_member_message(message)
     if upload is None:
         if not bool(getattr(interaction.client.intents, "message_content", False)):
-            return await _reply(interaction, "Dank Shield needs the Discord Message Content intent to capture normal GIFs. Use /toke upload or media instead.")
+            return await _reply(interaction, "Dank Shield needs the Discord Message Content intent to capture normal GIFs. Use /toke upload: instead.")
         source = interaction.channel
         if not isinstance(source, discord.TextChannel):
             return await _reply(interaction, "Use /toke in a regular text channel to send your GIF normally.")
