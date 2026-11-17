@@ -339,7 +339,7 @@ def test_composer_gif_message_is_consumed_only_after_card_is_posted(isolated_ses
         events.append("deleted")
 
     async def on_dm(_text):
-        events.append("dm")
+        raise AssertionError("creator must never receive an automatic launch-success DM")
 
     author = SimpleNamespace(id=444, bot=False, send=on_dm)
     source = SimpleNamespace(id=555)
@@ -351,7 +351,7 @@ def test_composer_gif_message_is_consumed_only_after_card_is_posted(isolated_ses
         embeds=[], delete=on_delete,
     )
     asyncio.run(live._on_toke_media_message(msg))
-    assert events == ["published", "deleted", "dm"]
+    assert events == ["published", "deleted"]
     assert live.pending_for(guild.id, author.id) is None
 
 
@@ -380,7 +380,40 @@ def test_failed_gif_publication_preserves_original_message(isolated_sessions, mo
         embeds=[], delete=on_delete,
     )
     asyncio.run(live._on_toke_media_message(msg))
-    assert events == ["dm"]
+    assert events == ["dm"]  # Failure remains actionable; original GIF was kept.
+    assert live.pending_for(guild.id, author.id) is None
+
+
+def test_toke_success_does_not_dm_creator_when_source_delete_is_forbidden(isolated_sessions, monkeypatch):
+    from stoney_verify.commands_ext import public_toke
+    events = []
+
+    async def publish(guild, author, pending, captured):
+        events.append("published")
+        return SimpleNamespace(jump_url="https://discord.com/channels/123/777/888")
+
+    monkeypatch.setattr(public_toke, "publish_toke_from_draft", publish)
+
+    async def delete_forbidden():
+        events.append("delete-forbidden")
+        raise discord.Forbidden(
+            SimpleNamespace(status=403, reason="Forbidden"), "Cannot delete source",
+        )
+
+    async def no_dm(_text):
+        raise AssertionError("success DM must not be sent, even if source cleanup fails")
+
+    author = SimpleNamespace(id=444, bot=False, send=no_dm)
+    source = SimpleNamespace(id=555)
+    guild = SimpleNamespace(id=123)
+    live.begin_capture(guild.id, author.id, source.id, 777, "hello")
+    msg = SimpleNamespace(
+        guild=guild, author=author, channel=source, webhook_id=None,
+        content="", attachments=[SimpleNamespace(filename="sesh.gif", content_type="image/gif")],
+        embeds=[], delete=delete_forbidden,
+    )
+    asyncio.run(live._on_toke_media_message(msg))
+    assert events == ["published", "delete-forbidden"]
     assert live.pending_for(guild.id, author.id) is None
 
 

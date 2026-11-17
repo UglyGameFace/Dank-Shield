@@ -1,3 +1,10 @@
+## POST BUILDER PR #855: CI AND BASE RECONCILIATION (2026-11-16)
+
+- The failing full Dank Shield CI job at head `4f54f9d2` was `tools/test_recent_feature_nav_contract.py`: the Post Builder menu changed without corresponding `stoney_verify/navigation_registry.py` metadata. Fix added explicit movie/game/event search aliases, current categorization and *non-premature* recent-release wording. All seven other workflows on the previous head passed; exact new-head CI must pass before merge.
+- Main advanced independently to `996619b5ebf1572c90454c8893d2ee24b2404354` (merged #853 creator notification cleanup). This branch must include its Toke source/test changes, retain the new Post Builder implementation, and reconcile ACTIVE_TASK.md without duplicate historical checkpoints or unmerged feature announcements. The PR remains unmerged until exact-head validation.
+
+---
+
 ## POST BUILDER: DISCORD SOCIAL EVENTS EXPANSION (2026-11-16)
 
 - **Continuation on the existing open PR #855** (no separate competing branch): added eight more mobile-ready Discord event layouts: Movie Night, Live Watch Party, Trivia, Karaoke, Community Hangout, Giveaway, AMA/Q&A, and Creative Contest. The combined picker now has 20 editable options, below Discord's 25-option limit.
@@ -14,6 +21,15 @@
 - **Implementation:** `_menu` and `_home` immediately defer component updates before draft autosave, preserving CAS and private-only edits. Add six polished, fully editable server announcement layouts (Minecraft Relaunch, Modded Adventure, Game Night, Tournament, Server Update, Recruitment), mobile picker descriptions, and a compact Game Server Details modal with bounded address/platform/mod/join values and no unrelated field loss. Private panel footer explains the 15-minute expiry/reopen path.
 - **Validation:** New regression suite for acknowledgement order, modal and option contracts, Discord text limits, all six designs, no auto publishing, quick details field preservation and invalid updates. Existing Post Builder, SQL, security, publication confirmation and full CI must pass on immutable PR head. No Discloud deployment, live canary or schema change yet.
 - **Acceptance:** confirm Look & Images and other menu actions acknowledge in a newly opened editor, test Minecraft draft on Discord Android, add actual banner, confirm preview with server address `23.109.125.116:20229` and verified Cobblemon details, and verify resulting production SHA. Do not assume Bedrock port or current mod set without checking server config.
+
+---
+
+## TOKE CREATOR NOTIFICATION CLEANUP (2026-11-16)
+
+- **User report:** `/toke` GIF/photo composer automatically DMed the creator `💨 Your Toke call is ready: ...` immediately after it successfully published the public card. This is redundant because the creator initiated the event and the new card is already visible.
+- **Root cause / change:** `_on_toke_media_message` in `stoney_verify/toke_live_ui.py` unconditionally sent this success DM. Remove only the success DM, retaining both successful card publication and attempted deletion of the temporary GIF. Preserve failure DM for publishing errors and original GIF retention; preserve explicit opt-in Toke end reminders, plus slash command/ephemeral draft confirmations.
+- **Tests:** successful capture publishes/deletes without DM, forbidden source deletion does not create an unnecessary DM, failed card publication keeps its source and sends the existing failure notice.
+- **Release state:** PR #851 merged as `04730f44`; PR #852 merged as `c4e22706` after 11/11 PR-head checks passed. This new branch is `fix/toke-redundant-creator-success-dm-20261116`. Verify exact-head CI before merge; Discloud live SHA, restart behavior and confirmed mobile canary remain independently unverified. Historical checkpoints below are not task locks.
 
 ---
 

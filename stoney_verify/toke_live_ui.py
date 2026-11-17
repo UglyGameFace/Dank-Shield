@@ -1351,20 +1351,18 @@ async def _on_toke_media_message(message: discord.Message) -> None:
     pending.claimed = True
     try:
         from stoney_verify.commands_ext.public_toke import publish_toke_from_draft
-        sent = await publish_toke_from_draft(message.guild, message.author, pending, message)
+        await publish_toke_from_draft(message.guild, message.author, pending, message)
     except Exception as exc:
         try:
             await message.author.send(f"❌ Toke could not post your media: {type(exc).__name__}. Your original GIF was kept.")
         except discord.HTTPException:
             pass
     else:
+        # The newly posted public card is the creator's confirmation.
+        # Do not DM the person who just launched the sesh.
         try:
             await message.delete()  # Only after the complete Toke card was sent.
         except (discord.Forbidden, discord.HTTPException):
-            pass
-        try:
-            await message.author.send(f"💨 Your Toke call is ready: {sent.jump_url}")
-        except discord.HTTPException:
             pass
     finally:
         _PENDING.pop((pending.guild_id, pending.user_id), None)
