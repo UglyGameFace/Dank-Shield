@@ -27,7 +27,7 @@ def test_toke_slash_is_shorter_but_keeps_upload_and_voice() -> None:
     parameters = inspect.signature(public_toke.open_toke_command).parameters
     assert {"interaction", "message", "upload", "voice"} == set(parameters)
     assert "media" not in parameters  # GIF links still work in the normal composer.
-    assert "media" in inspect.signature(public_toke._open_toke_command_impl).parameters
+    assert "media" not in inspect.signature(public_toke._open_toke_command_impl).parameters
 
 
 def test_bare_toke_opens_home_but_explicit_post_uses_existing_send_path(monkeypatch) -> None:
