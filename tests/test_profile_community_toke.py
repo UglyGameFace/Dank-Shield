@@ -155,8 +155,11 @@ def test_toke_media_send_path_keeps_one_canonical_post() -> None:
     source = Path(public_toke.__file__).read_text(encoding="utf-8")
 
     assert "upload: Optional[discord.Attachment] = None" in source
-    assert 'media="Optional image/GIF URL' in source
-    assert "Choose either a media URL or an upload, not both." in source
+    # The public slash URL option is retired; GIF URLs still work through the
+    # existing normal message composer and the canonical media resolver.
+    assert 'media="Optional image/GIF URL' not in source
+    assert "Choose either a media URL or an upload, not both." not in source
+    assert "media_url_from_message(media_message, allow_public_page=True)" in source
     # Editing an attachment:// embed causes some Discord clients to show
     # the same attachment above and inside the interactive Toke card.
     assert 'embed.set_image(url=f"attachment://{upload_file.filename}")' not in source
