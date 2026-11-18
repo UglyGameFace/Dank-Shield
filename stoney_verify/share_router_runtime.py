@@ -17,6 +17,7 @@ import os
 import re
 import tempfile
 import time
+from datetime import datetime, timezone
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Mapping, Optional
@@ -63,6 +64,7 @@ _DATA_LOCK = asyncio.Lock()
 _ROUTE_STATE_CACHE: Optional[tuple[str, int, int, dict[str, Any]]] = None
 # Only successfully delivered posts are eligible for automatic cleanup retries.
 _SOURCE_CLEANUP_TASK: Optional[asyncio.Task[None]] = None
+_RUNTIME_BOT: Any = None
 SHARE_ROUTER_FEATURE_BUILD = "custom-sources-v2-prod-reconcile"
 _SOURCE_CLEANUP_INTERVAL_SECONDS = 900
 _SOURCE_CLEANUP_MAX_PER_PASS = 50
@@ -915,6 +917,49 @@ async def guild_download_channel_id(guild_id: int) -> int:
 
 DOWNLOAD_DELIVERY_MODES = frozenset({"off", "dm", "channel", "both"})
 
+# Dank Shield Pro gate for downloads (Phase 3 Slice 6, spec §2.4). Route
+# state predates the tier regime and carries no timestamps, so the
+# configure path records this marker whenever it saves a non-grandfathered
+# setup while membership is configured. At submission time, an active
+# setup with no marker is a pre-arming setup and stays grandfathered; a
+# marker-carrying setup is checked against the gate normally.
+DOWNLOADS_TIER_MARKER_KEY = "downloads_tier_checked_at"
+DOWNLOADS_PREMIUM_FEATURE = "share_router_downloads"
+
+
+class DownloadsProRequiredError(ValueError):
+    """A download setup save was denied by the Dank Shield Pro gate.
+
+    Carries the guard decision so UI callers can render the standard Pro
+    denial embed instead of a generic settings error. Subclasses ValueError
+    so any unconverted caller still fails closed with no state written.
+    """
+
+    def __init__(self, decision: Any) -> None:
+        super().__init__("Downloads are a Dank Shield Pro feature for this server.")
+        self.decision = decision
+
+
+def _download_bucket_state(bucket: Any) -> tuple[str, int, str]:
+    """Resolve (delivery_mode, destination_id, tier_marker) from a raw bucket.
+
+    Single authority for delivery semantics: a guild counts as downloading
+    only with a request channel set, a recognized mode, and (for channel
+    modes) a destination. The tier marker is returned verbatim ("" when the
+    bucket predates the tier regime or was never checked under it).
+    """
+    if not isinstance(bucket, dict) or _safe_int(bucket.get("download_channel_id"), 0) <= 0:
+        return "off", 0, ""
+    mode = bucket.get("download_delivery_mode", "dm")
+    target = _safe_int(bucket.get("download_destination_channel_id"), 0)
+    marker = bucket.get(DOWNLOADS_TIER_MARKER_KEY)
+    marker = marker if isinstance(marker, str) else ""
+    if mode not in DOWNLOAD_DELIVERY_MODES:
+        return "off", 0, marker
+    if mode in {"channel", "both"}:
+        return (mode, target, marker) if target > 0 else ("off", 0, marker)
+    return mode, 0, marker
+
 
 async def guild_download_delivery(guild_id: int) -> tuple[str, int]:
     """One per-guild delivery authority; existing configured channels retain DM mode.
@@ -924,23 +969,38 @@ async def guild_download_delivery(guild_id: int) -> tuple[str, int]:
     """
     async with _DATA_LOCK:
         bucket = _read_route_state_unlocked().get(str(int(guild_id))) or {}
-        if not isinstance(bucket, dict) or _safe_int(bucket.get("download_channel_id"), 0) <= 0:
-            return "off", 0
-        mode = bucket.get("download_delivery_mode", "dm")
-        target = _safe_int(bucket.get("download_destination_channel_id"), 0)
-        if mode not in DOWNLOAD_DELIVERY_MODES:
-            return "off", 0
-        if mode in {"channel", "both"}:
-            return (mode, target) if target > 0 else ("off", 0)
-        return mode, 0
+        mode, target, _marker = _download_bucket_state(bucket)
+        return mode, target
+
+
+async def guild_download_tier_state(guild_id: int) -> tuple[bool, str]:
+    """(downloads_active, tier_marker) for the Dank Shield Pro download gate.
+
+    downloads_active is the grandfather evidence from spec §2.4: a request
+    channel is set and the resolved delivery mode is not "off". The marker
+    is the downloads_tier_checked_at timestamp written by the configure
+    path while membership is configured ("" when absent).
+    """
+    async with _DATA_LOCK:
+        bucket = _read_route_state_unlocked().get(str(int(guild_id))) or {}
+        mode, _target, marker = _download_bucket_state(bucket)
+        return mode != "off", marker
 
 
 async def configure_guild_download(
     guild_id: int, *, channel_id: int, mode: str, destination_id: int = 0,
+    client: Any = None,
 ) -> None:
     """Atomically save an explicitly selected download mode and channel.
 
     Shares the existing route file and lock; never alters forwarding routes.
+
+    Pro gate (Phase 3 Slice 6): when ``client`` is supplied (interaction
+    callers) and membership is configured, saving an *active* mode requires
+    Pro unless the guild's existing setup is grandfathered (already
+    downloading). Pausing (mode="off") is never gated, and callers without
+    a client keep the historical behavior — entitlement resolution needs
+    one. A denied save raises DownloadsProRequiredError before any write.
     """
     if int(guild_id) <= 0 or int(channel_id) <= 0 or mode not in DOWNLOAD_DELIVERY_MODES:
         raise ValueError("Invalid Share Router download settings")
@@ -949,6 +1009,30 @@ async def configure_guild_download(
             raise ValueError("Choose a text channel for the video results.")
     elif destination_id:
         raise ValueError("This delivery mode does not use a destination channel")
+    tier_checked_at = ""
+    if client is not None and mode != "off":
+        # Lazy imports: this module is imported by gateway listeners and
+        # must not pull the membership/guard stack at import time.
+        from stoney_verify.services import membership, membership_gate
+
+        # Grandfather evidence is the pre-save state: already downloading.
+        downloads_active, _marker = await guild_download_tier_state(guild_id)
+        decision = await membership_gate.premium_decision(
+            guild_id=int(guild_id),
+            client=client,
+            action="set up Share Router downloads",
+            premium_feature=DOWNLOADS_PREMIUM_FEATURE,
+            grandfathered=downloads_active,
+        )
+        if decision is not None:
+            raise DownloadsProRequiredError(decision)
+        if not downloads_active and membership.membership_configured():
+            # Record that this setup was tier-checked (spec §2.4) — but
+            # only for a setup that is not itself grandfathered, so a
+            # pre-arming setup keeps its markerless identity (and its
+            # submission grandfathering) even when re-saved under the
+            # tier regime.
+            tier_checked_at = datetime.now(timezone.utc).isoformat()
     async with _DATA_LOCK:
         data = _load_all_unlocked()
         key = str(int(guild_id))
@@ -960,6 +1044,8 @@ async def configure_guild_download(
         bucket["download_destination_channel_id"] = (
             str(int(destination_id)) if mode in {"channel", "both"} else ""
         )
+        if tier_checked_at:
+            bucket[DOWNLOADS_TIER_MARKER_KEY] = tier_checked_at
         data[key] = bucket
         _save_all_unlocked(data)
 
@@ -2142,7 +2228,7 @@ async def route_message(message: discord.Message) -> None:
             # Discord gateway listener stays non-blocking while download workers
             # process a bounded durable queue. Never create another listener.
             from .share_router_download_queue import enqueue_download_request
-            await enqueue_download_request(message)
+            await enqueue_download_request(message, client=_RUNTIME_BOT)
             return
         route = route_for_source(routes, int(message.channel.id))
         # Filter out ordinary conversation before target permissions, media
@@ -2544,6 +2630,8 @@ async def create_or_repair_hidden_share_hub(
 def ensure_share_router_runtime(bot: Any) -> bool:
     """Install the one production on_message listener idempotently."""
 
+    global _RUNTIME_BOT
+    _RUNTIME_BOT = bot
     try:
         existing = list((getattr(bot, "extra_events", {}) or {}).get("on_message") or [])
         for fn in existing:
@@ -2570,9 +2658,14 @@ def ensure_share_router_runtime(bot: Any) -> bool:
 
 
 __all__ = [
+    "DOWNLOADS_PREMIUM_FEATURE",
+    "DOWNLOADS_TIER_MARKER_KEY",
+    "DownloadsProRequiredError",
     "HubRepairResult",
     "ROUTES_FILE",
     "RouteHealth",
+    "configure_guild_download",
+    "guild_download_tier_state",
     "create_or_repair_hidden_share_hub",
     "ensure_share_router_runtime",
     "find_share_router_categories",

@@ -258,7 +258,41 @@ async def queue_snapshot() -> dict[str, int]:
     return await asyncio.to_thread(_snapshot)
 
 
-async def enqueue_download_request(message: discord.Message) -> bool:
+async def _downloads_tier_allows(message: discord.Message, client: Any) -> bool:
+    """Dank Shield Pro submission gate for downloads (Phase 3 Slice 6).
+
+    Grandfather rule (spec §2.4): a guild already downloading whose route
+    bucket carries no downloads_tier_checked_at marker set up before the
+    tier regime and stays free; a marker-carrying guild is checked
+    normally. The check short-circuits entirely while membership is
+    unconfigured, and is skipped when no client is available to resolve
+    entitlement (callers without one keep the historical behavior). Jobs
+    already queued are never re-checked — the worker is not gated, so a
+    coverage lapse never strands a queued download.
+    """
+    client = client if client is not None else _WORKER_BOT
+    if client is None:
+        return True
+    # Lazy imports: the gateway path must not pull the membership stack
+    # (or the runtime module) at import time.
+    from stoney_verify.services import membership, membership_gate
+
+    if not membership.membership_configured():
+        return True
+    from .share_router_runtime import guild_download_tier_state
+
+    downloads_active, marker = await guild_download_tier_state(int(message.guild.id))
+    decision = await membership_gate.premium_decision(
+        guild_id=int(message.guild.id),
+        client=client,
+        action="use Share Router downloads",
+        premium_feature="share_router_downloads",
+        grandfathered=bool(downloads_active and not marker),
+    )
+    return decision is None
+
+
+async def enqueue_download_request(message: discord.Message, *, client: Any = None) -> bool:
     """Fast gateway path: validate and queue IDs; never fetch/download media here."""
     guild = message.guild
     if guild is None or not isinstance(message.author, discord.Member):
@@ -273,6 +307,9 @@ async def enqueue_download_request(message: discord.Message) -> bool:
         return True
     if not _valid_request_url(message.content):
         await _reply_problem(message, "Send one supported public video URL per request.")
+        return True
+    if not await _downloads_tier_allows(message, client):
+        await _reply_problem(message, "Downloads are a Dank Shield Pro feature for this server.")
         return True
     try:
         status = await asyncio.to_thread(

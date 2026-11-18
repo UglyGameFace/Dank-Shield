@@ -153,7 +153,9 @@ def test_one_channel_shortcut_confirms_before_atomic_no_dm_save(monkeypatch):
     async def lock_context():
         yield
 
-    async def persist(gid, *, channel_id, mode, destination_id):
+    async def persist(gid, *, channel_id, mode, destination_id, client=None):
+        # Slice 6: configure call sites inject the interaction client for
+        # the downloads Pro gate; the fake accepts and ignores it.
         saved.append((gid, channel_id, mode, destination_id))
 
     async def current_embed(_):
