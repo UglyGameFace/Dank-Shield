@@ -581,6 +581,7 @@ def _effective_format_options(
     *,
     channel_id: int,
     category_id: int,
+    kind: str = "",
 ) -> dict[str, Any]:
     """Resolve format priority for one channel/category.
 
@@ -588,7 +589,13 @@ def _effective_format_options(
     1. channel override lock
     2. category format lock
     3. global format lock
-    4. ordinary auto theme draft
+    4. saved per-category style (``category_styles``)
+    5. ordinary auto theme draft
+
+    Category styles are softer than locks: they only apply when no lock
+    covers the item, and each set field overrides just that piece of the
+    server-wide draft. Channels use the style's ``font``; a category header
+    uses ``category_font`` when set and otherwise falls back to ``font``.
     """
 
     effective = dict(options)
@@ -617,6 +624,20 @@ def _effective_format_options(
             if chosen.get(key) is not None:
                 effective[key] = chosen.get(key)
         effective["__format_lock_scope"] = scope
+        return effective
+
+    style = studio.normalize_category_style(_mapping_dict(options.get("category_styles")).get(category_key))
+    if style is not None:
+        font = style.get("category_font") if kind == "category" else None
+        if font is None:
+            font = style.get("font")
+        if font is not None:
+            effective["font"] = font
+        if style.get("separator_id") is not None:
+            effective["separator_id"] = style["separator_id"]
+        if style.get("category_frame_id") is not None:
+            effective["category_frame_id"] = style["category_frame_id"]
+        effective["__format_lock_scope"] = "category_style"
     else:
         effective["__format_lock_scope"] = "auto"
 
@@ -833,7 +854,7 @@ async def build_design_plan(guild: discord.Guild, options: Mapping[str, Any]) ->
                 category_id=category_id,
             )
         else:
-            effective_options = _effective_format_options(options, channel_id=channel_id, category_id=category_id)
+            effective_options = _effective_format_options(options, channel_id=channel_id, category_id=category_id, kind=kind)
             result = studio.build_styled_name(
                 current_name,
                 kind="category" if kind == "category" else "text",

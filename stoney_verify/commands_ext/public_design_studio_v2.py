@@ -21,6 +21,7 @@ from stoney_verify.services import search_safe_naming
 from stoney_verify.services import naming_identity
 from stoney_verify.services import server_design_apply_service as apply_service
 from stoney_verify.services import server_design_plan_service as plans
+from stoney_verify.services import server_design_style_zones as style_zones
 from stoney_verify.services import server_design_repair_confidence as repair_confidence
 from stoney_verify.services import server_design_rule_service as rule_service
 
@@ -659,7 +660,7 @@ def _design_server_embed(guild: discord.Guild, options: Mapping[str, Any]) -> di
             ),
             inline=False,
         )
-    embed.set_footer(text="Choose → Preview → Apply · Frame / Icons contains additional visual choices")
+    embed.set_footer(text="Choose → Preview → Apply · Frame / Icons contains frames, icons, and per-category styles")
     return legacy._clean_design_embed(embed)  # type: ignore[attr-defined]
 
 
@@ -774,6 +775,18 @@ class DesignServerCategoryFrameView(DesignView):
         )
 
 
+    @discord.ui.button(label="Category Styles", emoji="🗂️", style=discord.ButtonStyle.secondary, custom_id="dank_design_v2:category_styles", row=3)
+    async def category_styles(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if not await _require_design_permission(interaction):
+            return
+        guild = interaction.guild
+        assert guild is not None
+        view = DesignCategoryStylesView(guild, self.options)
+        await interaction.response.edit_message(
+            embed=_category_styles_embed(guild, view),
+            view=view,
+        )
+
     @discord.ui.button(label="Back to Server Design", emoji="↩️", style=discord.ButtonStyle.secondary, custom_id="dank_design_v2:category_frame_back", row=2)
     async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         if not await _require_design_permission(interaction):
@@ -882,6 +895,358 @@ class DesignServerView(DesignView):
     @discord.ui.button(label="Back", emoji="⬅️", style=discord.ButtonStyle.secondary, custom_id="dank_design_v2:server_back", row=4)
     async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         await _go_home(interaction)
+
+
+def _category_styles_map(options: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
+    return studio.normalize_category_styles(options.get("category_styles"))
+
+
+def _category_style_summary(entry: Mapping[str, Any] | None) -> str:
+    if studio.normalize_category_style(entry) is None:
+        return "Server design"
+    font = entry.get("font") if isinstance(entry, Mapping) else None
+    header = entry.get("category_font") if isinstance(entry, Mapping) else None
+    frame = entry.get("category_frame_id") if isinstance(entry, Mapping) else None
+    separator = entry.get("separator_id") if isinstance(entry, Mapping) else None
+    parts = [f"channels {studio.font_label(font) if font else 'server font'}"]
+    parts.append(f"header {studio.font_label(header) if header else 'same as channels'}")
+    if frame:
+        parts.append(legacy._category_frame_choice_label(frame))  # type: ignore[attr-defined]
+    if separator:
+        parts.append(legacy._separator_choice_label(separator))  # type: ignore[attr-defined]
+    return " · ".join(parts)
+
+
+def _detect_category_style_template(entry: Mapping[str, Any] | None) -> str:
+    normalized = studio.normalize_category_style(entry)
+    if normalized is None:
+        return ""
+    for template_id in style_zones.category_style_template_ids():
+        if style_zones.category_style_from_template(template_id) == normalized:
+            return template_id
+    return ""
+
+
+def _category_style_preview_lines(guild: discord.Guild, view: "DesignCategoryStylesView") -> list[str]:
+    options = view.options
+    theme = legacy._theme_from_options(options)  # type: ignore[attr-defined]
+    theme_id = _safe_str(getattr(theme, "id", "gothic_clean"), "gothic_clean")
+    strength = max(1, min(5, _safe_int(options.get("strength"), 4)))
+    icon_mode = _design_server_icon_mode(options)
+    draft = {"font": None, "category_font": None, "separator_id": None, "category_frame_id": None} if view.clear_style else view.draft
+    channel_font = draft.get("font") or _design_server_font(options)
+    header_font = draft.get("category_font") or draft.get("font") or _design_server_font(options)
+    separator = draft.get("separator_id") or _design_server_separator(options)
+    frame = draft.get("category_frame_id") or _design_server_category_frame(options)
+
+    def render(name: str, *, kind: str, font: str) -> str:
+        result = studio.build_styled_name(
+            name,
+            kind=kind,
+            theme_id=theme_id,
+            strength=strength,
+            icon_mode=icon_mode,
+            protection_rules={},
+            protection_mode="full",
+            separator_id=separator,
+            category_frame_id=frame,
+            font=font,
+            exact_match=True,
+        )
+        return _safe_str(result.after, name)
+
+    category = next(
+        (cat for cat in (getattr(guild, "categories", None) or []) if int(getattr(cat, "id", 0)) == view.category_id),
+        None,
+    )
+    if category is None:
+        return [render("category-name", kind="category", font=header_font), render("channel-name", kind="text", font=channel_font)]
+
+    lines = [render(_safe_str(getattr(category, "name", "")), kind="category", font=header_font)]
+    children = sorted(
+        (getattr(category, "channels", None) or []),
+        key=lambda child: _safe_int(getattr(child, "position", 0), 0),
+    )
+    for child in children[:2]:
+        lines.append(render(_safe_str(getattr(child, "name", "")), kind="text", font=channel_font))
+    return lines
+
+
+def _category_styles_embed(guild: discord.Guild, view: "DesignCategoryStylesView") -> discord.Embed:
+    options = view.options
+    styles = _category_styles_map(options)
+    category_name = next((name for cid, name in view.categories if cid == view.category_id), "")
+    saved = styles.get(str(view.category_id))
+
+    embed = discord.Embed(
+        title="🗂️ Category Styles",
+        description=(
+            "Give one category its own fonts inside the server-wide design, so categories can "
+            "differ while still following one scheme. A category style applies only when no saved "
+            "layout rule covers that category — channel, category, and global rules still win. "
+            "Nothing is renamed until you Preview and Apply from Server Design."
+        ),
+        color=discord.Color.blurple(),
+    )
+    if not view.categories:
+        embed.add_field(
+            name="No categories yet",
+            value="Create a category first, then give it a style here.",
+            inline=False,
+        )
+        return legacy._clean_design_embed(embed)  # type: ignore[attr-defined]
+
+    draft_summary = "Server design (style removed on save)" if view.clear_style else _category_style_summary(view.draft)
+    embed.add_field(
+        name=f"Category: {category_name or 'Unknown'}",
+        value=(
+            f"Saved now: **{_category_style_summary(saved)}**\n"
+            f"On save: **{draft_summary}**"
+        ),
+        inline=False,
+    )
+    preview = _category_style_preview_lines(guild, view)
+    embed.add_field(
+        name="Preview",
+        value="\n".join(f"`{line}`" for line in preview)[:1024],
+        inline=False,
+    )
+    styled_count = len(styles)
+    embed.set_footer(
+        text=(
+            f"{styled_count} categor{'y' if styled_count == 1 else 'ies'} with a saved style · "
+            "Choose category → stamp a template or pick fonts → Save Category Style"
+        )
+    )
+    return legacy._clean_design_embed(embed)  # type: ignore[attr-defined]
+
+
+async def _edit_category_styles(interaction: discord.Interaction, view: "DesignCategoryStylesView") -> None:
+    guild = interaction.guild
+    assert guild is not None
+    new_view = view.respawn(guild)
+    await interaction.response.edit_message(
+        embed=_category_styles_embed(guild, new_view),
+        view=new_view,
+    )
+
+
+class DesignCategoryStyleCategorySelect(discord.ui.Select):
+    def __init__(self, view: "DesignCategoryStylesView") -> None:
+        styles = _category_styles_map(view.options)
+        choices: list[discord.SelectOption] = []
+        for category_id, name in view.categories[:25]:
+            entry = styles.get(str(category_id))
+            choices.append(
+                discord.SelectOption(
+                    label=(name or f"Category {category_id}")[:100],
+                    value=str(category_id),
+                    description=f"Style: {_category_style_summary(entry)}"[:100],
+                    default=category_id == view.category_id,
+                )
+            )
+        super().__init__(placeholder="1) Choose a category", min_values=1, max_values=1, options=choices, row=0)
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        if not await _require_design_permission(interaction):
+            return
+        view = self.view
+        if not isinstance(view, DesignCategoryStylesView):
+            return
+        view.category_id = int(self.values[0])
+        saved = _category_styles_map(view.options).get(str(view.category_id))
+        view.draft = dict(saved) if saved else {"font": None, "category_font": None, "separator_id": None, "category_frame_id": None}
+        view.template_id = _detect_category_style_template(saved)
+        view.clear_style = False
+        await _edit_category_styles(interaction, view)
+
+
+class DesignCategoryStyleTemplateSelect(discord.ui.Select):
+    def __init__(self, view: "DesignCategoryStylesView") -> None:
+        current = "__none__" if view.clear_style else (view.template_id or "__custom__")
+        choices: list[discord.SelectOption] = [
+            discord.SelectOption(
+                label="Server Design · No Category Style",
+                value="__none__",
+                description="This category follows the server-wide design.",
+                default=current == "__none__",
+            ),
+            discord.SelectOption(
+                label="Custom Mix · Fonts Below",
+                value="__custom__",
+                description="Keep the channel and header fonts chosen below.",
+                default=current == "__custom__",
+            ),
+        ]
+        for template_id in style_zones.category_style_template_ids():
+            template = style_zones.CATEGORY_STYLE_TEMPLATES[template_id]
+            choices.append(
+                discord.SelectOption(
+                    label=_safe_str(template.get("label"), template_id)[:100],
+                    value=template_id,
+                    description=_safe_str(template.get("description"))[:100],
+                    default=current == template_id,
+                )
+            )
+        super().__init__(placeholder="2) Stamp a zone template (optional)", min_values=1, max_values=1, options=choices, row=1)
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        if not await _require_design_permission(interaction):
+            return
+        view = self.view
+        if not isinstance(view, DesignCategoryStylesView):
+            return
+        selected = _safe_str(self.values[0], "__custom__")
+        if selected == "__none__":
+            view.clear_style = True
+            view.template_id = "__none__"
+            view.draft = {"font": None, "category_font": None, "separator_id": None, "category_frame_id": None}
+        elif selected == "__custom__":
+            view.template_id = ""
+            view.clear_style = False
+        else:
+            entry = style_zones.category_style_from_template(selected)
+            if entry is None:
+                raise ValueError("Unsupported Dank Design zone template selection.")
+            view.draft = dict(entry)
+            view.template_id = selected
+            view.clear_style = False
+        await _edit_category_styles(interaction, view)
+
+
+class DesignCategoryStyleFontSelect(discord.ui.Select):
+    def __init__(self, view: "DesignCategoryStylesView", *, field: str) -> None:
+        self.field = field
+        current = view.draft.get(field)
+        if field == "font":
+            first = discord.SelectOption(
+                label=f"Server Default · {studio.font_label(_design_server_font(view.options))}"[:100],
+                value="__server__",
+                description="Channels in this category follow the server font.",
+                default=current is None,
+            )
+            placeholder = "3) Choose the channel font"
+            row = 2
+        else:
+            first = discord.SelectOption(
+                label="Same as Channel Font",
+                value="__same__",
+                description="The category header follows the channel font.",
+                default=current is None,
+            )
+            placeholder = "4) Choose the category header font"
+            row = 3
+        choices: list[discord.SelectOption] = [first]
+        for style in studio.DESIGN_FONT_STYLES:
+            decorative = style in getattr(studio, "RISKY_FONTS", set())
+            note = "Decorative · preview recommended" if decorative else "Readable"
+            choices.append(
+                discord.SelectOption(
+                    label=(f"⚠️ {studio.font_label(style)}" if decorative else studio.font_label(style))[:100],
+                    value=style,
+                    description=f"{studio.font_preview(style)} · {note}"[:100],
+                    default=current == style,
+                )
+            )
+        super().__init__(placeholder=placeholder, min_values=1, max_values=1, options=choices[:25], row=row)
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        if not await _require_design_permission(interaction):
+            return
+        view = self.view
+        if not isinstance(view, DesignCategoryStylesView):
+            return
+        selected = _safe_str(self.values[0])
+        if selected in {"__server__", "__same__"}:
+            view.draft[self.field] = None
+        elif selected in studio.DESIGN_FONT_STYLES:
+            view.draft[self.field] = selected
+        else:
+            raise ValueError("Unsupported Dank Design font selection.")
+        view.template_id = ""
+        view.clear_style = False
+        await _edit_category_styles(interaction, view)
+
+
+class DesignCategoryStylesView(DesignView):
+    def __init__(
+        self,
+        guild: discord.Guild,
+        options: Mapping[str, Any],
+        *,
+        category_id: int | None = None,
+        draft: Mapping[str, Any] | None = None,
+        template_id: str | None = None,
+        clear_style: bool = False,
+    ) -> None:
+        super().__init__(timeout=900)
+        self.options = dict(options)
+        self.categories: tuple[tuple[int, str], ...] = tuple(
+            (int(getattr(cat, "id", 0)), _safe_str(getattr(cat, "name", "")))
+            for cat in (getattr(guild, "categories", None) or [])
+        )
+        valid_ids = {cid for cid, _name in self.categories}
+        if category_id is None or int(category_id) not in valid_ids:
+            category_id = self.categories[0][0] if self.categories else 0
+        self.category_id = int(category_id)
+        saved = _category_styles_map(self.options).get(str(self.category_id))
+        if draft is None:
+            draft = dict(saved) if saved else {"font": None, "category_font": None, "separator_id": None, "category_frame_id": None}
+        self.draft: dict[str, Any] = {
+            key: draft.get(key)
+            for key in ("font", "category_font", "separator_id", "category_frame_id")
+        }
+        if template_id is None:
+            template_id = _detect_category_style_template(saved)
+        self.template_id = template_id
+        self.clear_style = bool(clear_style)
+        self.add_item(DesignCategoryStyleCategorySelect(self))
+        self.add_item(DesignCategoryStyleTemplateSelect(self))
+        self.add_item(DesignCategoryStyleFontSelect(self, field="font"))
+        self.add_item(DesignCategoryStyleFontSelect(self, field="category_font"))
+
+    def respawn(self, guild: discord.Guild) -> "DesignCategoryStylesView":
+        return DesignCategoryStylesView(
+            guild,
+            self.options,
+            category_id=self.category_id,
+            draft=self.draft,
+            template_id=self.template_id,
+            clear_style=self.clear_style,
+        )
+
+    @discord.ui.button(label="Save Category Style", emoji="💾", style=discord.ButtonStyle.success, custom_id="dank_design_v2:category_style_save", row=4)
+    async def save(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if not await _require_design_permission(interaction):
+            return
+        guild = interaction.guild
+        assert guild is not None
+        if legacy._reserved_design_target(guild, int(self.category_id)) is not None:  # type: ignore[attr-defined]
+            raise RuntimeError("Share Router infrastructure cannot receive Dank Design category styles.")
+        await interaction.response.defer(ephemeral=True, thinking=False)
+        options = await _load_design_options(int(guild.id))
+        styles = _category_styles_map(options)
+        entry = None if self.clear_style else studio.normalize_category_style(self.draft)
+        if entry is None:
+            styles.pop(str(int(self.category_id)), None)
+        else:
+            styles[str(int(self.category_id))] = entry
+        options["category_styles"] = styles
+        await legacy._save_options(interaction, options)  # type: ignore[attr-defined]
+        view = DesignCategoryStylesView(guild, options, category_id=self.category_id)
+        await interaction.edit_original_response(embed=_category_styles_embed(guild, view), view=view)
+
+    @discord.ui.button(label="Back to Frame / Icons", emoji="↩️", style=discord.ButtonStyle.secondary, custom_id="dank_design_v2:category_style_back", row=4)
+    async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if not await _require_design_permission(interaction):
+            return
+        guild = interaction.guild
+        assert guild is not None
+        page = _category_frame_page_for(self.options)
+        await interaction.response.edit_message(
+            embed=_category_frame_picker_embed(guild, self.options, page=page),
+            view=DesignServerCategoryFrameView(self.options, page=page),
+        )
 
 
 def _edit_one_embed() -> discord.Embed:
