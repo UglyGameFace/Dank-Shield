@@ -109,6 +109,11 @@ def normalize_plan_options(options: Mapping[str, Any], *, strict: bool = True) -
     else:
         out.pop("category_frame_id", None)
 
+    # Per-category styles are softer than locks: validate them here so every
+    # plan path sees the same clean map, and keep them through strict mode
+    # alongside the lock maps below. Invalid entries drop out silently.
+    out["category_styles"] = studio.normalize_category_styles(out.get("category_styles"))
+
     # Preserve the old visual-name policy without mutating the global protected
     # name set. Explicit per-name owner choices remain authoritative.
     protection = _mapping(out.get("protection_rules"))

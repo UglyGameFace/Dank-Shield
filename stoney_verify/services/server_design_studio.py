@@ -964,6 +964,58 @@ def summarize_plan(items: list[dict[str, Any]]) -> dict[str, int]:
     return summary
 
 
+def normalize_category_style(value: Any) -> dict[str, Any] | None:
+    """Validate one saved ``category_styles`` entry.
+
+    A category style is the soft per-category design a plan applies when no
+    format lock covers the item. Every field is optional; ``None`` means the
+    server-wide design decides that piece. Returns ``None`` when the entry
+    carries no usable field so callers can drop it silently.
+    """
+
+    if not isinstance(value, Mapping):
+        return None
+
+    font = safe_str(value.get("font")).lower().replace("-", "_")
+    category_font = safe_str(value.get("category_font")).lower().replace("-", "_")
+    separator_id = safe_str(value.get("separator_id"))
+    category_frame_id = safe_str(value.get("category_frame_id"))
+    entry = {
+        "font": font if font in FONT_STYLES else None,
+        "category_font": category_font if category_font in FONT_STYLES else None,
+        "separator_id": separator_id if separator_id in SEPARATORS_BY_ID else None,
+        "category_frame_id": category_frame_id if category_frame_id in CATEGORY_FRAMES_BY_ID else None,
+    }
+    if all(item is None for item in entry.values()):
+        return None
+    return entry
+
+
+def normalize_category_styles(value: Any) -> dict[str, dict[str, Any]]:
+    """Validate a ``category_styles`` map keyed by category id.
+
+    Keys must be positive integer ids and entries must survive
+    :func:`normalize_category_style`; anything else is dropped silently so a
+    stale or hand-edited save can never break planning.
+    """
+
+    if not isinstance(value, Mapping):
+        return {}
+
+    out: dict[str, dict[str, Any]] = {}
+    for key, raw in value.items():
+        try:
+            category_id = int(str(key).strip())
+        except Exception:
+            continue
+        if category_id <= 0:
+            continue
+        entry = normalize_category_style(raw)
+        if entry is not None:
+            out[str(category_id)] = entry
+    return out
+
+
 def preview_lines(items: list[dict[str, Any]], *, filter_mode: str = "all", limit: int = 12) -> list[str]:
     rows: list[str] = []
     for item in items:
@@ -1007,6 +1059,6 @@ __all__ = [
     "EXACT_EDITOR_SEPARATOR_IDS", "FONT_STYLES", "FONT_STYLE_LABELS", "ICON_PACKS", "MAX_PLAN_ITEMS",
     "SEPARATOR_LIBRARY", "SERVER_DESIGN_SEPARATOR_IDS", "THEMES", "build_styled_name",
     "category_frame_affixes", "category_frame_preview", "design_score", "detect_duplicate_outputs", "fallback_ladder", "font_label",
-    "font_preview", "normalize_base_name", "parse_channel_name", "preview_lines", "separator_preview",
+    "font_preview", "normalize_base_name", "normalize_category_style", "normalize_category_styles", "parse_channel_name", "preview_lines", "separator_preview",
     "decode_known_unicode_font_glyph", "strip_known_unicode_fonts", "summarize_plan", "suggested_icon", "transform_text_safe", "validate_separator",
 ]
