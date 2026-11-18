@@ -126,6 +126,15 @@ FEATURES: tuple[NavigationFeature, ...] = (
         True,
     ),
     NavigationFeature(
+        "server_backups",
+        "Server Backups",
+        "🗂️",
+        "setup",
+        "Back up the server's categories, channels, roles and permissions, and restore them from a reviewed plan.",
+        ("backup", "backups", "restore", "server backup", "structure backup", "recover server", "rebuild server"),
+        True,
+    ),
+    NavigationFeature(
         "verification",
         "Verification",
         "✅",
@@ -534,10 +543,9 @@ RECENT_UPDATES: tuple[RecentFeatureUpdate, ...] = (
     # feature, so no new entry here.
     RecentFeatureUpdate(
         "embed_studio", "Scheduled and recurring posts are in Post Builder",
-        "Make an announcement in 4 steps with simple menus, schedule it for "
-        "later, or repeat it daily or weekly with a campaign. Forms and "
-        "live-updating posts are in the same menus, and Saved Pictures and "
-        "JSON backups stay available.", "2026-11-18",
+        "Announcements in 4 steps: schedule for later, repeat daily or "
+        "weekly, run a campaign, add a form or a live-updating post — "
+        "plus JSON backups, all in Post Builder.", "2026-11-18",
     ),
     RecentFeatureUpdate(
         "share_router", "Share videos from regular channels",
@@ -560,10 +568,9 @@ RECENT_UPDATES: tuple[RecentFeatureUpdate, ...] = (
     ),
     RecentFeatureUpdate(
         "action_reminder_center", "Member Setup reminders can send automatically",
-        "Open your to-dos, message preferences, and reminder settings in one "
-        "area — and Member Setup reminders now send on their own schedule to "
-        "members who opted in, instead of staff sending each one by hand. "
-        "Previews and per-member choices work exactly as before.", "2026-11-18",
+        "Member Setup reminders now send on their own schedule to members "
+        "who opted in, instead of staff sending each one by hand. Previews "
+        "and per-member choices are unchanged.", "2026-11-18",
     ),
     RecentFeatureUpdate(
         "somewhere_420", "See where it's 4:20",
@@ -572,6 +579,11 @@ RECENT_UPDATES: tuple[RecentFeatureUpdate, ...] = (
     RecentFeatureUpdate(
         "community_tools", "Dead Server Clapbacks",
         "Snippy auto-replies when someone calls the server dead.", "2026-11-18",
+    ),
+    RecentFeatureUpdate(
+        "server_backups", "Back up your whole server structure",
+        "Save categories, channels, roles and permissions, then restore from a reviewed plan.",
+        "2026-11-18",
     ),
 )
 RECENT_FEATURE_KEYS: tuple[str, ...] = tuple(item.key for item in RECENT_UPDATES)
@@ -605,6 +617,7 @@ FEATURE_GROUPS: dict[str, str] = {
     "card_assets": "Welcome & Exit",
     "status": "Check bot health",
     "diagnostics": "Check bot health",
+    "server_backups": "Backups & recovery",
     "logs_activity": "Server logs & counters",
     "server_stats": "Server logs & counters",
 }

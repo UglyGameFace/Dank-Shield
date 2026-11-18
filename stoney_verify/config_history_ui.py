@@ -575,6 +575,19 @@ class ConfigHistoryView(discord.ui.View):
         await open_backup_contents(interaction)
 
     @discord.ui.button(
+        label="Server Structure Backups",
+        emoji="🗂️",
+        style=discord.ButtonStyle.primary,
+        custom_id="dank_setup_config_history:server_backups",
+        row=1,
+    )
+    async def server_backups(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        from .server_backup_ui import open_server_backups
+
+        await open_server_backups(interaction)
+
+    @discord.ui.button(
         label="Refresh",
         emoji="🔄",
         style=discord.ButtonStyle.secondary,

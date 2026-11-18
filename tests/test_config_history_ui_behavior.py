@@ -144,6 +144,8 @@ def test_history_view_has_focused_controls_and_mobile_rows() -> None:
 
     assert button_labels(view) == {
         "Choose Backup Contents",
+        # Phase 3 slice 3a: entry point into Server Structure Backups.
+        "Server Structure Backups",
         "Previous Versions",
         "Next Versions",
         "Refresh",
