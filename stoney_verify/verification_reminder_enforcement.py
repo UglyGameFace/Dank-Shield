@@ -172,6 +172,18 @@ def _eligible(member: discord.Member, guild: discord.Guild, cfg: Mapping[str, An
     } - {0}
     if any(getattr(role, "id", 0) in protected_ids for role in getattr(member, "roles", ())):
         return False
+    # Server boosters are never auto-removed. Kicking a booster strips the
+    # guild's boosts (and can drop its boost tier / vanity perks) along with
+    # the member, so an unverified booster is a staff decision, not an
+    # automated one. premium_since is the authoritative per-member signal;
+    # the managed role's tag covers payloads that omit it.
+    if getattr(member, "premium_since", None) is not None:
+        return False
+    for role in getattr(member, "roles", ()) or ():
+        tags = getattr(role, "tags", None)
+        is_booster_role = getattr(tags, "is_premium_subscriber", None)
+        if callable(is_booster_role) and is_booster_role():
+            return False
     if action == "kick" and not me.guild_permissions.kick_members:
         return False
     if action == "ban" and not me.guild_permissions.ban_members:

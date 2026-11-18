@@ -237,6 +237,32 @@ def test_only_discord_accepted_scheduled_sends_are_recorded(monkeypatch):
     assert recorded == []
 
 
+def test_booster_is_never_auto_removed(monkeypatch):
+    guild, member, cfg, actions, outcomes = _setup_action(monkeypatch)
+    # An active boost (premium_since set) exempts the member entirely:
+    # removing a booster strips the guild's boosts with the member.
+    member.premium_since = datetime.now(timezone.utc) - timedelta(days=30)
+    assert run(enforcement.enforce_guild(guild)) == 0
+    assert actions == [] and outcomes == []
+
+    # The managed premium-subscriber role tag exempts even when the member
+    # payload omits premium_since.
+    member.premium_since = None
+    member.roles = [SimpleNamespace(
+        id=777, tags=SimpleNamespace(is_premium_subscriber=lambda: True),
+    )]
+    assert run(enforcement.enforce_guild(guild)) == 0
+    assert actions == [] and outcomes == []
+
+    # Control: a non-booster with an ordinary role is still removed, so the
+    # exemption cannot silently widen into a blanket pass.
+    member.roles = [SimpleNamespace(
+        id=778, tags=SimpleNamespace(is_premium_subscriber=lambda: False),
+    )]
+    assert run(enforcement.enforce_guild(guild)) == 1
+    assert [a[0] for a in actions] == ["kick"]
+
+
 def test_enforcement_ignores_staff_control_roles_and_moderation_permissions(monkeypatch):
     guild, member, cfg, actions, outcomes = _setup_action(monkeypatch)
     member.guild_permissions.manage_roles = True
