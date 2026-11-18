@@ -338,6 +338,33 @@
       "retention_class": "member_preference",
       "historical_reuse": "Restore a subscriber's covered servers after restart or migration without re-linking",
       "review_interval_days": 180
+    },
+    "public.dank_server_backups": {
+      "feature": "Dank Shield Pro whole-server structure backup/restore: plan-first recovery of categories, channels, roles and permission overwrites",
+      "owner": "stoney_verify.services.server_backup_service",
+      "purpose": "Stores up to 10 owner-created structure snapshots per Pro-covered guild so a damaged or rebuilt server can be restored from a reviewed plan; Dank Shield's own guild config stays in Config History and is only linked by version id",
+      "stored_fields": [
+        "backup_id",
+        "guild_id",
+        "created_by",
+        "label",
+        "created_at",
+        "schema_version",
+        "snapshot",
+        "snapshot_bytes",
+        "restore_state"
+      ],
+      "contains_message_content": false,
+      "retention_rule": "Retain while the guild keeps the backup; creating a backup beyond the 10-per-guild cap deletes the oldest backup in the same transaction (a backup with a restore in flight is never deleted). All backups are deleted when the owner deletes them or the guild's rows are purged on bot removal review",
+      "cleanup_interval_seconds": 86400,
+      "max_candidates_per_cleanup": 100,
+      "expiry_index": "idx_dank_server_backups_guild_created",
+      "preserve_when": "Backup is within the 10-per-guild cap, or a restore from it is in flight (restore_state status running)",
+      "backup_class": "critical_guild_configuration",
+      "migration": "postgres/migrations/202611180002_server_backups.sql",
+      "retention_class": "guild_configuration",
+      "historical_reuse": "Rebuild a guild's structure after accidental deletion, raid damage or a failed redesign without re-creating channels and roles by hand",
+      "review_interval_days": 180
     }
   }
 }
