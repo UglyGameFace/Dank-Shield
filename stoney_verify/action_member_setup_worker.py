@@ -25,6 +25,7 @@ from .action_member_setup_automation import (
     activation_prerequisites, load_automation,
 )
 from .action_schedule_policy import load_schedule
+from .services.membership import STATUS_FREE, guild_pro_status
 
 POLL_SECONDS = 180
 STARTUP_DELAY_SECONDS = 120
@@ -232,6 +233,13 @@ class MemberSetupReminderWorker:
             cfg, automation = await asyncio.wait_for(load_automation(gid), READ_TIMEOUT_SECONDS)
             if not automation.enabled or activation_prerequisites(cfg):
                 self.member_cursors.pop(gid, None)
+                return 0
+            # Membership rule: automated sends are a Dank Shield Pro
+            # feature. While tiers are unconfigured every guild passes; a
+            # configured but uncovered guild is paused here, before any
+            # candidate IDs are read. All claim, consent and budget
+            # mechanics below are unchanged.
+            if await guild_pro_status(gid, client=self.bot) == STATUS_FREE:
                 return 0
             # Fast fail before any candidate IDs or network activity.
             from .member_setup_service import GUILD_SETUP_KEY, normalize_guild_setup_state

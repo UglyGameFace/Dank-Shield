@@ -76,7 +76,13 @@ def _rows(response: Any) -> list[dict[str, Any]]:
 
 def _enqueue_sync(guild_id: int, channel_id: int, creator_id: int,
                   project: Mapping[str, Any], when: datetime) -> dict[str, Any]:
-    if not schedules_enabled():
+    from . import embed_studio_availability as availability
+    refusal = availability.service_refusal(availability.FEATURE_SCHEDULING, guild_id)
+    if refusal == availability.REFUSAL_PRO:
+        raise StudioScheduleError(
+            "Scheduled publishing is a Dank Shield Pro feature for this server."
+        )
+    if refusal is not None:
         raise StudioScheduleError("Scheduled publishing is disabled on this deployment.")
     if min(int(guild_id), int(channel_id), int(creator_id)) <= 0:
         raise StudioScheduleError("Choose a real server and channel.")
@@ -110,7 +116,13 @@ async def enqueue(guild_id: int, channel_id: int, creator_id: int,
 async def list_pending(guild_id: int) -> list[dict[str, Any]]:
     if int(guild_id) <= 0:
         raise StudioScheduleError("Invalid server.")
-    if not schedules_enabled():
+    from . import embed_studio_availability as availability
+    refusal = availability.service_refusal(availability.FEATURE_SCHEDULING, guild_id)
+    if refusal == availability.REFUSAL_PRO:
+        raise StudioScheduleError(
+            "Scheduled publishing is a Dank Shield Pro feature for this server."
+        )
+    if refusal is not None:
         raise StudioScheduleError("Scheduled publishing is disabled.")
     def run():
         return _rows(_client().table(TABLE)
@@ -121,7 +133,9 @@ async def list_pending(guild_id: int) -> list[dict[str, Any]]:
 
 
 async def cancel(guild_id: int, job_id: str) -> bool:
-    if not schedules_enabled() or int(guild_id) <= 0 or len(str(job_id)) > 80:
+    from . import embed_studio_availability as availability
+    if (not availability.service_may_serve(availability.FEATURE_SCHEDULING, guild_id)
+            or int(guild_id) <= 0 or len(str(job_id)) > 80):
         raise StudioScheduleError("Invalid schedule operation.")
     def run():
         return bool(_rows(_client().table(TABLE).update({"status":"cancelled"})
@@ -131,7 +145,8 @@ async def cancel(guild_id: int, job_id: str) -> bool:
 
 
 async def claim_due(*, shard_count: int = 1, owned_shards: tuple[int, ...] = (0,)) -> list[dict[str, Any]]:
-    if not schedules_enabled():
+    from . import embed_studio_availability as availability
+    if not availability.worker_may_claim(availability.FEATURE_SCHEDULING):
         return []
     if (not isinstance(shard_count, int) or not 1 <= shard_count <= 4096
             or not isinstance(owned_shards, tuple) or not owned_shards
@@ -150,7 +165,8 @@ async def claim_due(*, shard_count: int = 1, owned_shards: tuple[int, ...] = (0,
 
 
 async def finish(job_id: str, *, message_id: int = 0, error_code: str = "") -> bool:
-    if not schedules_enabled():
+    from . import embed_studio_availability as availability
+    if not availability.worker_may_claim(availability.FEATURE_SCHEDULING):
         return False
     status = "sent" if int(message_id) > 0 else "failed"
     row = {"status":status,"sent_message_id":str(int(message_id)) if message_id else None,

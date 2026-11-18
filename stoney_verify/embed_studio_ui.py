@@ -920,9 +920,12 @@ class StudioFormBasicsModal(discord.ui.Modal, title="Set Up Feedback Form"):
         self.add_item(self.button_input)
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
-        from .embed_studio_forms import forms_enabled
-        if not forms_enabled():
-            return await _say(interaction,"Private forms have not been enabled yet.")
+        from . import embed_studio_availability as availability
+        denial = await availability.feature_denial(
+            availability.FEATURE_FORMS, self.session.guild_id,
+            client=interaction.client, action="set up a form")
+        if denial is not None:
+            return await _say(interaction, denial)
         try:
             def mutate(project):
                 existing = project.get("form") or {}
@@ -1111,9 +1114,12 @@ class StudioFormBuilderMenu(_StudioView):
 
 
 async def _form_builder(interaction: discord.Interaction,session: StudioSession) -> None:
-    from .embed_studio_forms import forms_enabled
-    if not forms_enabled():
-        return await _say(interaction,"Forms are not enabled on this deployment yet.")
+    from . import embed_studio_availability as availability
+    denial = await availability.feature_denial(
+        availability.FEATURE_FORMS, session.guild_id,
+        client=interaction.client, action="open the form builder")
+    if denial is not None:
+        return await _say(interaction, denial)
     form=session.project.get("form")
     description=("Set up the title, then add up to five questions. Each response "
                  "goes privately to the moderator inbox, not into a public channel. "
@@ -2588,9 +2594,15 @@ class StudioScheduleModal(discord.ui.Modal, title="Schedule an Announcement"):
     async def on_submit(self, interaction: discord.Interaction) -> None:
         from .embed_studio_schedules import (
             StudioScheduleError, parse_schedule_time, safe_scheduled_project,
-            schedules_enabled, enqueue,
+            enqueue,
         )
-        if (not schedules_enabled() or not _staff(interaction)
+        from . import embed_studio_availability as availability
+        denial = await availability.feature_denial(
+            availability.FEATURE_SCHEDULING, self.session.guild_id,
+            client=interaction.client, action="schedule a post")
+        if denial is not None:
+            return await _say(interaction, denial)
+        if (not _staff(interaction)
                 or interaction.guild is None
                 or int(interaction.guild.id) != self.session.guild_id
                 or int(interaction.user.id) != self.session.owner_id):
@@ -2711,15 +2723,16 @@ class StudioReviewView(_StudioView):
         self.preview_resolved_project = validate_project(resolved_project if resolved_project is not None else session.project)
         self.preview_channel_id = session.channel_id
         self.preview_post_key = session.post_key
-        from .embed_studio_schedules import schedules_enabled
-        from .embed_studio_campaigns import campaigns_enabled
+        from . import embed_studio_availability as availability
         self.repeat_post.disabled = (
-            not campaigns_enabled() or bool(session.post_key)
+            not availability.sync_button_enabled(availability.FEATURE_RECURRING)
+            or bool(session.post_key)
             or bool(session.project.get("role_actions"))
             or bool(session.project.get("form"))
         )
         self.schedule_later.disabled = (
-            not schedules_enabled() or bool(session.post_key)
+            not availability.sync_button_enabled(availability.FEATURE_SCHEDULING)
+            or bool(session.post_key)
             or bool(session.project.get("role_actions"))
             or bool(session.project.get("form"))
         )
@@ -2747,9 +2760,12 @@ class StudioReviewView(_StudioView):
 
     @discord.ui.button(label="Schedule for Later", emoji="📅", style=discord.ButtonStyle.primary, row=0)
     async def schedule_later(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
-        from .embed_studio_schedules import schedules_enabled
-        if not schedules_enabled():
-            return await _say(interaction, "The scheduled sender has not been enabled.")
+        from . import embed_studio_availability as availability
+        denial = await availability.feature_denial(
+            availability.FEATURE_SCHEDULING, self.session.guild_id,
+            client=interaction.client, action="schedule a post")
+        if denial is not None:
+            return await _say(interaction, denial)
         if self.sent or self.session.project != self.preview_project or (
             self.session.channel_id != self.preview_channel_id
             or self.session.post_key != self.preview_post_key
@@ -2769,9 +2785,12 @@ class StudioReviewView(_StudioView):
 
     @discord.ui.button(label="Repeat Daily/Weekly", emoji="🔁", style=discord.ButtonStyle.secondary, row=0)
     async def repeat_post(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
-        from .embed_studio_campaigns import campaigns_enabled
-        if not campaigns_enabled():
-            return await _say(interaction, "Recurring campaigns have not been enabled.")
+        from . import embed_studio_availability as availability
+        denial = await availability.feature_denial(
+            availability.FEATURE_RECURRING, self.session.guild_id,
+            client=interaction.client, action="repeat a post")
+        if denial is not None:
+            return await _say(interaction, denial)
         if (self.sent or self.session.project != self.preview_project
                 or self.session.channel_id != self.preview_channel_id
                 or self.session.post_key != self.preview_post_key
@@ -2827,9 +2846,14 @@ class StudioReviewView(_StudioView):
             role_items = draft.get("role_actions") or []
             role_token = secrets.token_hex(16) if role_items else ""
             form = draft.get("form")
-            from .embed_studio_forms import forms_enabled,form_view,StudioFormError
-            if form and not forms_enabled():
-                return await _say(interaction, "Forms are not enabled for publishing on this deployment.")
+            from .embed_studio_forms import form_view,StudioFormError
+            if form:
+                from . import embed_studio_availability as availability
+                denial = await availability.feature_denial(
+                    availability.FEATURE_FORMS, self.session.guild_id,
+                    client=interaction.client, action="publish a form")
+                if denial is not None:
+                    return await _say(interaction, denial)
             if form and not form.get("questions"):
                 return await _say(interaction, "Add at least one question before publishing.")
             form_token = secrets.token_hex(16) if form else ""

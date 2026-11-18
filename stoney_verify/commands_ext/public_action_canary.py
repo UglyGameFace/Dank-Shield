@@ -132,6 +132,7 @@ class ConfirmSingleCanaryModal(discord.ui.Modal, title="Confirm One Member Setup
         try:
             result = await dispatch_single_member_setup_canary(
                 member, expected_revision=self.revision,
+                client=interaction.client,
             )
         except Exception:
             result = None

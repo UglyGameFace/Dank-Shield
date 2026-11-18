@@ -87,7 +87,13 @@ def parse_campaign(frequency: str, zone_name: str, clock_text: str,
 def _enqueue_sync(guild_id: int, channel_id: int, creator_id: int,
                   project: Mapping[str, Any], recurrence: Mapping[str, Any]
                   ) -> dict[str, Any]:
-    if not campaigns_enabled():
+    from . import embed_studio_availability as availability
+    refusal = availability.service_refusal(availability.FEATURE_RECURRING, guild_id)
+    if refusal == availability.REFUSAL_PRO:
+        raise StudioScheduleError(
+            "Recurring publishing is a Dank Shield Pro feature for this server."
+        )
+    if refusal is not None:
         raise StudioScheduleError("Recurring publishing is disabled.")
     if any(type(value) is not int or value <= 0
            for value in (guild_id, channel_id, creator_id)):
@@ -122,7 +128,15 @@ async def enqueue(guild_id: int, channel_id: int, creator_id: int,
 
 
 async def list_campaigns(guild_id: int) -> list[dict[str, Any]]:
-    if not campaigns_enabled() or type(guild_id) is not int or guild_id <= 0:
+    if type(guild_id) is not int or guild_id <= 0:
+        raise StudioScheduleError("Recurring campaigns are unavailable.")
+    from . import embed_studio_availability as availability
+    refusal = availability.service_refusal(availability.FEATURE_RECURRING, guild_id)
+    if refusal == availability.REFUSAL_PRO:
+        raise StudioScheduleError(
+            "Recurring campaigns are a Dank Shield Pro feature for this server."
+        )
+    if refusal is not None:
         raise StudioScheduleError("Recurring campaigns are unavailable.")
     def read() -> list[dict[str, Any]]:
         return _rows(_client().table(TABLE).select(
@@ -134,8 +148,10 @@ async def list_campaigns(guild_id: int) -> list[dict[str, Any]]:
 
 
 async def cancel(guild_id: int, campaign_id: str) -> bool:
-    if (not campaigns_enabled() or type(guild_id) is not int or guild_id <= 0
-            or len(str(campaign_id)) > 80):
+    from . import embed_studio_availability as availability
+    if (type(guild_id) is not int or guild_id <= 0
+            or len(str(campaign_id)) > 80
+            or not availability.service_may_serve(availability.FEATURE_RECURRING, guild_id)):
         raise StudioScheduleError("Invalid campaign cancellation.")
     def write() -> bool:
         return bool(_rows(_client().table(TABLE).update({
@@ -147,7 +163,8 @@ async def cancel(guild_id: int, campaign_id: str) -> bool:
 
 async def claim_due(*, shard_count: int = 1,
                     owned_shards: tuple[int, ...] = (0,)) -> list[dict[str, Any]]:
-    if not campaigns_enabled():
+    from . import embed_studio_availability as availability
+    if not availability.worker_may_claim(availability.FEATURE_RECURRING):
         return []
     if (type(shard_count) is not int or not 1 <= shard_count <= 4096
             or not isinstance(owned_shards, tuple) or not owned_shards
@@ -165,7 +182,8 @@ async def claim_due(*, shard_count: int = 1,
 
 async def finish(campaign_id: str, claim_id: str, *,
                  message_id: int = 0, error_code: str = "") -> bool:
-    if not campaigns_enabled():
+    from . import embed_studio_availability as availability
+    if not availability.worker_may_claim(availability.FEATURE_RECURRING):
         return False
     result = {"last_status": "sent" if message_id > 0 else "failed",
               "last_message_id": str(message_id) if message_id > 0 else None}

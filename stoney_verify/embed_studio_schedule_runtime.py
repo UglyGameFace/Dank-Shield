@@ -8,6 +8,7 @@ from typing import Any, Mapping
 from .embed_studio_core import (
     StudioValidationError, validate_project, resolve_smart_text, render_embeds, link_view,
 )
+from . import embed_studio_availability as availability
 from .embed_studio_schedules import claim_due, finish, schedules_enabled
 
 _TASK: asyncio.Task[None] | None = None
@@ -30,6 +31,14 @@ async def _dispatch(bot: Any, job: Mapping[str, Any]) -> tuple[int, str]:
         # private preview and queue, without touching Discord.
         if model.get("form"):
             return 0, "form_not_supported"
+        # Billing state is rechecked at the delivery boundary: a guild that
+        # is Pro-locked when the job comes due is not posted to. Deployment
+        # state does not block here — the claim gate already proved this
+        # deployment serves the feature.
+        state = await availability.resolve_state(
+            availability.FEATURE_SCHEDULING, gid, client=bot)
+        if state == availability.STATE_PRO_LOCKED:
+            return 0, "pro_required"
         guild = bot.get_guild(gid)
         if guild is None:
             return 0, "guild_not_cached"
@@ -98,10 +107,15 @@ def _owned_shards(bot: Any) -> tuple[int, tuple[int, ...]] | None:
     return count, shards
 
 
+def _worker_active() -> bool:
+    return schedules_enabled() or availability.worker_may_claim(
+        availability.FEATURE_SCHEDULING)
+
+
 async def _loop(bot: Any) -> None:
     await asyncio.sleep(STARTUP_DELAY_SECONDS)
     semaphore = asyncio.Semaphore(PARALLEL)
-    while schedules_enabled():
+    while _worker_active():
         try:
             ownership = _owned_shards(bot)
             if ownership is None:
@@ -122,7 +136,8 @@ async def _loop(bot: Any) -> None:
             # campaigns: permissions, no forms/roles, no pings and timeout
             # ambiguity. PostgreSQL has already advanced the occurrence.
             from . import embed_studio_campaigns as campaigns
-            if campaigns.campaigns_enabled():
+            if (campaigns.campaigns_enabled()
+                    or availability.worker_may_claim(availability.FEATURE_RECURRING)):
                 campaign_jobs = await campaigns.claim_due(
                     shard_count=ownership[0], owned_shards=ownership[1])
                 async def one_campaign(job: dict[str, Any]) -> None:
@@ -149,7 +164,7 @@ async def _loop(bot: Any) -> None:
 
 def start_embed_studio_schedule_worker(bot: Any) -> asyncio.Task[None] | None:
     global _TASK
-    if not schedules_enabled():
+    if not _worker_active():
         return None
     if _TASK is None or _TASK.done():
         _TASK = asyncio.create_task(_loop(bot), name="embed-studio-schedule")

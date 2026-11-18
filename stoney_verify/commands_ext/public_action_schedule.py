@@ -19,7 +19,7 @@ from .public_staff_scope import scoped_interaction_is_staff
 
 
 def _embed(schedule: ActionSchedule, *, automation_enabled: bool = False,
-           guild_id: int = 0) -> discord.Embed:
+           guild_id: int = 0, pro_paused: bool = False) -> discord.Embed:
     e = discord.Embed(
         title="🕓 Action Reminder Safety Schedule",
         description=(
@@ -28,6 +28,12 @@ def _embed(schedule: ActionSchedule, *, automation_enabled: bool = False,
                 "✅ **Automatic Member Setup reminders ON** for opted-in members.\n"
                 if automation_enabled else
                 "🔕 **Automatic Member Setup reminders OFF** until enabled here.\n"
+            )
+            + (
+                "⭐ **Dank Shield Pro:** automatic sends are a Pro feature and this server "
+                "isn't covered yet, so no reminder DMs will be sent. "
+                "Previews and settings still work.\n"
+                if pro_paused else ""
             )
             + "Configure quiet hours, retry spacing and limits. "
             "Only canonical Member Setup status and individual DM consent authorize delivery."
@@ -322,9 +328,20 @@ async def open_schedule_panel(interaction: discord.Interaction) -> None:
         automation = parse_automation(cfg)
     except Exception:
         return await _msg(interaction, "Schedule configuration unavailable. No changes were made.")
+    pro_paused = False
+    try:
+        from stoney_verify.services import membership
+        pro_paused = (
+            await membership.guild_pro_status(
+                interaction.guild.id, client=interaction.client,
+            ) == membership.STATUS_FREE
+        )
+    except Exception:
+        pro_paused = False
     await _replace(
         interaction, embed=_embed(schedule, automation_enabled=automation.enabled,
-                                  guild_id=interaction.guild.id),
+                                  guild_id=interaction.guild.id,
+                                  pro_paused=pro_paused),
         view=ScheduleView(
             interaction.user.id, interaction.guild.id, schedule,
             automation_enabled=automation.enabled,
