@@ -524,12 +524,11 @@ RECENT_UPDATES: tuple[RecentFeatureUpdate, ...] = (
     # modal never opened. Repair of this already-advertised flow, not a new
     # feature, so no new entry here.
     RecentFeatureUpdate(
-        "embed_studio", "Post Builder is easier for moderators",
-        "Make an announcement in 4 steps with simple menus. Saved Pictures shows "
-        "image storage usage when uploads are enabled, and JSON backups stay available. "
-        "Optional daily and weekly recurring campaigns have separate owner-gated "
-        "activation; staff may create, view or stop them from private menus only "
-        "when the database migration and scheduler are enabled.", "2026-10-24",
+        "embed_studio", "Scheduled and recurring posts are in Post Builder",
+        "Make an announcement in 4 steps with simple menus, schedule it for "
+        "later, or repeat it daily or weekly with a campaign. Forms and "
+        "live-updating posts are in the same menus, and Saved Pictures and "
+        "JSON backups stay available.", "2026-11-18",
     ),
     RecentFeatureUpdate(
         "share_router", "Share videos from regular channels",
@@ -544,8 +543,18 @@ RECENT_UPDATES: tuple[RecentFeatureUpdate, ...] = (
         "Staff choose when to turn on Member Setup messages; off until enabled.", "2026-10-23",
     ),
     RecentFeatureUpdate(
-        "action_reminder_center", "Reminders have their own home",
-        "Open your to-dos, message preferences, and reminder settings in one area.", "2026-10-23",
+        "welcome", "Welcome setup shows when cards are off",
+        "The Welcome panel now says plainly when welcome cards are off and "
+        "offers a one-tap button to turn them on, instead of opening a "
+        "studio that quietly does nothing.",
+        "2026-11-18",
+    ),
+    RecentFeatureUpdate(
+        "action_reminder_center", "Member Setup reminders can send automatically",
+        "Open your to-dos, message preferences, and reminder settings in one "
+        "area — and Member Setup reminders now send on their own schedule to "
+        "members who opted in, instead of staff sending each one by hand. "
+        "Previews and per-member choices work exactly as before.", "2026-11-18",
     ),
     RecentFeatureUpdate(
         "somewhere_420", "See where it's 4:20",

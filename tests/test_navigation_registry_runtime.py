@@ -328,7 +328,9 @@ def test_releases_show_real_merged_updates_and_exclude_unmerged_work() -> None:
     joined = "\n".join(str(field.value) for field in content.fields)
     assert "Trusted advertising bots work with Invite Shield" in joined
     assert "Find Players can recruit beyond your Discord server" in joined
-    assert "Post Builder is easier for moderators" in joined
+    # Phase 2 unhide (2026-11-18): the embed_studio release note was rewritten
+    # because scheduling/recurring/campaigns are no longer separately gated.
+    assert "Scheduled and recurring posts are in Post Builder" in joined
     assert "Share videos from regular channels" in joined
     assert "Member Setup" in joined
     assert "Only merged updates" in str(content.footer.text)
