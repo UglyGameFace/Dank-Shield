@@ -12,7 +12,7 @@ import discord
 from .embed_studio_core import StudioValidationError
 from .embed_studio_schedules import safe_scheduled_project
 from .embed_studio_campaigns import (
-    campaigns_enabled, parse_campaign, enqueue, list_campaigns, cancel,
+    parse_campaign, enqueue, list_campaigns, cancel,
 )
 from .embed_studio_ui import (
     StudioSession, _StudioView, _staff, _say, _menu, _target_channel,

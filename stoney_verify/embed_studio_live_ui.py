@@ -10,7 +10,7 @@ import discord
 from .startup_guards.discord_api_safety import fetch_message_with_api_safety
 
 from .embed_studio_core import StudioValidationError
-from .embed_studio_live_text import enroll,disable,live_enabled,live_project
+from .embed_studio_live_text import enroll,disable,live_project
 from .embed_studio_ui import (
     _StudioView, _home, _say, _menu, _load_library, _save_library,
     _post_blockers, _published, StudioSession,
