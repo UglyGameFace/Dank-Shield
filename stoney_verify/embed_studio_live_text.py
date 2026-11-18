@@ -75,7 +75,11 @@ def _rows(response: Any) -> list[dict[str,Any]]:
 
 async def enroll(guild_id:int,channel_id:int,message_id:int,staff_id:int,
                  nonce:str,project:Mapping[str,Any]) -> bool:
-    if not live_enabled():
+    from . import embed_studio_availability as availability
+    refusal = availability.service_refusal(availability.FEATURE_LIVE, guild_id)
+    if refusal == availability.REFUSAL_PRO:
+        raise StudioLiveError("Live Text is a Dank Shield Pro feature for this server.")
+    if refusal is not None:
         raise StudioLiveError("Live Text is not enabled on this deployment.")
     model=live_project(project)
     if min(guild_id,channel_id,message_id,staff_id)<=0 or not re.fullmatch(r'[0-9a-f]{32}',nonce):
@@ -99,7 +103,11 @@ async def enroll(guild_id:int,channel_id:int,message_id:int,staff_id:int,
 
 
 async def disable(guild_id:int,channel_id:int,message_id:int,nonce:str) -> bool:
-    if not live_enabled():
+    # Disabling is cleanup, not a premium action: it stays possible whenever
+    # this deployment can serve Live Text at all, regardless of the guild's
+    # current billing state.
+    from . import embed_studio_availability as availability
+    if not availability.worker_may_claim(availability.FEATURE_LIVE):
         return False
     def write():
         return bool(_rows(_client().table(TABLE).update({
@@ -110,7 +118,8 @@ async def disable(guild_id:int,channel_id:int,message_id:int,nonce:str) -> bool:
 
 
 async def claim_due(*,shard_count:int=1,owned_shards:tuple[int,...]=(0,)) -> list[dict[str,Any]]:
-    if not live_enabled():
+    from . import embed_studio_availability as availability
+    if not availability.worker_may_claim(availability.FEATURE_LIVE):
         return []
     if (not isinstance(shard_count,int) or not 1<=shard_count<=4096
             or not isinstance(owned_shards,tuple) or not owned_shards
@@ -126,7 +135,8 @@ async def claim_due(*,shard_count:int=1,owned_shards:tuple[int,...]=(0,)) -> lis
 
 
 async def mark_result(job:Mapping[str,Any],status:str,*,digest:str="",disable_job:bool=False) -> None:
-    if not live_enabled():
+    from . import embed_studio_availability as availability
+    if not availability.worker_may_claim(availability.FEATURE_LIVE):
         return
     allowed={"updated","unchanged","missing","stale","permissions","invalid","api_error","not_owned"}
     if status not in allowed:

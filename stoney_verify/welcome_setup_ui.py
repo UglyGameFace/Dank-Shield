@@ -6,7 +6,7 @@ from typing import Any, Mapping, Optional
 
 import discord
 
-from .commands_ext.public_setup_group import _require_setup_permission
+from .commands_ext.public_setup_group import _require_setup_permission, _upsert_config
 from .ui.current_channel import current_text_channel
 from .commands_ext.public_welcome_group import (
     _cfg_bool,
@@ -28,13 +28,14 @@ from .exit_card_service import (
     exit_cards_enabled,
 )
 from .exit_card_studio_ui import open_exit_card_studio, send_exit_studio_preview
-from .guild_config import get_guild_config
+from .guild_config import get_guild_config, invalidate_guild_config
 from .welcome_card_service import (
     configured_color_mode,
     configured_custom_font,
     configured_font_style_key,
     configured_shuffle_mode,
     configured_theme_key,
+    welcome_cards_enabled,
 )
 from .welcome_card_studio_ui import open_welcome_card_studio
 from .welcome_card_typography_engine import BUILTIN_THEMES, FONT_STYLES
@@ -159,6 +160,21 @@ async def _welcome_embed(
             value=f"Status: **{'On' if _cfg_bool(config, 'welcome_join_enabled', 'join_welcome_enabled') else 'Off'}**",
             inline=False,
         )
+    if section != "join" and not welcome_cards_enabled(config):
+        # Discoverability: cards default OFF, but the panel must say so
+        # plainly instead of presenting a bare studio. The Join Card
+        # section leads with its own status field and carries the
+        # one-tap enable button, so it does not need this notice.
+        embed.insert_field_at(
+            0,
+            name="🪄 Welcome cards are off",
+            value=(
+                "New members won't receive a personalized join card. "
+                "Turn cards on in one tap from the **Join Card** section, "
+                "or open **Join Card Studio** there to design the card first."
+            ),
+            inline=False,
+        )
     embed.set_footer(text="Choose a section • No changes occur until you use an action")
     return embed
 
@@ -278,6 +294,12 @@ class WelcomeSetupView(discord.ui.View):
         actions = (*_WELCOME_SECTIONS[self.section], "Refresh", "Back to All Features", "Close")
         if self.section == "tools":
             actions += ("Setup Home",)
+        if self.section != "static" and not welcome_cards_enabled(config):
+            # One-tap enable, right after the section's own actions. The
+            # static section is already at the compact-panel capacity, so
+            # it carries the embed notice instead of the button.
+            head = len(_WELCOME_SECTIONS[self.section])
+            actions = actions[:head] + ("Enable Welcome Cards",) + actions[head:]
         for index, name in enumerate(actions):
             item = original[name]
             item.row = (2 if self.section == "static" else 1) + index // 4
@@ -384,6 +406,43 @@ class WelcomeSetupView(discord.ui.View):
     ) -> None:
         _ = button
         await welcome_card_preview(interaction)
+
+    @discord.ui.button(
+        label="Enable Welcome Cards", emoji="🪄",
+        style=discord.ButtonStyle.success, row=1,
+    )
+    async def enable_cards(
+        self, interaction: discord.Interaction, button: discord.ui.Button,
+    ) -> None:
+        _ = button
+        if not await self.interaction_check(interaction):
+            return
+        if not await _require_setup_permission(interaction):
+            return
+        guild = interaction.guild
+        if guild is None:
+            return await _send_private(
+                interaction,
+                content="❌ Use this inside a server.",
+            )
+        try:
+            await _upsert_config(int(guild.id), {"welcome_card_enabled": True})
+            invalidate_guild_config(int(guild.id))
+            config = await get_guild_config(int(guild.id), refresh=True)
+        except Exception:
+            return await _send_private(
+                interaction,
+                content="❌ Could not turn welcome cards on. No change was confirmed.",
+            )
+        self.config = config
+        from .commands_ext import public_setup_solid as solid
+
+        await solid._safe_defer_update(interaction)
+        await solid._edit_or_followup(
+            interaction,
+            embed=await _welcome_embed(guild, config, section=self.section),
+            view=WelcomeSetupView(owner_id=self.owner_id, config=config, section=self.section),
+        )
 
     @discord.ui.button(
         label="Exit Card Studio",

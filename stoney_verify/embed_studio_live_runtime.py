@@ -13,6 +13,7 @@ import discord
 
 from .startup_guards.discord_api_safety import fetch_message_with_api_safety
 
+from . import embed_studio_availability as availability
 from .embed_studio_core import StudioValidationError, render_embeds, resolve_smart_text
 from .embed_studio_live_text import (
     claim_due, digest_project, live_enabled, live_project, mark_result,
@@ -34,6 +35,13 @@ async def _refresh_one(bot: Any, job: Mapping[str, Any]) -> tuple[str, str, bool
         message_id = int(job["message_id"])
         staff_id = int(job["created_by"])
         token = str(job["nonce"])
+        # A Pro-locked guild's enrollments stay inert without being
+        # disabled: losing coverage pauses refreshes, regaining it resumes
+        # them. Reported as a plain API error so nothing is auto-disabled.
+        state = await availability.resolve_state(
+            availability.FEATURE_LIVE, guild_id, client=bot)
+        if state == availability.STATE_PRO_LOCKED:
+            return "api_error", "", False
         draft = live_project(job["project"])
         guild = bot.get_guild(guild_id)
         if guild is None:
@@ -94,10 +102,15 @@ async def _refresh_one(bot: Any, job: Mapping[str, Any]) -> tuple[str, str, bool
         return "api_error", "", False
 
 
+def _worker_active() -> bool:
+    return live_enabled() or availability.worker_may_claim(
+        availability.FEATURE_LIVE)
+
+
 async def _loop(bot: Any) -> None:
     await asyncio.sleep(STARTUP_QUIET_SECONDS)
     throttle = asyncio.Semaphore(PARALLEL)
-    while live_enabled():
+    while _worker_active():
         try:
             owner = _owned_shards(bot)
             if owner is None:
@@ -122,7 +135,7 @@ async def _loop(bot: Any) -> None:
 
 def start_embed_studio_live_worker(bot: Any) -> asyncio.Task[None] | None:
     global _TASK
-    if not live_enabled():
+    if not _worker_active():
         return None
     if _TASK is None or _TASK.done():
         _TASK = asyncio.create_task(_loop(bot), name="studio-live-text")

@@ -198,6 +198,21 @@ def test_rest_quota_exhaustion_does_not_skip_candidate(monkeypatch):
     assert not guild.fetched
 
 
+def test_scan_guild_pauses_for_configured_uncovered_guild(monkeypatch):
+    guild = FakeGuild()
+    _set_owners(monkeypatch, guild)
+
+    async def free_status(_gid, *, client=None):
+        return delivery.STATUS_FREE
+
+    monkeypatch.setattr(delivery, "guild_pro_status", free_status)
+    worker = delivery.MemberSetupReminderWorker(SimpleNamespace(guilds=[guild]))
+    assert asyncio.run(worker.scan_guild(guild, 4)) == 0
+    # Paused before any candidate page is read or cursor advanced.
+    assert worker.member_cursors.get(123, 0) == 0
+    assert not guild.fetched
+
+
 def test_do_not_create_verification_sender_or_duplicate_worker():
     code = Path(delivery.__file__).read_text()
     assert "pending_verification" not in code

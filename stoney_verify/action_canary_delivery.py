@@ -1,18 +1,20 @@
 from __future__ import annotations
 
-"""4D.3: one-recipient canary dispatcher, intentionally UNWIRED to runtime.
+"""One-recipient Member Setup canary dispatcher (manual, operator-invoked).
 
-No loop, slash command, startup hook, panel button or scheduled caller imports
-this module. A separate rollout must explicitly configure THREE target-locked
-environment values and invoke this one-member API after a reviewed migration.
-All flags default OFF. Verification DMs remain exclusively owned by the
-existing verification reminder worker.
+The application-owner console is the only caller; there is no loop, startup
+hook or scheduled caller. A send is authorized when the exact-target canary
+environment matches (operator override) OR the membership rule allows it:
+Dank Shield Pro unconfigured, or the guild covered by a Pro account.
+Verification DMs remain exclusively owned by the existing verification
+reminder worker.
 """
 
 import asyncio
 import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from typing import Any
 from zoneinfo import ZoneInfo
 
 import discord
@@ -23,6 +25,8 @@ from .action_delivery_preflight import inspect_member_setup_candidate
 from .action_delivery_readiness import inspect_member_setup_readiness
 from .action_schedule_policy import load_schedule
 from .runtime_release import runtime_source_fingerprint
+from .services import membership
+from .services.membership import guild_pro_status
 
 ENABLE_ENV = "DANK_ACTION_CENTER_CANARY_SEND"
 GUILD_ENV = "DANK_ACTION_CENTER_CANARY_GUILD_ID"
@@ -66,6 +70,23 @@ def _canary_enabled(guild_id: int, user_id: int, revision: int) -> bool:
     )
 
 
+async def _send_authorized(
+    guild_id: int, user_id: int, revision: int, *, client: Any = None,
+) -> bool:
+    """The send-authorization predicate — the only gate widened by Phase 2.
+
+    Authorized when the exact-target canary environment matches (operator
+    override) or the membership rule allows the guild: tiers unconfigured,
+    or the guild covered by Dank Shield Pro. Every other safety mechanic
+    (revision/fingerprint freshness inside the canary check, the durable
+    claim caps, per-member opt-in preflight) is unchanged.
+    """
+    if _canary_enabled(guild_id, user_id, revision):
+        return True
+    status = await guild_pro_status(guild_id, client=client)
+    return status in (membership.STATUS_UNCONFIGURED, membership.STATUS_PRO)
+
+
 def _still_in_guild(member: discord.Member) -> bool:
     """No mass fetches or member cache rebuilds; uncertain membership blocks."""
     try:
@@ -82,7 +103,7 @@ def _still_in_guild(member: discord.Member) -> bool:
 
 
 async def dispatch_single_member_setup_canary(
-    member: discord.Member, *, expected_revision: int,
+    member: discord.Member, *, expected_revision: int, client: Any = None,
 ) -> CanaryDeliveryResult:
     """Bounded manual canary. Not a background/scheduled reminder sender.
 
@@ -97,8 +118,8 @@ async def dispatch_single_member_setup_canary(
     ):
         return CanaryDeliveryResult("blocked", "Invalid candidate")
     guild_id, user_id = int(member.guild.id), int(member.id)
-    if not _canary_enabled(guild_id, user_id, expected_revision):
-        return CanaryDeliveryResult("disabled", "Exact-target canary is not enabled")
+    if not await _send_authorized(guild_id, user_id, expected_revision, client=client):
+        return CanaryDeliveryResult("disabled", "Sending is not authorized for this server")
     if not _still_in_guild(member):
         return CanaryDeliveryResult("blocked", "Guild membership not verified")
     before_now = _utcnow()
@@ -121,8 +142,8 @@ async def dispatch_single_member_setup_canary(
             ZoneInfo(schedule.timezone)
         ).date():
             return CanaryDeliveryResult("blocked", "Guild-local delivery day changed")
-        if not _canary_enabled(guild_id, user_id, expected_revision) or not _still_in_guild(member):
-            return CanaryDeliveryResult("disabled", "Canary revoked or member departed")
+        if not await _send_authorized(guild_id, user_id, expected_revision, client=client) or not _still_in_guild(member):
+            return CanaryDeliveryResult("disabled", "Authorization revoked or member departed")
         reserved = await asyncio.wait_for(
             asyncio.to_thread(
                 reserve_member_setup_sync,
@@ -143,8 +164,8 @@ async def dispatch_single_member_setup_canary(
     # Reservation committed. Every later failure burns the attempt, preventing
     # replays after crashes and failed Discord sends.
     try:
-        if not _canary_enabled(guild_id, user_id, expected_revision) or not _still_in_guild(member):
-            return CanaryDeliveryResult("cancelled", "Canary revoked or member departed", claimed=True)
+        if not await _send_authorized(guild_id, user_id, expected_revision, client=client) or not _still_in_guild(member):
+            return CanaryDeliveryResult("cancelled", "Authorization revoked or member departed", claimed=True)
         now = _utcnow()
         # The claim's local calendar day cannot silently spill into another
         # day's quiet window or daily budget after a slow database commit.
@@ -165,7 +186,7 @@ async def dispatch_single_member_setup_canary(
         if (
             final.status != "candidate_preview"
             or final.revision != expected_revision
-            or not _canary_enabled(guild_id, user_id, expected_revision)
+            or not await _send_authorized(guild_id, user_id, expected_revision, client=client)
             or not _still_in_guild(member)
         ):
             return CanaryDeliveryResult("cancelled", "Owner/consent/quiet-hours check changed", claimed=True)

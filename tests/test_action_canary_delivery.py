@@ -81,6 +81,13 @@ def setup(monkeypatch, member, *, flags=True, readiness="preview_due", reserved=
         if revoke_during == "final":
             monkeypatch.setenv(canary.ENABLE_ENV, "0")
         return DeliveryPreflight(final, "canonical state", revision=3)
+    # Phase 2 governing rule: sending is authorized by the canary env OR
+    # the membership rule. These tests isolate the canary mechanics, so
+    # the membership path is pinned to a configured-but-uncovered guild
+    # ("free") and the canary env alone decides, exactly as before.
+    async def free_status(_guild_id, *, client=None):
+        return "free"
+    monkeypatch.setattr(canary, "guild_pro_status", free_status)
     monkeypatch.setattr(canary, "load_schedule", load)
     monkeypatch.setattr(canary, "parse_action_builder", lambda cfg: draft)
     monkeypatch.setattr(canary, "inspect_member_setup_readiness", inspect)
@@ -213,6 +220,39 @@ def test_policy_change_and_day_boundary_block_canary(monkeypatch):
     assert member.sent == []
     # A race after claim does not authorize retries or a second claim.
     assert events.count("claim") == 1
+
+
+def test_membership_unconfigured_authorizes_without_canary_env(monkeypatch):
+    member = fake_member(monkeypatch)
+    events = setup(monkeypatch, member, flags=False)
+    async def unconfigured_status(_guild_id, *, client=None):
+        return "unconfigured"
+    monkeypatch.setattr(canary, "guild_pro_status", unconfigured_status)
+    result = deliver(member)
+    assert result.status == "sent"
+    assert events.count("claim") == 1
+    assert len(member.sent) == 1
+
+
+def test_membership_pro_authorizes_without_canary_env(monkeypatch):
+    member = fake_member(monkeypatch)
+    events = setup(monkeypatch, member, flags=False)
+    async def pro_status(_guild_id, *, client=None):
+        return "pro"
+    monkeypatch.setattr(canary, "guild_pro_status", pro_status)
+    result = deliver(member)
+    assert result.status == "sent"
+    assert events.count("claim") == 1
+    assert len(member.sent) == 1
+
+
+def test_membership_free_without_canary_env_stays_disabled(monkeypatch):
+    member = fake_member(monkeypatch)
+    events = setup(monkeypatch, member, flags=False)
+    # setup() pins guild_pro_status to "free": configured, not covered.
+    result = deliver(member)
+    assert result.status == "disabled"
+    assert events == [] and member.sent == []
 
 
 def test_no_scheduled_caller_or_broad_scan_and_single_target_gates():

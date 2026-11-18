@@ -43,7 +43,13 @@ class StudioCampaignModal(discord.ui.Modal, title="Repeat This Announcement"):
             self.add_item(item)
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
-        if (not campaigns_enabled() or not _staff(interaction)
+        from . import embed_studio_availability as availability
+        denial = await availability.feature_denial(
+            availability.FEATURE_RECURRING, self.session.guild_id,
+            client=interaction.client, action="repeat a post")
+        if denial is not None:
+            return await _say(interaction, denial)
+        if (not _staff(interaction)
                 or interaction.guild is None
                 or int(interaction.guild.id) != self.session.guild_id
                 or int(interaction.user.id) != self.session.owner_id):

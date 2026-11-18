@@ -55,8 +55,12 @@ class LiveTextChoice(_StudioView):
         self.used=False
 
     async def change(self,interaction: discord.Interaction,*,enable: bool) -> None:
-        if not live_enabled():
-            return await _say(interaction,"Live Text is off until the owner enables its database worker.")
+        from . import embed_studio_availability as availability
+        denial = await availability.feature_denial(
+            availability.FEATURE_LIVE, self.session.guild_id,
+            client=interaction.client, action="change Live Text")
+        if denial is not None:
+            return await _say(interaction, denial)
         if self.used:
             return await _say(interaction,"This control was already submitted.")
         self.used=True
@@ -135,8 +139,12 @@ class LiveTextChoice(_StudioView):
 
 
 async def open_live_text_menu(interaction: discord.Interaction,session: StudioSession) -> None:
-    if not live_enabled():
-        return await _say(interaction,"Live Text is disabled on this deployment.")
+    from . import embed_studio_availability as availability
+    denial = await availability.feature_denial(
+        availability.FEATURE_LIVE, session.guild_id,
+        client=interaction.client, action="open Live Text")
+    if denial is not None:
+        return await _say(interaction, denial)
     if not interaction.response.is_done():
         await interaction.response.defer(ephemeral=True)
     try:

@@ -61,7 +61,8 @@ def _client():
 
 
 async def lookup_form(guild_id: int, channel_id: int, message_id: int, token: str) -> dict[str, Any]:
-    if not forms_enabled() or min(guild_id,channel_id,message_id)<=0 or not TOKEN_RE.fullmatch(token):
+    from . import embed_studio_availability as availability
+    if not availability.service_may_serve(availability.FEATURE_FORMS, guild_id) or min(guild_id,channel_id,message_id)<=0 or not TOKEN_RE.fullmatch(token):
         raise StudioFormError("This form is unavailable or outdated.")
     from .guild_config import get_guild_config
     cfg = await asyncio.wait_for(get_guild_config(guild_id,refresh=True),timeout=12)
@@ -110,7 +111,8 @@ def _store_sync(guild_id: int,channel_id: int,message_id: int,user_id: int,
 
 async def store_answers(guild_id: int, channel_id: int, message_id: int, user_id: int,
                         answers: list[dict[str,str]], *, now: float | None = None) -> None:
-    if not forms_enabled() or min(guild_id,channel_id,message_id,user_id)<=0:
+    from . import embed_studio_availability as availability
+    if not availability.service_may_serve(availability.FEATURE_FORMS, guild_id) or min(guild_id,channel_id,message_id,user_id)<=0:
         raise StudioFormError("Form responses cannot be saved right now.")
     window=int((time() if now is None else now)//300)
     try:
@@ -123,7 +125,8 @@ async def store_answers(guild_id: int, channel_id: int, message_id: int, user_id
 
 
 async def recent_responses(guild_id: int) -> list[dict[str,Any]]:
-    if not forms_enabled() or guild_id<=0:
+    from . import embed_studio_availability as availability
+    if not availability.service_may_serve(availability.FEATURE_FORMS, guild_id) or guild_id<=0:
         raise StudioFormError("Form response inbox is not available.")
     def run():
         response=_client().table(TABLE).select(
