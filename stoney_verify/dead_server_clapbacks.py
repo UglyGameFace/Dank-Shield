@@ -21,12 +21,16 @@ Design notes:
   excluded from ``allowed_mentions``.
 - Cooldowns are in-process (per channel and per user), matching the other
   lightweight community runtimes. A restart simply resets them.
+- A member who joined within the last 24 hours gets the new-joiner lines
+  only: "you just got here" is the most specific fact about them, so it
+  wins over every other category, including DIDNT_PING.
 """
 
 import random
 import re
 import time
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
 from typing import Any, Awaitable, Callable, Mapping, Optional
 
 import discord
@@ -51,13 +55,19 @@ CATEGORY_LIVES = "lives"
 CATEGORY_ORIGINS = "origins"
 CATEGORY_VC_PARADOX = "vc_paradox"
 CATEGORY_GENERIC = "generic"
+CATEGORY_NEW_JOINER = "new_joiner"
 CATEGORIES = (
     CATEGORY_DIDNT_PING,
     CATEGORY_LIVES,
     CATEGORY_ORIGINS,
     CATEGORY_VC_PARADOX,
     CATEGORY_GENERIC,
+    CATEGORY_NEW_JOINER,
 )
+
+# A member whose join is younger than this is a "new joiner": if they
+# immediately call the server dead, only the new-joiner lines are eligible.
+NEW_JOINER_WINDOW = timedelta(hours=24)
 
 # Built-in lines, verbatim in Felix's voice. ``@Stoners`` is intentional
 # plain text: replies are sent with mentions disabled, and the name is
@@ -86,6 +96,12 @@ BUILTIN_LINES: dict[str, tuple[str, ...]] = {
         "saying 'dead server' while actively typing in the server is crazy work",
         "chat's not dead, it's just not performing on demand. start something",
         "when's the last time YOU started a conversation in here? asking for the server",
+    ),
+    CATEGORY_NEW_JOINER: (
+        "you've been here 4 minutes and you're already leaving a yelp review. incredible",
+        "you just joined. you haven't even seen the server yet and it's dead? ok",
+        "walked in 2 minutes ago and declared the party over. stay awhile, you ARE the party",
+        "brand new and already complaining. at least look around first, damn",
     ),
 }
 
@@ -290,16 +306,43 @@ def message_mentions_ping_role(message: Any, role_id: int) -> bool:
     return f"<@&{rid}>" in content
 
 
+def is_new_joiner(author: Any, *, now: Optional[datetime] = None) -> bool:
+    """True when the author's guild join is within ``NEW_JOINER_WINDOW``.
+
+    Reads ``joined_at`` off the member object (discord.py ``Member``).
+    A missing/None ``joined_at`` (uncached or partial member) is NOT a
+    new joiner -- category selection then behaves exactly as before.
+    """
+    joined_at = getattr(author, "joined_at", None)
+    if joined_at is None:
+        return False
+    moment = now or datetime.now(timezone.utc)
+    try:
+        if joined_at.tzinfo is None:
+            joined_at = joined_at.replace(tzinfo=timezone.utc)
+        if moment.tzinfo is None:
+            moment = moment.replace(tzinfo=timezone.utc)
+        return timedelta(0) <= moment - joined_at <= NEW_JOINER_WINDOW
+    except Exception:
+        return False
+
+
 def eligible_categories(
     *,
     ping_role_id: int,
     did_ping: bool,
+    new_joiner: bool = False,
 ) -> tuple[str, ...]:
     """Categories a reply may draw from for this triggering message.
 
-    DIDNT_PING is only eligible when a ping role is configured AND the
-    complainer did not use it -- the whole point of those lines.
+    A new joiner (joined within ``NEW_JOINER_WINDOW``) draws ONLY from
+    NEW_JOINER -- being brand new is the most specific fact and wins
+    over everything else. Otherwise DIDNT_PING is only eligible when a
+    ping role is configured AND the complainer did not use it -- the
+    whole point of those lines.
     """
+    if new_joiner:
+        return (CATEGORY_NEW_JOINER,)
     categories: list[str] = []
     if int(ping_role_id or 0) > 0 and not did_ping:
         categories.append(CATEGORY_DIDNT_PING)
@@ -323,13 +366,14 @@ def pick_clapback_line(
     ping_role_name: str = "",
     last_line: str = "",
     rng: Optional[random.Random] = None,
+    new_joiner: bool = False,
 ) -> Optional[tuple[str, str]]:
     """Pick (category, rendered line); never repeats ``last_line`` if avoidable."""
     picker = rng or random
     categories = [
         category
         for category in eligible_categories(
-            ping_role_id=config.ping_role_id, did_ping=did_ping
+            ping_role_id=config.ping_role_id, did_ping=did_ping, new_joiner=new_joiner
         )
         if config.lines_for(category)
     ]
@@ -523,6 +567,7 @@ class DeadServerClapbackRuntime:
             return False
 
         did_ping = message_mentions_ping_role(message, config.ping_role_id)
+        new_joiner = is_new_joiner(author)
         if self._cooldown_blocked(
             config, guild_id=guild_id, channel_id=channel_id, user_id=author_id
         ):
@@ -545,6 +590,7 @@ class DeadServerClapbackRuntime:
             ping_role_name=role_name,
             last_line=self._last_line.get(guild_id, ""),
             rng=self._rng,
+            new_joiner=new_joiner,
         )
         if picked is None:
             return False
@@ -592,6 +638,7 @@ __all__ = [
     "CATEGORY_DIDNT_PING",
     "CATEGORY_GENERIC",
     "CATEGORY_LIVES",
+    "CATEGORY_NEW_JOINER",
     "CATEGORY_ORIGINS",
     "CATEGORY_VC_PARADOX",
     "CHANNEL_COOLDOWN_KEY",
@@ -601,11 +648,13 @@ __all__ = [
     "DeadServerClapbackRuntime",
     "ENABLED_KEY",
     "LINES_KEY",
+    "NEW_JOINER_WINDOW",
     "PING_ROLE_KEY",
     "USER_COOLDOWN_KEY",
     "dead_server_clapback_runtime",
     "eligible_categories",
     "ensure_dead_server_clapback_runtime",
+    "is_new_joiner",
     "matches_dead_server_complaint",
     "message_mentions_ping_role",
     "normalize_message_text",
