@@ -9,6 +9,7 @@ captions infrastructure; no automated punishment is enabled.
 
 import asyncio
 import os
+from datetime import datetime, timezone
 
 import discord
 
@@ -40,6 +41,7 @@ from .public_owner_authority import (
 
 
 VOICE_SAFETY_ENABLED = "voice_safety_enabled"
+VOICE_SAFETY_PAID_ACK = "voice_safety_paid_acknowledged"
 VOICE_SAFETY_VC = "voice_safety_voice_channel_id"
 VOICE_SAFETY_STAFF = "voice_safety_staff_channel_id"
 _REGISTERED = False
@@ -123,6 +125,107 @@ def _readiness(guild: discord.Guild, config: dict) -> tuple[bool, str]:
     return True, "Configured. Monitoring starts automatically when two humans join a monitored VC."
 
 
+async def _refresh_verify_disclosure(guild: discord.Guild, cfg: dict, enabled: bool) -> bool:
+    """Keep the public verification panel's monitoring disclosure in sync.
+
+    Only the basic-button verification mode carries the disclosure on its
+    public panel; every other mode is a no-op success. The disclosure must
+    be visible before the enabled flag can turn on, so callers refresh with
+    ``enabled=True`` first and restore with ``enabled=False`` on failure.
+    """
+
+    from ..setup_engine.verification_modes import effective_verification_mode
+
+    if effective_verification_mode(guild, cfg) != "basic_button":
+        return True
+    try:
+        from ..startup_guards.basic_verify_panel_auto_refresh_guard import (
+            refresh_basic_verify_panel,
+        )
+
+        return await refresh_basic_verify_panel(
+            guild,
+            reason="voice safety setting changed",
+            voice_safety_enabled_override=enabled,
+        )
+    except Exception:
+        return False
+
+
+def _paid_acknowledged(config: dict) -> bool:
+    ack = config.get(VOICE_SAFETY_PAID_ACK)
+    return isinstance(ack, dict) and bool(ack.get("by")) and bool(ack.get("at"))
+
+
+async def _voice_safety_enable_gate(
+    interaction: discord.Interaction,
+    guild: discord.Guild,
+    cfg: dict,
+) -> tuple[str, discord.Embed | None]:
+    """Phase 3 Slice 4 gate for turning Voice Safety ON.
+
+    Returns ``("proceed", None)``, ``("denied", embed)``, or ``("ack", None)``:
+
+    - Grandfather evidence is the spec's exact key: a guild whose saved
+      config already has Voice Safety on is grandfathered (the staff toggle
+      only enables from off, so in practice this covers the acknowledgment
+      view's re-check race).
+    - Membership unconfigured -> proceed, and no acknowledgment is ever
+      required (governing rule: behavior is exactly as before).
+    - Configured + free -> denied with the Pro embed.
+    - Configured + Pro without a recorded acknowledgment -> ``"ack"``: the
+      caller swaps in :class:`VoiceSafetyPaidAckView`; confirming writes
+      ``voice_safety_paid_acknowledged`` together with the enable flag.
+
+    The deployment-wide host env attestations are NOT moved or weakened —
+    they stay a hard prerequisite via :func:`_readiness`. Consent state is
+    never read or written here; the gate is billing-only.
+    """
+
+    from ..services import membership, membership_gate
+
+    grandfathered = cfg.get(VOICE_SAFETY_ENABLED) is True
+    decision = await membership_gate.premium_decision(
+        guild_id=int(guild.id),
+        client=interaction.client,
+        action="enable Voice Safety",
+        premium_feature="voice_safety_ai",
+        grandfathered=grandfathered,
+    )
+    if decision is not None:
+        return "denied", membership_gate.pro_denial_embed(
+            "voice_safety_ai",
+            decision,
+            detail=(
+                "AI Voice Safety reviews voice channels and alerts your staff. "
+                "Servers that already have it on keep it, and turning it off "
+                "is always free."
+            ),
+        )
+    if grandfathered:
+        return "proceed", None
+    if membership.membership_configured() and not _paid_acknowledged(cfg):
+        return "ack", None
+    return "proceed", None
+
+
+def _paid_ack_embed() -> discord.Embed:
+    return discord.Embed(
+        title="🛡️ Voice Safety — Paid API Acknowledgment",
+        description=(
+            "Voice Safety reviews voice audio with a **paid AI API** that the "
+            "bot operator configures and attests to for the whole deployment. "
+            "Enabling it for this server means that paid API will process this "
+            "server's monitored voice channels.\n\n"
+            "Confirm to record your acknowledgment for this server and turn "
+            "Voice Safety on. The acknowledgment is saved once — disabling and "
+            "re-enabling will not ask again. Host safety gates and member "
+            "consent rules are unchanged."
+        ),
+        color=discord.Color.blurple(),
+    )
+
+
 async def _embed(interaction: discord.Interaction) -> discord.Embed:
     guild = interaction.guild
     cfg = await get_guild_config(int(guild.id), refresh=True)
@@ -138,6 +241,16 @@ async def _embed(interaction: discord.Interaction) -> discord.Embed:
     reaction_label = (
         "Alerts only" if reaction == VOICE_SAFETY_REACTION_ALERT else "Silent (log only)"
     )
+    pro_note = ""
+    if not cfg.get(VOICE_SAFETY_ENABLED):
+        from ..services import membership
+
+        if membership.membership_configured():
+            pro_note = (
+                "\n⭐ Enabling Voice Safety is a **Dank Shield Pro** action. "
+                "Servers already running it keep it; turning it off is always "
+                "free, but turning it back on afterwards requires Pro coverage."
+            )
     local_voice = str(os.getenv("DANK_VOICE_SAFETY_BACKEND", "")).strip().lower() == "watch"
     provider = (
         "Watch Yo Mouf (local Vosk) and RivaL Intelligence (local LFM3)"
@@ -162,6 +275,7 @@ async def _embed(interaction: discord.Interaction) -> discord.Embed:
             f"Voice: {'Every accessible VC (2+ humans)' if scope == ALL else f'<#{voice}>' if voice else 'Not selected'}\n"
             f"Private staff alerts: {f'<#{staff}>' if staff else 'Not selected'}\n"
             f"Reaction on detection: {reaction_label}"
+            + pro_note
         ),
         inline=False,
     )
@@ -426,19 +540,24 @@ class VoiceSafetyStaffView(discord.ui.View):
         basic_verify = effective_verification_mode(guild, cfg) == "basic_button"
 
         async def refresh_panel(enabled: bool) -> bool:
-            if not basic_verify:
-                return True
-            try:
-                from ..startup_guards.basic_verify_panel_auto_refresh_guard import (
-                    refresh_basic_verify_panel,
+            return await _refresh_verify_disclosure(guild, cfg, enabled)
+
+        if not currently_enabled:
+            # Phase 3 Slice 4: enabling is Pro-gated, and once membership is
+            # configured it also needs the per-guild paid-API acknowledgment.
+            # The gate runs before the disclosure refresh so a denied or
+            # unacknowledged enable changes nothing at all — no config write
+            # and no public-panel edit; the acknowledgment confirm path
+            # performs the same refresh-then-save sequence before enabling.
+            # Disabling never reaches this block.
+            gate, denial = await _voice_safety_enable_gate(interaction, guild, cfg)
+            if gate == "denied":
+                return await interaction.followup.send(embed=denial, ephemeral=True)
+            if gate == "ack":
+                return await interaction.edit_original_response(
+                    embed=_paid_ack_embed(),
+                    view=VoiceSafetyPaidAckView(self.owner_id),
                 )
-                return await refresh_basic_verify_panel(
-                    guild,
-                    reason="voice safety setting changed",
-                    voice_safety_enabled_override=enabled,
-                )
-            except Exception:
-                return False
 
         if not currently_enabled and not await refresh_panel(True):
             # Do NOT turn on the config first. An incoming voice-state event
@@ -579,6 +698,89 @@ class VoiceSafetyStaffView(discord.ui.View):
     async def refresh(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         await interaction.response.defer()
         await interaction.edit_original_response(embed=await _embed(interaction), view=VoiceSafetyStaffView(self.owner_id))
+
+
+class VoiceSafetyPaidAckView(discord.ui.View):
+    """One-time per-guild acknowledgment that Voice Safety uses a paid API.
+
+    Shown only when membership is configured, the guild is Pro-covered, and
+    no ``voice_safety_paid_acknowledged`` record exists yet. Confirming
+    writes the acknowledgment together with the enable flag through the
+    same save path the staff toggle uses, then starts monitoring exactly
+    like the toggle does. Cancelling changes nothing. The deployment-wide
+    host env attestations are untouched and remain a prerequisite.
+    """
+
+    def __init__(self, owner_id: int) -> None:
+        super().__init__(timeout=PRIVATE_MENU_TTL_SECONDS)
+        self.owner_id = int(owner_id)
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if int(interaction.user.id) == self.owner_id and _staff(interaction):
+            return True
+        await interaction.response.send_message("Open your own /dank protection Voice Safety panel.", ephemeral=True)
+        return False
+
+    @discord.ui.button(label="I Understand — Enable Voice Safety", emoji="✅", style=discord.ButtonStyle.success, row=0)
+    async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await interaction.response.defer()
+        guild = interaction.guild
+        if guild is None:
+            return await interaction.followup.send("Use this in a server.", ephemeral=True)
+        cfg = await get_guild_config(int(guild.id), refresh=True)
+        if bool(cfg.get(VOICE_SAFETY_ENABLED)):
+            # Already on (double-click / race): just show the panel again.
+            return await interaction.edit_original_response(
+                embed=await _embed(interaction), view=VoiceSafetyStaffView(self.owner_id)
+            )
+        # Re-run the gate: coverage may have changed while the prompt sat
+        # open. This callback IS the acknowledgment, so an "ack" result
+        # proceeds; only a denial stops the enable.
+        gate, denial = await _voice_safety_enable_gate(interaction, guild, cfg)
+        if gate == "denied":
+            await interaction.edit_original_response(
+                embed=await _embed(interaction), view=VoiceSafetyStaffView(self.owner_id)
+            )
+            return await interaction.followup.send(embed=denial, ephemeral=True)
+        if not await _refresh_verify_disclosure(guild, cfg, True):
+            await interaction.edit_original_response(
+                embed=await _embed(interaction), view=VoiceSafetyStaffView(self.owner_id)
+            )
+            return await interaction.followup.send(
+                "❌ Voice Safety remains OFF: the existing verification panel "
+                "could not be updated with its monitoring disclosure. Check "
+                "Dank Shield's message permissions in your verification channel.",
+                ephemeral=True,
+            )
+        ack = {
+            "by": int(interaction.user.id),
+            "at": datetime.now(timezone.utc).isoformat(),
+        }
+        try:
+            await _save(interaction, {VOICE_SAFETY_ENABLED: True, VOICE_SAFETY_PAID_ACK: ack})
+        except Exception:
+            await _refresh_verify_disclosure(guild, cfg, False)
+            return await interaction.followup.send(
+                "Failed to confirm saved Voice Safety setup state.", ephemeral=True
+            )
+        manager = ensure_community_voice_caption_manager(interaction.client)
+        await manager.maybe_auto_start_voice_safety(guild)
+        await interaction.edit_original_response(
+            embed=await _embed(interaction), view=VoiceSafetyStaffView(self.owner_id)
+        )
+        await interaction.followup.send(
+            "✅ Voice Safety is ON. Paid-API use is acknowledged for this server.",
+            ephemeral=True,
+        )
+
+    @discord.ui.button(label="Cancel", emoji="↩️", style=discord.ButtonStyle.secondary, row=0)
+    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await interaction.response.defer()
+        await interaction.edit_original_response(
+            embed=await _embed(interaction), view=VoiceSafetyStaffView(self.owner_id)
+        )
 
 
 async def open_voice_safety_center(interaction: discord.Interaction) -> None:

@@ -1321,6 +1321,35 @@ async def _toggle_antinuke_strict_lockdown(interaction: discord.Interaction) -> 
     target = not _cfg_bool(current, STRICT_LOCKDOWN_KEY, False)
     candidate = {**current, STRICT_LOCKDOWN_KEY: target}
     if target:
+        # Phase 3 Slice 5: enabling Strict Lockdown is a Dank Shield Pro
+        # action. The gate sits on this off->on transition only — turning
+        # Strict off is always free, and the runtime readers of the flag are
+        # never gated, so a guild whose coverage lapses keeps the protection
+        # it already has on. A guild with Strict already on never reaches
+        # here (the toggle would be turning it off).
+        from stoney_verify.services import membership_gate
+
+        decision = await membership_gate.premium_decision(
+            guild_id=int(guild.id),
+            client=interaction.client,
+            action="enable AntiNuke Strict Lockdown",
+            premium_feature="antinuke_strict",
+            grandfathered=False,
+        )
+        if decision is not None:
+            await _send_ephemeral(
+                interaction,
+                embed=membership_gate.pro_denial_embed(
+                    "antinuke_strict",
+                    decision,
+                    detail=(
+                        "Strict Lockdown is the Pro tier of AntiNuke. Normal "
+                        "Contain stays free, and turning Strict off is always "
+                        "free — the gate only applies to switching it on."
+                    ),
+                ),
+            )
+            return
         missing = anti_nuke_service.antinuke_permission_health(guild, candidate)
         if missing:
             await _send_ephemeral(
