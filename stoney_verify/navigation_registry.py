@@ -560,6 +560,10 @@ RECENT_UPDATES: tuple[RecentFeatureUpdate, ...] = (
         "somewhere_420", "See where it's 4:20",
         "Browse the world clock and jump into a sesh with the existing /toke flow.", "2026-10-22",
     ),
+    RecentFeatureUpdate(
+        "community_tools", "Dead Server Clapbacks",
+        "Snippy auto-replies when someone calls the server dead.", "2026-11-18",
+    ),
 )
 RECENT_FEATURE_KEYS: tuple[str, ...] = tuple(item.key for item in RECENT_UPDATES)
 
