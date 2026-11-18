@@ -287,6 +287,15 @@ FEATURES: tuple[NavigationFeature, ...] = (
         ),
     ),
     NavigationFeature(
+        "dead_server_clapbacks",
+        "Dead Server Clapbacks",
+        "💀",
+        "community",
+        "Turn on short tagged comebacks when members call the server or chat dead, and choose the ping role members should use first.",
+        ("dead server", "dead chat", "server is dead", "chat is dead", "clapbacks", "comebacks", "dead server replies"),
+        True,
+    ),
+    NavigationFeature(
         "share_router",
         "Share Router",
         "🔗",
@@ -585,6 +594,7 @@ FEATURE_GROUPS: dict[str, str] = {
     "members_moderation": "Member lookup & moderation",
     "community_pings_manager": "Roles & notifications",
     "community_tools": "Server tools",
+    "dead_server_clapbacks": "Server tools",
     "share_router": "Share photos & videos",
     "share_downloads": "Share photos & videos",
     "toke_settings": "Events & meetups",

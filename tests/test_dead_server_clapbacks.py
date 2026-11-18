@@ -9,6 +9,10 @@ import discord
 import pytest
 
 from stoney_verify import dead_server_clapbacks as clap
+from stoney_verify import navigation_registry
+from stoney_verify.commands_ext import public_command_surface_v2 as surface
+from stoney_verify.commands_ext import public_dead_server_clapbacks as clapback_panel
+from stoney_verify.commands_ext.public_community_tools import CommunityToolsView
 from stoney_verify.dead_server_clapbacks import (
     BUILTIN_LINES,
     DeadServerClapbackRuntime,
@@ -451,3 +455,37 @@ def test_status_embed_reflects_state_and_role() -> None:
     joined = "\n".join(str(field.value) for field in on.fields)
     assert "@Stoners" in joined
     assert "<@&" not in joined
+
+
+def test_community_tools_view_no_longer_contains_clapback_button() -> None:
+    view = CommunityToolsView(123)
+    labels = {
+        str(getattr(item, "label", "") or "")
+        for item in view.children
+        if str(getattr(item, "label", "") or "")
+    }
+    assert "Dead Server Clapbacks" not in labels
+    assert sum(isinstance(item, discord.ui.Button) for item in view.children) == 9
+
+
+def test_clapback_destination_is_registered_with_community_server_tools() -> None:
+    feature = navigation_registry.feature_by_key("dead_server_clapbacks")
+    assert feature is not None
+    assert feature.label == "Dead Server Clapbacks"
+    assert feature.category == "community"
+    assert feature.manager_only is True
+    assert navigation_registry.FEATURE_GROUPS[feature.key] == "Server tools"
+    assert feature.key in surface._FEATURE_ROUTE_KEYS
+    grouped = dict(navigation_registry.grouped_features("community"))
+    assert feature in grouped["Server tools"]
+    assert navigation_registry.search_features("dead server clapbacks")[0].key == feature.key
+
+
+def test_clapback_destination_routes_to_existing_panel(monkeypatch) -> None:
+    fake_open = AsyncMock()
+    monkeypatch.setattr(clapback_panel, "open_dead_server_clapbacks", fake_open)
+    interaction = SimpleNamespace(user=SimpleNamespace(id=42))
+
+    asyncio.run(surface._route_feature(interaction, "dead_server_clapbacks"))
+
+    fake_open.assert_awaited_once_with(interaction)

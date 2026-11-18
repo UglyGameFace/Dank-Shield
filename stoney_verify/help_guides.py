@@ -147,6 +147,13 @@ HELP_GUIDES: dict[str, HelpGuide] = {
          "Preview or confirm the action, then check the result in that channel."),
         "Utilities that only answer questions do not change the server; posting tools need an explicit action.",
         "Staff-only tools keep their existing permission checks."),
+    "dead_server_clapbacks": HelpGuide(
+        "Answer complaints that the server or chat is dead with a short tagged comeback.",
+        ("Open Dead Server Clapbacks and review whether the feature is on or off.",
+         "Choose the ping role members should use before complaining, usually the server's Stoners or sesh role.",
+         "Turn the feature on only when ready, then preview a line to check how a reply will look."),
+        "When the feature is on, eligible complaints receive one rotating reply that tags the complainer; the named ping role is never pinged by the bot.",
+        "Requires Manage Server. Bots, the server owner, and members with Manage Messages are never targeted."),
     "share_router": HelpGuide(
         "Choose which member posts are shared and where media goes.",
         ("Open Share Router → Where Videos Go. For one-channel setup, open the desired text channel and choose Requests + Results Here.",
