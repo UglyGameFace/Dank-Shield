@@ -79,11 +79,30 @@ def test_persistent_stop_control_and_search_safe_role_browser():
     labels = {b.label for b in v.children if isinstance(b, discord.ui.Button)}
     assert "Choose Stoners Role" in labels
     assert "Enable Stoners Heads-Up" in labels
-    assert "Disable Stoners Heads-Up" in labels
-    user = settings.Personal420View(123, None, guild_id=456)
+    assert "Disable Stoners Heads-Up" not in labels
+    assert "Enable Daily 4:20" in labels
+    assert "Disable Daily 4:20" not in labels
+    enabled = settings.Staff420View(123, {"enabled": True, "role_reminder_enabled": True})
+    enabled_labels = {b.label for b in enabled.children if isinstance(b, discord.ui.Button)}
+    assert "Disable Stoners Heads-Up" in enabled_labels
+    assert "Enable Stoners Heads-Up" not in enabled_labels
+    assert "Disable Daily 4:20" in enabled_labels
+    assert "Enable Daily 4:20" not in enabled_labels
+
+    user = settings.Personal420View(123, {"enabled": True}, guild_id=456, role_muted=False)
     labels = {b.label for b in user.children if isinstance(b, discord.ui.Button)}
     assert "Stop Stoners Heads-Up" in labels
-    assert "Resume Stoners Heads-Up" in labels
+    assert "Resume Stoners Heads-Up" not in labels
+    assert "Stop My Daily DMs" in labels
+    muted = settings.Personal420View(123, {"enabled": False}, guild_id=456, role_muted=True)
+    muted_labels = {b.label for b in muted.children if isinstance(b, discord.ui.Button)}
+    assert "Resume Stoners Heads-Up" in muted_labels
+    assert "Stop Stoners Heads-Up" not in muted_labels
+    assert "Stop My Daily DMs" not in muted_labels
+    unknown = settings.Personal420View(123, None, guild_id=456)
+    unknown_labels = {b.label for b in unknown.children if isinstance(b, discord.ui.Button)}
+    assert "Stop Stoners Heads-Up" not in unknown_labels
+    assert "Resume Stoners Heads-Up" not in unknown_labels
     assert len(v.children) <= 25
 
 

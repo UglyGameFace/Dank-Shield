@@ -112,9 +112,11 @@ async def open_personal_420(interaction: discord.Interaction) -> None:
         return await _reply(interaction, "Personal settings need the private 4:20 schedule migration before they can save.")
     embed = _settings_embed("member", saved)
     gid = int(interaction.guild.id) if interaction.guild is not None else 0
+    role_muted: bool | None = None
     if gid:
         try:
             muted = await get_role_optout(gid, int(interaction.user.id))
+            role_muted = bool(muted)
             embed.add_field(
                 name="🌿 @Stoners heads-up (this server)",
                 value=("🔕 Muted" if muted else "✅ Automatic while you have the selected role")
@@ -123,7 +125,9 @@ async def open_personal_420(interaction: discord.Interaction) -> None:
             )
         except Somewhere420StorageUnavailable:
             embed.add_field(name="Stoners heads-up", value="Settings database unavailable.", inline=False)
-    await _panel(interaction, embed, Personal420View(interaction.user.id, saved, guild_id=gid))
+    await _panel(interaction, embed, Personal420View(
+        interaction.user.id, saved, guild_id=gid, role_muted=role_muted,
+    ))
 
 
 class PersonalSettingsModal(discord.ui.Modal, title="Personal 4:20 Preferences"):
@@ -166,10 +170,27 @@ class PersonalSettingsModal(discord.ui.Modal, title="Personal 4:20 Preferences")
 
 
 class Personal420View(_OwnedView):
-    def __init__(self, owner_id: int, saved: dict | None, *, guild_id: int = 0):
+    def __init__(
+        self, owner_id: int, saved: dict | None, *, guild_id: int = 0,
+        role_muted: bool | None = None,
+    ):
         super().__init__(owner_id)
         self.saved = saved
         self.guild_id = int(guild_id)
+        # Only show actions that would actually change the user's preference.
+        # Missing role state must not pretend a mute or unmute was persisted.
+        for item in list(self.children):
+            if not isinstance(item, discord.ui.Button):
+                continue
+            if item.label == "Stop My Daily DMs" and not (saved or {}).get("enabled"):
+                self.remove_item(item)
+            elif item.label in {"Stop Stoners Heads-Up", "Resume Stoners Heads-Up"}:
+                if not self.guild_id or role_muted is None:
+                    self.remove_item(item)
+                elif role_muted and item.label == "Stop Stoners Heads-Up":
+                    self.remove_item(item)
+                elif not role_muted and item.label == "Resume Stoners Heads-Up":
+                    self.remove_item(item)
 
     @discord.ui.button(label="Edit Timezone, City & DMs", emoji="🕓", style=discord.ButtonStyle.primary)
     async def edit(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -311,6 +332,16 @@ class Staff420View(_OwnedView):
     def __init__(self, owner_id: int, saved: dict | None):
         super().__init__(owner_id)
         self.saved = saved or {}
+        # Do not present Enable and Disable for the same setting together.
+        toggles = {
+            "Enable Daily 4:20": not bool(self.saved.get("enabled")),
+            "Disable Daily 4:20": bool(self.saved.get("enabled")),
+            "Enable Stoners Heads-Up": not bool(self.saved.get("role_reminder_enabled")),
+            "Disable Stoners Heads-Up": bool(self.saved.get("role_reminder_enabled")),
+        }
+        for item in list(self.children):
+            if isinstance(item, discord.ui.Button) and item.label in toggles and not toggles[item.label]:
+                self.remove_item(item)
 
     @discord.ui.button(label="Choose Announcement Channel", emoji="🔎", style=discord.ButtonStyle.primary, row=0)
     async def channel(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:

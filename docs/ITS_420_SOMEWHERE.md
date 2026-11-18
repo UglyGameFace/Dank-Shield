@@ -1,11 +1,12 @@
 # It's 4:20 Somewhere
 
-A voluntary, mobile-friendly world clock and community activity in **/dank home → Community & Engagement → It's 4:20 Somewhere**. Available to members in any guild. No top-level command, no automatic worker, no role spam.
+A voluntary, mobile-friendly world clock and community activity in **/toke → World 4:20 Clock** or **/dank home → Community & Engagement → It's 4:20 Somewhere**. Available to members in any guild. This uses the existing 4:20 schedule worker, not another slash command or session engine.
 
 ## Member flow
 
 - Shows where it is currently **4:20 PM** in 27 cities (with accurate IANA time zone and daylight saving rules).
 - If none of the representative cities is at 4:20 now, shows the next worldwide waves as Discord-relative timestamps in **each viewer's local time**.
+- Bare **/toke** opens Start Sesh, My 4:20 Reminders, and World 4:20 Clock. Server managers also see Server 4:20 Setup. Opening this menu never pings a role; member reminders don't require the Toke starter role. Optional slash arguments **message**, **upload**, and **voice** still directly launch the canonical sesh flow. Paste a GIF or media URL into the existing normal-message composer; the duplicate `media` slash argument was removed.
 - **Refresh World Clock** recalculates against the current UTC instant. **Switch AM / PM** shows 04:20 instead of 16:20.
 - **Start /toke** calls the already authoritative `open_toke_command` handler with a 4:20-themed message. It still checks starter and notification roles, destination and permissions, media-composer requirements, cool-downs and live session lifecycle; it **does not silently create a session or ping a role**. If no media is attached, the existing 90-second GIF composer and **Post Without Media** button remain the normal experience.
 - Buttons operate only in the originating member's private view and expire in 10 minutes. Reload through navigation to open a fresh clock.
@@ -39,7 +40,7 @@ Feature expansion after merged PR #688; see the separate follow-up PR. The origi
 ### Richer world board
 - **Next destination** hero and accurate viewer-local relative countdown, with a highlighted 4:20 minute.
 - Favorite city appears on your private world board with its actual local clock.
-- **Start /toke** keeps original GIF/photo composer. **Quick Text-Only Sesh** is a deliberately selected shortcut through the SAME role, cooldown and outbound send handler; it never adds a public slash argument. **Join Active Sesh** finds the latest visible, live session in that guild without bypassing channel permissions.
+- **Start /toke** keeps the original GIF/photo composer. Use **Post Without Media** to publish a text-only sesh rather than a redundant second launch button. **Join Active Sesh** finds the latest visible, live session in that guild without bypassing channel permissions.
 - **My 4:20 Preferences** allows individual timezone/favorite-city setup and an explicit, private daily DM opt-in. Defaults OFF.
 - **Daily Server Settings** is manager-only. Role selection is NOT a new separate picker: it uses the existing /toke notify capability in Community & Pings. A Search-Safe server text-channel browser selects the delivery channel.
 
@@ -48,7 +49,7 @@ Feature expansion after merged PR #688; see the separate follow-up PR. The origi
 - A single bot-owned scheduled worker is started from the existing guarded background workers startup path. It polls **one indexed due schedule queue**, not every guild or user, with bounded batch/concurrency and no per-server timers. Before send, an atomic DB claim reserves and advances the *next local calendar day* for DST-aware recurrence.
 - Notifications are **at most once per local day**: a network send failure consumes that delivery attempt rather than risking duplicate pings across restarts/shards. Subscriptions default disabled. A stale delivery more than 3 minutes late is skipped automatically.
 - Guild managers choose: timezone (IANA name), a live text destination (Search-Safe picker), whether to mention ONLY the configured opt-in /toke notification role, and local quiet hours (default 22:00–08:00, same hours = none). Then they deliberately select **Enable Daily 4:20**. Managers may disable anytime. No @everyone/@here.
-- Members may set a cross-server personal time zone, favorite city, and explicit daily DM preference, independent of guild announcements. **Stop My DMs** is always accessible in their panel. DM failures are safely consumed, not repeatedly attempted the same day.
+- Members may set a cross-server personal time zone, favorite city, and explicit daily DM preference, independent of guild announcements. **Stop My Daily DMs** appears only when reminders are enabled; the edit form can enable them again. DM failures are safely consumed, not repeatedly attempted the same day.
 - Staff and member schedules always use **4:20 PM local time**; the AM switch remains a viewing-only feature. A daily announcement is a world-board snapshot, never an automatic /toke session.
 
 ### Capacity and rollout gates

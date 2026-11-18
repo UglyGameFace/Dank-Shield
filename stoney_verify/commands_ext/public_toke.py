@@ -621,50 +621,112 @@ async def publish_toke_from_draft(
     )
 
 
+
+class TokeHomeView(discord.ui.View):
+    """One private /toke doorway for seshes and existing 4:20 preferences.
+
+    Merely opening this menu never creates a session or sends a role ping.
+    Member reminder settings belong to the existing Somewhere scheduler.
+    """
+
+    def __init__(self, owner_id: int, *, can_manage: bool) -> None:
+        super().__init__(timeout=600)
+        self.owner_id = int(owner_id)
+        if not can_manage:
+            for item in list(self.children):
+                if isinstance(item, discord.ui.Button) and item.label == "Server 4:20 Setup":
+                    self.remove_item(item)
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if int(interaction.user.id) != self.owner_id:
+            await _reply(interaction, "Use /toke to open your own menu.")
+            return False
+        return True
+
+    @discord.ui.button(label="Start Sesh", emoji="💨", style=discord.ButtonStyle.success, row=0)
+    async def start(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        # The same canonical command path still validates member roles, destination,
+        # permissions, cooldowns and the normal GIF composer before publishing.
+        await _open_toke_command_impl(interaction)
+
+    @discord.ui.button(label="My 4:20 Reminders", emoji="🔔", style=discord.ButtonStyle.primary, row=0)
+    async def reminders(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        from .public_somewhere_420_settings import open_personal_420
+        await open_personal_420(interaction)
+
+    @discord.ui.button(label="World 4:20 Clock", emoji="🌍", style=discord.ButtonStyle.secondary, row=1)
+    async def world(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        from .public_somewhere_420 import open_somewhere_420
+        await open_somewhere_420(interaction)
+
+    @discord.ui.button(label="Server 4:20 Setup", emoji="⚙️", style=discord.ButtonStyle.secondary, row=1)
+    async def server(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        # The existing staff editor independently checks Manage Server on click.
+        from .public_somewhere_420_settings import open_staff_420
+        await open_staff_420(interaction)
+
+
+async def open_toke_home(interaction: discord.Interaction) -> None:
+    """Show the settings route to all members, even those not allowed to host."""
+    if interaction.guild is None:
+        return await _reply(interaction, "/toke only works inside a server.")
+    from .public_owner_authority import interaction_has_manage_guild_authority
+    manager = interaction_has_manage_guild_authority(interaction)
+    embed = discord.Embed(
+        title="💨 Toke & 4:20",
+        description=(
+            "**Start Sesh** to call the configured opt-in crowd and add an optional GIF. "
+            "Posting still requires the server's Toke starter role.\n\n"
+            "**My 4:20 Reminders** to set your timezone and optional daily private reminder.\n"
+            "**World 4:20 Clock** to see where it's 4:20 right now."
+            + ("\n**Server 4:20 Setup** to manage daily announcements." if manager else "")
+        ),
+        color=discord.Color.green(),
+    )
+    payload = {
+        "content": None,
+        "embed": embed,
+        "view": TokeHomeView(int(interaction.user.id), can_manage=manager),
+        "allowed_mentions": discord.AllowedMentions.none(),
+    }
+    if interaction.response.is_done():
+        await interaction.edit_original_response(**payload)
+    elif interaction.message is not None:
+        await interaction.response.edit_message(**payload)
+    else:
+        await interaction.response.send_message(**payload, ephemeral=True)
+
+
 @app_commands.describe(
     message="Optional short message to include with the sesh ping.",
-    media="Optional image/GIF URL (Discord CDN, direct media, Tenor/Giphy share link).",
     upload="Optional PNG/JPG/GIF/WEBP upload to place on the Toke card.",
     voice="Optional voice room for this session; otherwise use your current/default VC.",
 )
 async def open_toke_command(
     interaction: discord.Interaction,
     message: Optional[str] = None,
-    media: Optional[str] = None,
     upload: Optional[discord.Attachment] = None,
     voice: Optional[discord.VoiceChannel] = None,
 ) -> None:
-    """Public Discord-visible entry. Preserve the existing command parameters."""
+    """A simple home by default; explicit content still launches a sesh."""
+    if message is None and upload is None and voice is None:
+        return await open_toke_home(interaction)
     await _open_toke_command_impl(
-        interaction, message=message, media=media, upload=upload, voice=voice,
+        interaction, message=message, upload=upload, voice=voice,
     )
-
-
-async def open_toke_quick_command(interaction: discord.Interaction, message: str) -> None:
-    """Internal UI-only text card; all canonical /toke guards still apply."""
-    await _open_toke_command_impl(interaction, message=message, quick_text_only=True)
 
 
 async def _open_toke_command_impl(
     interaction: discord.Interaction,
     message: Optional[str] = None,
-    media: Optional[str] = None,
     upload: Optional[discord.Attachment] = None,
     voice: Optional[discord.VoiceChannel] = None,
-    *,
-    quick_text_only: bool = False,
 ) -> None:
     guild = interaction.guild
     member = interaction.user if isinstance(interaction.user, discord.Member) else None
     if guild is None or member is None:
         return await _reply(interaction, "/toke only works inside a server.")
 
-    try:
-        clean_media = _clean_media_url(media)
-    except ValueError as exc:
-        return await _reply(interaction, str(exc))
-    if clean_media and upload is not None:
-        return await _reply(interaction, "Choose either a media URL or an upload, not both.")
     if upload is not None and not _attachment_is_supported_media(upload):
         return await _reply(
             interaction,
@@ -721,9 +783,9 @@ async def _open_toke_command_impl(
         return await _reply(interaction, f"Wait {_format_wait(remaining)} for {label}.")
 
     clean_message = _clean_member_message(message)
-    if upload is None and not clean_media and not quick_text_only:
+    if upload is None:
         if not bool(getattr(interaction.client.intents, "message_content", False)):
-            return await _reply(interaction, "Dank Shield needs the Discord Message Content intent to capture normal GIFs. Use /toke upload or media instead.")
+            return await _reply(interaction, "Dank Shield needs the Discord Message Content intent to capture normal GIFs. Use /toke upload: instead.")
         source = interaction.channel
         if not isinstance(source, discord.TextChannel):
             return await _reply(interaction, "Use /toke in a regular text channel to send your GIF normally.")
@@ -732,7 +794,7 @@ async def _open_toke_command_impl(
             return await _reply(
                 interaction,
                 "Dank Shield needs View Channel, Read Message History and Manage Messages here "
-                "to capture and clean up a temporary GIF. Ask staff to grant these or use /toke upload: or media:.",
+                "to capture and clean up a temporary GIF. Ask staff to grant these or use /toke upload:.",
             )
         draft = pending_for(guild.id, member.id)
         if draft is not None:
@@ -753,7 +815,7 @@ async def _open_toke_command_impl(
         sent = await _publish_toke(
             guild=guild, member=member, channel=channel, starter_role=stoner_role,
             notify_role=ping_role, message_text=clean_message,
-            clean_media=clean_media, upload=upload, settings=settings,
+            clean_media="", upload=upload, settings=settings,
             voice_channel_id=int(voice.id) if voice is not None else 0,
         )
     except (ValueError, discord.HTTPException, OSError) as exc:
@@ -787,5 +849,6 @@ __all__ = [
     "open_member_community_pings",
     "open_toke_preset_setup",
     "open_toke_command",
-    "open_toke_quick_command",
+    "open_toke_home",
+    "TokeHomeView",
 ]

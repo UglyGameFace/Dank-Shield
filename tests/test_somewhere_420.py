@@ -78,7 +78,7 @@ def test_420_board_and_navigation_are_discoverable_and_no_ping_by_default() -> N
     labels = {item.label for item in view.children if isinstance(item, discord.ui.Button)}
     assert labels == {
         "Refresh World Clock", "Switch AM / PM", "Start /toke", "Share Here (staff)",
-        "Quick Text-Only Sesh", "Join Active Sesh", "My 4:20 Preferences", "Daily Server Settings",
+        "Join Active Sesh", "My 4:20 Preferences", "Daily Server Settings",
     }
     assert len(view.children) <= 25
 

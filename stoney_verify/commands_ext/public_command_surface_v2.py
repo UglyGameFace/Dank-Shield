@@ -1660,7 +1660,7 @@ def install_compact_public_surface_v2(bot: Any, tree: Any) -> dict[str, Any]:
         ("role", "Open Roles & Profiles or jump to a member or role.", open_role_command),
         ("ticket", "Open controls for the current or selected ticket.", open_current_ticket_center),
         ("tickets", "Open ticket queues, lookup, setup, routing, and category tools.", open_ticket_operations_center),
-        ("toke", "Ping the opt-in sesh crowd.", open_toke_command),
+        ("toke", "Open seshes and personal 4:20 reminders.", open_toke_command),
         ("verify", "Open the complete verification status and repair center.", open_verify_command_center),
     )
     for name, description, callback in replacements:

@@ -164,7 +164,7 @@ HELP_GUIDES: dict[str, HelpGuide] = {
     "somewhere_420": HelpGuide(
         "See where it is 4:20 and join or start a session.",
         ("Open It's 4:20 Somewhere and use Refresh World Clock if needed.",
-         "Choose Start /toke or Quick Text-Only Sesh if you want to celebrate.",
+         "Choose Start /toke to celebrate; Post Without Media makes a text-only sesh.",
          "Use My 4:20 Preferences to manage your participation and notification choices."),
         "World-clock viewing alone does not start or send a session.",
         "Use the staff-only server settings for server-wide posting behavior."),

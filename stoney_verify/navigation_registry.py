@@ -305,7 +305,8 @@ FEATURES: tuple[NavigationFeature, ...] = (
         "🍃",
         "community",
         "Configure meetup cards, live voice presence, session limits, and timing.",
-        ("toke", "toke settings", "toke session", "sesh", "sesh card", "cheers", "who's coming", "meetup", "live attendance"),
+        ("toke", "toke settings", "toke session", "sesh", "sesh card", "cheers", "who's coming", "meetup", "live attendance",
+         "start sesh", "my 4:20 reminders", "4:20 reminders"),
         True,
     ),
     NavigationFeature(
