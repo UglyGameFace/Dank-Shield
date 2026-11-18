@@ -1212,6 +1212,40 @@ class ServerLiveCaptionsView(_OwnedView):
 
         cfg = await get_guild_config(int(guild.id), refresh=True)
         destination = _configured_output_channel(guild, cfg)
+        if not soak_test:
+            # Phase 3 Slice 4: starting Live Captions is a Dank Shield Pro
+            # action. Grandfather evidence is the saved caption setup
+            # itself — a guild that already configured an output channel
+            # keeps starting for free (spec §2.2). Stopping is never gated
+            # (the stop branch above returns first), the runtime is never
+            # gated, and the bot-owner DAVE soak test path (global env lock
+            # off) bypasses the gate entirely. The gate is evaluated before
+            # the output-channel check so a non-covered guild pressing Start
+            # gets the Pro denial rather than setup instructions for a
+            # feature it cannot start.
+            from ..services import membership_gate
+
+            decision = await membership_gate.premium_decision(
+                guild_id=int(guild.id),
+                client=interaction.client,
+                action="start Live Captions",
+                premium_feature="live_captions",
+                grandfathered=destination is not None,
+            )
+            if decision is not None:
+                return await interaction.followup.send(
+                    embed=membership_gate.pro_denial_embed(
+                        "live_captions",
+                        decision,
+                        detail=(
+                            "Live Captions transcribe voice channels in real "
+                            "time with a paid AI API. Servers that already set "
+                            "up a caption output channel keep starting for "
+                            "free; stopping captions is always free."
+                        ),
+                    ),
+                    ephemeral=True,
+                )
         if destination is None:
             return await _followup(
                 interaction,

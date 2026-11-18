@@ -1443,6 +1443,36 @@ async def _show_external_sources(interaction: discord.Interaction, target_id: in
     """Never silently convert third-party accusations into enforcement evidence."""
     if not _is_guild_owner_for_affiliations(interaction):
         return await reply_ephemeral(interaction, "Only the server owner can inspect external safety checks.")
+    # Phase 3 Slice 7: the per-user provider lookups are a Dank Shield Pro
+    # action. There is NO grandfather evidence for this feature anywhere —
+    # no per-guild config key, no usage table, only an in-process cache —
+    # so the gate applies to every non-Pro guild once membership is
+    # configured (spec §2.5, decision (a): accept + disclose). The free
+    # historical scam-domain check is a different path and stays free.
+    from ..services import membership_gate
+
+    decision = await membership_gate.premium_decision(
+        guild_id=int(getattr(interaction.guild, "id", 0) or 0),
+        client=interaction.client,
+        action="run external safety lookups",
+        premium_feature="external_safety_lookups",
+        grandfathered=False,
+    )
+    if decision is not None:
+        return await reply_ephemeral(
+            interaction,
+            "",
+            embed=membership_gate.pro_denial_embed(
+                "external_safety_lookups",
+                decision,
+                detail=(
+                    "External safety lookups query paid third-party provider "
+                    "databases about a member. Their findings stay unverified "
+                    "third-party claims — never enforcement evidence. The free "
+                    "historical scam-domain check is unaffected."
+                ),
+            ),
+        )
     await interaction.response.defer(ephemeral=True)
     from stoney_verify.member_external_safety_sources import inspect_external_sources
     # Fetch only this exact member. A failed fetch must not cause us to guess a
