@@ -11,12 +11,14 @@ Design rules:
 - no monkey patches
 - no Discord mutation
 - no database mutation
-- no premium billing decision yet
+- premium features stay audit-only unless the caller injects a pro-status
+  resolver reporting a configured status (membership Phase 1); with no
+  resolver the historical warning-only behavior is preserved exactly
 - unsafe public guilds must refuse action instead of guessing IDs
 """
 
 from dataclasses import dataclass, field
-from typing import Iterable, Sequence
+from typing import Callable, Iterable, Optional, Sequence
 
 from .guild_context import GuildContext
 
@@ -71,6 +73,7 @@ def decide_guild_action(
     feature: str = "generic",
     required_keys: Sequence[str] = (),
     premium_feature: str = "",
+    pro_status_resolver: Optional[Callable[[], str]] = None,
 ) -> GuildActionDecision:
     """Return a consistent allow/refuse decision for one guild action."""
 
@@ -94,7 +97,24 @@ def decide_guild_action(
         blockers.append("Missing required config: " + ", ".join(clean_missing))
 
     if premium_feature:
-        warnings.append(f"Premium gate pending for `{premium_feature}`. Current build treats this as an audit-only warning.")
+        pro_status = ""
+        if pro_status_resolver is not None:
+            try:
+                pro_status = str(pro_status_resolver() or "").strip().lower()
+            except Exception:
+                pro_status = ""
+        if pro_status == "pro":
+            pass  # Covered by Dank Shield Pro: no warning, no blocker.
+        elif pro_status == "free":
+            blockers.append(
+                f"`{premium_feature}` is a Dank Shield Pro feature. "
+                "Subscribe to Dank Shield Pro and link this server to use it "
+                "(open `/dank home`, then Setup & Server Settings → Dank Shield Pro)."
+            )
+        else:
+            # No resolver, an "unconfigured" status, or a resolver failure:
+            # exactly the pre-membership audit-only behavior.
+            warnings.append(f"Premium gate pending for `{premium_feature}`. Current build treats this as an audit-only warning.")
 
     if blockers:
         return GuildActionDecision(

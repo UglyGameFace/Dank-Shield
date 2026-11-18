@@ -28,6 +28,13 @@ HELP_GUIDES: dict[str, HelpGuide] = {
          "Read any permission or readiness warnings, save the selected settings, and reopen the panel to check them."),
         "Only the settings you confirm are changed; other server features stay in their own menus.",
         "Requires server management permissions."),
+    "dank_shield_pro": HelpGuide(
+        "See whether this server is covered by Dank Shield Pro and manage your covered servers.",
+        ("Open Dank Shield Pro to see this server's plan status.",
+         "If you hold Pro, link this server or unlink one of your covered servers (up to 3 per account).",
+         "If you don't hold Pro yet, use the subscribe button to start a Discord app subscription."),
+        "Covered servers unlock Pro features; everything else keeps working on the free plan.",
+        "Linking is per subscribing account: only the account that holds Pro can choose its covered servers."),
     "verification": HelpGuide(
         "Let members complete the server's verification steps and receive the right access.",
         ("Open Verification and review the server's current Unverified and access-role mappings.",
