@@ -553,7 +553,9 @@ RECENT_UPDATES: tuple[RecentFeatureUpdate, ...] = (
     ),
     RecentFeatureUpdate(
         "share_downloads", "More reliable social video links",
-        "Better Facebook link detection and backup video formats where supported.", "2026-10-24",
+        "Better Facebook link detection and backup video formats where supported. "
+        "When Dank Shield Pro opens, downloads become a Pro feature — servers "
+        "already using them keep them free.", "2026-10-24",
     ),
     RecentFeatureUpdate(
         "action_safety_schedule", "Optional setup reminders can send automatically",

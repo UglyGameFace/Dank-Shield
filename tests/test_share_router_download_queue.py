@@ -327,7 +327,9 @@ def test_download_queue_is_not_a_new_gateway_listener():
     runtime_source = Path("stoney_verify/share_router_runtime.py").read_text()
     queue_source = Path("stoney_verify/share_router_download_queue.py").read_text()
     assert runtime_source.count('bot.add_listener(route_message, "on_message")') == 1
-    assert "enqueue_download_request(message)" in runtime_source
+    # Slice 6 (spec R7): route_message passes the runtime bot through so the
+    # submission gate can resolve the link owner's entitlement.
+    assert "enqueue_download_request(message, client=_RUNTIME_BOT)" in runtime_source
     assert "await start_download_workers(bot)" in runtime_source
     assert "add_listener" not in queue_source
 

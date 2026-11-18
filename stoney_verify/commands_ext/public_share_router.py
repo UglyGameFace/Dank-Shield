@@ -29,7 +29,9 @@ from stoney_verify.share_router_resources import (
     is_share_router_design_resource,
     share_source_key,
 )
+from stoney_verify.services import membership_gate
 from stoney_verify.share_router_runtime import (
+    DownloadsProRequiredError,
     create_or_repair_hidden_share_hub,
     create_custom_share_source,
     available_share_source_ids,
@@ -62,6 +64,18 @@ from stoney_verify.share_router_runtime import (
 from stoney_verify.ui import DankGuildResourceBrowserView
 
 _ALLOWED_MENTIONS = discord.AllowedMentions.none()
+
+_DOWNLOADS_PRO_DETAIL = (
+    "Receiving finished videos from the request channel is a Dank Shield "
+    "Pro feature. Forwarding routes stay free, and servers already using "
+    "downloads keep them at no cost."
+)
+
+
+def _downloads_pro_embed(decision: Any) -> discord.Embed:
+    return membership_gate.pro_denial_embed(
+        "share_router_downloads", decision, detail=_DOWNLOADS_PRO_DETAIL,
+    )
 
 
 def _safe_int(value: Any, default: int = 0) -> int:
@@ -1518,7 +1532,20 @@ class ShareRouterDeliveryConfirmView(_OwnedView):
                 await configure_guild_download(
                     int(guild.id), channel_id=request_id, mode=mode,
                     destination_id=self.destination_id,
+                    client=getattr(interaction, "client", None),
                 )
+        except DownloadsProRequiredError as exc:
+            if created is not None:
+                try:
+                    await created.delete(reason="Video setup requires Dank Shield Pro")
+                except discord.HTTPException:
+                    pass
+            await interaction.edit_original_response(
+                content=None,
+                embed=_downloads_pro_embed(exc.decision),
+                view=ShareRouterVideoDeliveryView(self.owner_id),
+            )
+            return
         except (discord.HTTPException, OSError, ValueError) as exc:
             if created is not None:
                 try:
@@ -1665,8 +1692,11 @@ class ShareRouterRequestConfirmView(_OwnedView):
                 if blocker:
                     raise ValueError(blocker)
                 # Selecting the intake channel alone never starts sending DMs.
+                # Pausing is never Pro-gated; the client is passed so every
+                # configure call site uses the same injection shape.
                 await configure_guild_download(
                     int(guild.id), channel_id=self.request_id, mode="off",
+                    client=getattr(interaction, "client", None),
                 )
         except (ValueError, OSError) as exc:
             return await interaction.edit_original_response(
@@ -1800,7 +1830,14 @@ class ShareRouterSameChannelConfirmView(_OwnedView):
                     channel_id=self.channel_id,
                     mode="channel",
                     destination_id=self.channel_id,
+                    client=getattr(interaction, "client", None),
                 )
+        except DownloadsProRequiredError as exc:
+            return await interaction.edit_original_response(
+                content=None,
+                embed=_downloads_pro_embed(exc.decision),
+                view=ShareRouterVideoDeliveryView(self.owner_id),
+            )
         except (ValueError, OSError, discord.HTTPException) as exc:
             return await interaction.edit_original_response(
                 content=f"❌ Settings unchanged: {exc}",
