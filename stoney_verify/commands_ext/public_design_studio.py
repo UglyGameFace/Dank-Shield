@@ -24,6 +24,7 @@ from .public_owner_authority import interaction_is_actual_guild_owner
 
 from stoney_verify.interaction_guard import run_guarded_interaction, safe_send_interaction
 from stoney_verify.share_router_resources import is_share_router_design_resource
+from stoney_verify.services import membership_gate
 from stoney_verify.services import naming_mutation_locks
 from stoney_verify.services import search_safe_naming
 from stoney_verify.services import server_design_plan_service as plan_service
@@ -2947,6 +2948,63 @@ def _filter_plan_for_channel(items: list[dict[str, Any]], channel_id: int) -> li
     return [item for item in items if str(item.get("channel_id") or "") == wanted]
 
 
+_SMART_REPAIR_PRO_DETAIL = (
+    "Smart Repair scans the server against your saved design and builds a "
+    "repair preview — for the whole server, or one category or channel — "
+    "before anything is applied. Global themes and every other design tool "
+    "stay free."
+)
+
+
+def _design_repair_grandfathered(options: Mapping[str, Any]) -> bool:
+    """Phase 3 Slice 8 grandfather evidence for Smart Repair.
+
+    A guild that already used the Pro-depth design tooling has a saved
+    design footprint: its ``server_design_studio_options`` carry a
+    non-empty ``category_styles``, ``category_format_locks``, or
+    ``channel_format_locks`` map. Such a guild keeps Smart Repair when
+    membership is configured. A guild that only ever used free global
+    themes (options present but no styles/locks) is not grandfathered —
+    it never used the tooling Smart Repair builds on.
+    """
+
+    if not isinstance(options, Mapping):
+        return False
+    for key in ("category_styles", "category_format_locks", "channel_format_locks"):
+        value = options.get(key)
+        if isinstance(value, Mapping) and value:
+            return True
+    return False
+
+
+async def _smart_repair_pro_denial(
+    interaction: discord.Interaction,
+    guild: discord.Guild,
+    options: Mapping[str, Any],
+) -> discord.Embed | None:
+    """Phase 3 Slice 8 gate for the Smart Repair preview builds.
+
+    Returns a Pro denial embed when Dank Shield Pro is configured and this
+    guild is not covered; None when the preview may be built (membership
+    unconfigured, Pro guild, or a grandfathered design footprint). The
+    preview-build points are the only gates: the shared reviewed-apply
+    handler downstream is reached only from a built preview.
+    """
+
+    decision = await membership_gate.premium_decision(
+        guild_id=int(guild.id),
+        client=interaction.client,
+        action="build a Smart Repair preview",
+        premium_feature="design_smart_repair",
+        grandfathered=_design_repair_grandfathered(options),
+    )
+    if decision is None:
+        return None
+    return membership_gate.pro_denial_embed(
+        "design_smart_repair", decision, detail=_SMART_REPAIR_PRO_DETAIL,
+    )
+
+
 async def _preview_scope(
     interaction: discord.Interaction,
     *,
@@ -2966,6 +3024,11 @@ async def _preview_scope(
 
     if mode in {"category_editor", "channel_editor"}:
         from stoney_verify.services import server_design_plan_service as plan_service
+
+        denial = await _smart_repair_pro_denial(interaction, guild, options)
+        if denial is not None:
+            await interaction.edit_original_response(embed=denial, view=None)
+            return
 
         items, repair_options, _analysis = await plan_service.build_scoped_repair_plan(
             guild,

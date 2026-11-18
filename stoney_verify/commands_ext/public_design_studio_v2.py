@@ -1652,6 +1652,10 @@ async def _show_smart_repair_preview(interaction: discord.Interaction, *, keep_s
     guild = interaction.guild
     assert guild is not None
     options = await _load_design_options(int(guild.id))
+    denial = await legacy._smart_repair_pro_denial(interaction, guild, options)  # type: ignore[attr-defined]
+    if denial is not None:
+        await interaction.edit_original_response(embed=denial, view=None)
+        return
     items, plan_options, analysis = await plans.build_drift_repair_plan(
         guild,
         options,
