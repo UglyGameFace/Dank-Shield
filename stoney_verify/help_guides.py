@@ -35,6 +35,13 @@ HELP_GUIDES: dict[str, HelpGuide] = {
          "If you don't hold Pro yet, use the subscribe button to start a Discord app subscription."),
         "Covered servers unlock Pro features; everything else keeps working on the free plan.",
         "Linking is per subscribing account: only the account that holds Pro can choose its covered servers."),
+    "server_backups": HelpGuide(
+        "Save the server's structure — categories, channels, roles and permission overwrites — and restore it later from a plan you review first.",
+        ("Open Server Backups and press Create Backup; give it a label like \"Before the redesign\" if you want.",
+         "To restore, choose the backup, pick Everything or Missing only, and read the plan: creates, updates, blocked items and any extra items are listed before anything changes.",
+         "Run the safety check, then confirm. Extra items that are not in the backup are kept unless you separately arm their deletion on the confirm screen."),
+        "A fresh safety backup of the server as it is right now is saved before the first change, and a stopped restore can be resumed from the backup list.",
+        "Restores change real channels and roles. Deletions are permanent and cannot be rolled back, and a backup holds structure only — never messages or member-specific permissions."),
     "verification": HelpGuide(
         "Let members complete the server's verification steps and receive the right access.",
         ("Open Verification and review the server's current Unverified and access-role mappings.",

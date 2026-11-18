@@ -159,10 +159,13 @@ def test_existing_server_route_uses_direct_customization_view(monkeypatch: Any) 
 
 def test_config_history_navigation_matches_aio_hierarchy() -> None:
     main = config_history_ui.ConfigHistoryView([])
+    # Phase 3 Slice 3 (2026-11-18): Config History gained a "Server Structure
+    # Backups" entry that opens the whole-server backup panel.
     assert labels(main) == [
         "Previous Versions",
         "Next Versions",
         "Choose Backup Contents",
+        "Server Structure Backups",
         "Refresh",
         "Back to All Features",
         "Setup Home",

@@ -341,6 +341,7 @@ _FEATURE_ROUTE_KEYS = frozenset(
     {
         "setup_center",
         "dank_shield_pro",
+        "server_backups",
         "verification",
         "verification_reminders",
         "action_reminder_center",
@@ -507,6 +508,10 @@ async def _route_feature(interaction: discord.Interaction, feature_key: str) -> 
     if key == "dank_shield_pro":
         from .public_membership import open_membership_panel
         return await open_membership_panel(interaction)
+
+    if key == "server_backups":
+        from stoney_verify.server_backup_ui import open_server_backups
+        return await open_server_backups(interaction)
 
     if key == "verification":
         from .public_verify_command_center import open_verify_command_center
