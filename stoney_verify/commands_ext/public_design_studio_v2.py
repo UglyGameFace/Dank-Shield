@@ -18,6 +18,7 @@ import discord
 from stoney_verify.interaction_guard import run_guarded_interaction, safe_send_interaction
 from stoney_verify.commands_ext import public_design_studio as legacy
 from stoney_verify.services import search_safe_naming
+from stoney_verify.services import membership
 from stoney_verify.services import naming_identity
 from stoney_verify.services import server_design_apply_service as apply_service
 from stoney_verify.services import server_design_plan_service as plans
@@ -1168,6 +1169,48 @@ class DesignCategoryStyleFontSelect(discord.ui.Select):
         await _edit_category_styles(interaction, view)
 
 
+async def _category_style_pro_denial(interaction: discord.Interaction, guild: discord.Guild) -> discord.Embed | None:
+    """Phase-1 membership pilot gate for creating a NEW category style.
+
+    The save handler only calls this when the guild has no saved category
+    styles at all, so a guild that already uses category styles is
+    grandfathered and never reaches the check. Returns a denial embed when
+    Dank Shield Pro is configured and this guild is not covered; None when
+    the save may proceed (membership unconfigured, Pro guild, or the guard
+    otherwise allows).
+    """
+
+    if not membership.membership_configured():
+        return None
+    status = await membership.guild_pro_status(int(guild.id), client=interaction.client)
+    if status == membership.STATUS_UNCONFIGURED:
+        return None
+    from stoney_verify.guild_action_guard import decide_guild_action
+    from stoney_verify.guild_context import get_guild_context
+
+    context = await get_guild_context(int(guild.id))
+    decision = decide_guild_action(
+        context,
+        action="save a category style",
+        feature="setup",
+        premium_feature="design_category_styles",
+        pro_status_resolver=membership.pro_status_resolver(status),
+    )
+    if decision.allowed:
+        return None
+    return discord.Embed(
+        title="⭐ Dank Shield Pro",
+        description=(
+            "Per-category styles are a **Dank Shield Pro** feature.\n\n"
+            "Your server is not covered by a Pro account yet. Subscribe to Dank Shield Pro "
+            "and link this server to start styling categories individually — your global "
+            "theme and every other design tool stay free.\n\n"
+            "Open `/dank home` → **Setup & Server Settings** → **Dank Shield Pro** to subscribe or link this server."
+        ),
+        color=discord.Color.gold(),
+    )
+
+
 class DesignCategoryStylesView(DesignView):
     def __init__(
         self,
@@ -1227,6 +1270,21 @@ class DesignCategoryStylesView(DesignView):
         options = await _load_design_options(int(guild.id))
         styles = _category_styles_map(options)
         entry = None if self.clear_style else studio.normalize_category_style(self.draft)
+        if entry is not None and not styles:
+            # Grandfather rule: only a guild with NO saved category styles
+            # creating its first one passes through the Pro pilot gate.
+            denial = await _category_style_pro_denial(interaction, guild)
+            if denial is not None:
+                view = DesignCategoryStylesView(
+                    guild,
+                    self.options,
+                    category_id=self.category_id,
+                    draft=self.draft,
+                    template_id=self.template_id,
+                    clear_style=self.clear_style,
+                )
+                await interaction.edit_original_response(embed=denial, view=view)
+                return
         if entry is None:
             styles.pop(str(int(self.category_id)), None)
         else:

@@ -340,6 +340,7 @@ def _asset_embed() -> discord.Embed:
 _FEATURE_ROUTE_KEYS = frozenset(
     {
         "setup_center",
+        "dank_shield_pro",
         "verification",
         "verification_reminders",
         "action_reminder_center",
@@ -501,6 +502,10 @@ async def _route_feature(interaction: discord.Interaction, feature_key: str) -> 
     if key == "setup_center":
         from .public_command_hub import _invoke_saved
         return await _invoke_saved("setup", interaction)
+
+    if key == "dank_shield_pro":
+        from .public_membership import open_membership_panel
+        return await open_membership_panel(interaction)
 
     if key == "verification":
         from .public_verify_command_center import open_verify_command_center

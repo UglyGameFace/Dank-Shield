@@ -317,6 +317,27 @@
       ],
       "retention_rule": "No automatic cleanup in dormant 4D.4. Before any live canary, approve retention window and bounded backup-first audit cleanup, never delete incomplete or disputed delivery records.",
       "expiry_index": "idx_action_canary_audit_requested"
+    },
+    "public.dank_membership_guild_links": {
+      "feature": "Dank Shield Pro membership: subscriber-chosen covered servers (max 3 per account)",
+      "owner": "stoney_verify.services.membership",
+      "purpose": "Maps a Pro subscriber's Discord account to the guilds their subscription covers so premium gates can resolve per-guild status; billing and entitlement truth stay with Discord",
+      "stored_fields": [
+        "user_id",
+        "guild_id",
+        "linked_at"
+      ],
+      "contains_message_content": false,
+      "retention_rule": "Retain while the link is active; the row is deleted when the subscriber unlinks the guild. Links for guilds the bot has left or whose owner no longer holds an entitlement are inert and purged on periodic review",
+      "cleanup_interval_seconds": 86400,
+      "max_candidates_per_cleanup": 100,
+      "expiry_index": "idx_dank_membership_guild_links_user",
+      "preserve_when": "Link is active, or entitlement status cannot be confirmed because the Discord API is unavailable",
+      "backup_class": "operational_counters",
+      "migration": "postgres/migrations/202611180001_membership.sql",
+      "retention_class": "member_preference",
+      "historical_reuse": "Restore a subscriber's covered servers after restart or migration without re-linking",
+      "review_interval_days": 180
     }
   }
 }

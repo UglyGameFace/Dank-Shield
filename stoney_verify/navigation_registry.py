@@ -117,6 +117,15 @@ FEATURES: tuple[NavigationFeature, ...] = (
         True,
     ),
     NavigationFeature(
+        "dank_shield_pro",
+        "Dank Shield Pro",
+        "⭐",
+        "setup",
+        "See this server's plan, subscribe to Pro, and choose which servers your Pro covers.",
+        ("pro", "premium", "membership", "subscribe", "subscription", "plan", "upgrade"),
+        True,
+    ),
+    NavigationFeature(
         "verification",
         "Verification",
         "✅",
