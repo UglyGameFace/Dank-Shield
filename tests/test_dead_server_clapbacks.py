@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import random
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -203,6 +204,74 @@ def test_builtin_lines_never_contain_a_real_mention() -> None:
 
 
 # ---------------------------------------------------------------------------
+# New joiner category
+# ---------------------------------------------------------------------------
+
+
+def test_builtin_new_joiner_lines_verbatim() -> None:
+    assert BUILTIN_LINES[clap.CATEGORY_NEW_JOINER] == (
+        "you've been here 4 minutes and you're already leaving a yelp review. incredible",
+        "you just joined. you haven't even seen the server yet and it's dead? ok",
+        "walked in 2 minutes ago and declared the party over. stay awhile, you ARE the party",
+        "brand new and already complaining. at least look around first, damn",
+    )
+    assert clap.CATEGORY_NEW_JOINER in clap.CATEGORIES
+    assert clap.NEW_JOINER_WINDOW == timedelta(hours=24)
+
+
+def test_is_new_joiner_window() -> None:
+    now = datetime(2026, 11, 18, 12, 0, tzinfo=timezone.utc)
+    recent = SimpleNamespace(joined_at=now - timedelta(minutes=5))
+    assert clap.is_new_joiner(recent, now=now) is True
+    edge = SimpleNamespace(joined_at=now - timedelta(hours=24))
+    assert clap.is_new_joiner(edge, now=now) is True
+    old = SimpleNamespace(joined_at=now - timedelta(hours=25))
+    assert clap.is_new_joiner(old, now=now) is False
+    # Uncached / partial members are never treated as new joiners.
+    assert clap.is_new_joiner(SimpleNamespace(joined_at=None), now=now) is False
+    assert clap.is_new_joiner(SimpleNamespace(), now=now) is False
+
+
+def test_new_joiner_eligible_categories_are_exclusive() -> None:
+    # Even with a ping role configured and unused, only NEW_JOINER is eligible.
+    assert eligible_categories(ping_role_id=5, did_ping=False, new_joiner=True) == (
+        clap.CATEGORY_NEW_JOINER,
+    )
+    assert eligible_categories(ping_role_id=0, did_ping=True, new_joiner=True) == (
+        clap.CATEGORY_NEW_JOINER,
+    )
+    # And it never leaks into the normal rotation.
+    assert clap.CATEGORY_NEW_JOINER not in eligible_categories(
+        ping_role_id=5, did_ping=False
+    )
+
+
+def test_pick_new_joiner_never_uses_didnt_ping() -> None:
+    config = parse_clapback_config(
+        {clap.ENABLED_KEY: True, clap.PING_ROLE_KEY: str(400)}
+    )
+    rng = random.Random(5)
+    for _ in range(60):
+        picked = pick_clapback_line(config, did_ping=False, new_joiner=True, rng=rng)
+        assert picked is not None
+        assert picked[0] == clap.CATEGORY_NEW_JOINER
+        assert picked[1] in BUILTIN_LINES[clap.CATEGORY_NEW_JOINER]
+
+
+def test_custom_lines_replace_new_joiner_category() -> None:
+    config = parse_clapback_config(
+        {clap.LINES_KEY: {clap.CATEGORY_NEW_JOINER: ["fresh face, bold take"]}}
+    )
+    assert config.lines_for(clap.CATEGORY_NEW_JOINER) == ("fresh face, bold take",)
+    # Other categories still fall back to the built-ins.
+    assert config.lines_for(clap.CATEGORY_LIVES) == BUILTIN_LINES[clap.CATEGORY_LIVES]
+    picked = pick_clapback_line(
+        config, did_ping=False, new_joiner=True, rng=random.Random(1)
+    )
+    assert picked == (clap.CATEGORY_NEW_JOINER, "fresh face, bold take")
+
+
+# ---------------------------------------------------------------------------
 # Runtime with fakes
 # ---------------------------------------------------------------------------
 
@@ -220,11 +289,12 @@ class _Clock:
         return self.now
 
 
-def _member(user_id: int, *, bot: bool = False, manage: bool = False, admin: bool = False):
+def _member(user_id: int, *, bot: bool = False, manage: bool = False, admin: bool = False, joined_at=None):
     return SimpleNamespace(
         id=user_id,
         bot=bot,
         guild_permissions=SimpleNamespace(manage_messages=manage, administrator=admin),
+        joined_at=joined_at,
     )
 
 
@@ -420,6 +490,52 @@ def test_runtime_didnt_ping_lines_only_without_role_mention() -> None:
         )
         assert asyncio.run(runtime2.on_message(message)) is True
         assert _reply_line(message) not in BUILTIN_LINES[clap.CATEGORY_DIDNT_PING]
+
+
+def test_runtime_new_joiner_gets_only_new_joiner_lines() -> None:
+    # Ping role configured and NOT used: DIDNT_PING would normally be
+    # eligible, but a brand-new member must draw only new-joiner lines.
+    config = {**ENABLED, clap.PING_ROLE_KEY: str(ROLE_ID)}
+    guild = _guild(roles={ROLE_ID: SimpleNamespace(id=ROLE_ID, name="Stoners")})
+    runtime = _runtime(config)
+    clock = _Clock()
+    runtime._clock = clock
+    joined = datetime.now(timezone.utc) - timedelta(minutes=10)
+    for index in range(30):
+        clock.now += 7200
+        message = _message(
+            "dead server",
+            author=_member(3000 + index, joined_at=joined),
+            guild=guild,
+            channel=_channel(channel_id=700 + index),
+        )
+        assert asyncio.run(runtime.on_message(message)) is True
+        line = _reply_line(message)
+        assert line in BUILTIN_LINES[clap.CATEGORY_NEW_JOINER]
+        assert line not in BUILTIN_LINES[clap.CATEGORY_DIDNT_PING]
+
+
+def test_runtime_joined_25h_ago_uses_normal_rotation() -> None:
+    runtime = _runtime(ENABLED)
+    joined = datetime.now(timezone.utc) - timedelta(hours=25)
+    message = _message("dead server", author=_member(USER_ID, joined_at=joined))
+    assert asyncio.run(runtime.on_message(message)) is True
+    line = _reply_line(message)
+    assert line not in BUILTIN_LINES[clap.CATEGORY_NEW_JOINER]
+    normal = {
+        text
+        for category, lines in BUILTIN_LINES.items()
+        if category != clap.CATEGORY_NEW_JOINER
+        for text in lines
+    }
+    assert line in normal
+
+
+def test_runtime_joined_at_none_uses_normal_rotation() -> None:
+    runtime = _runtime(ENABLED)
+    message = _message("dead server", author=_member(USER_ID, joined_at=None))
+    assert asyncio.run(runtime.on_message(message)) is True
+    assert _reply_line(message) not in BUILTIN_LINES[clap.CATEGORY_NEW_JOINER]
 
 
 def test_runtime_unavailable_config_is_silent() -> None:
