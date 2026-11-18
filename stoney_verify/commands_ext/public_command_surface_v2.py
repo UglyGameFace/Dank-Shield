@@ -357,6 +357,7 @@ _FEATURE_ROUTE_KEYS = frozenset(
         "birthdays",
         "community_pings_manager",
         "community_tools",
+        "dead_server_clapbacks",
         "embed_studio",
         "share_router",
         "share_downloads",
@@ -581,6 +582,10 @@ async def _route_feature(interaction: discord.Interaction, feature_key: str) -> 
     if key == "community_tools":
         from .public_community_tools import open_community_tools
         return await open_community_tools(interaction, replace_message=True)
+
+    if key == "dead_server_clapbacks":
+        from .public_dead_server_clapbacks import open_dead_server_clapbacks
+        return await open_dead_server_clapbacks(interaction)
 
     if key == "embed_studio":
         from ..embed_studio_ui import open_embed_studio
@@ -1640,6 +1645,8 @@ def install_compact_public_surface_v2(bot: Any, tree: Any) -> dict[str, Any]:
     ensure_community_tools_runtime(bot)
     from ..community_hub_runtime import ensure_community_hub_runtime
     ensure_community_hub_runtime(bot)
+    from ..dead_server_clapbacks import ensure_dead_server_clapback_runtime
+    ensure_dead_server_clapback_runtime(bot)
     from ..services.naming_identity import install_naming_identity_runtime
     install_naming_identity_runtime(bot)
 
