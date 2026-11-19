@@ -8,7 +8,7 @@ module then compacts only the *application-command tree* into a few stable
 doorways backed by action-complete UI centers.
 """
 
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 import discord
 from discord import app_commands
@@ -28,7 +28,7 @@ from ..navigation_registry import (
 )
 from ..help_guides import HELP_GUIDES
 from ..panel_lifecycle import PRIVATE_MENU_TTL_SECONDS
-from ..ui import DankChoice, DankPickerView
+from ..ui import DankChoice, DankPickerView, chunk_choices
 from .public_setup_group import dank_group
 
 _INSTALLED = False
@@ -858,28 +858,156 @@ class FeatureSearchModal(discord.ui.Modal, title="Find a Dank Shield Feature"):
         await _replace_panel(interaction, embed=_search_embed(text, results), view=view)
 
 
-class _HomeSectionSelect(discord.ui.Select):
-    def __init__(self, *, row: int = 0) -> None:
+class _NavigationPickerView(DankPickerView):
+    """House picker for /dank home and Help panels.
+
+    Mirrors _OwnedView's owner gate, and pages long choice lists with
+    chunk_choices so every option stays reachable past Discord's
+    25-option select limit instead of being silently cut off.
+    """
+
+    def __init__(
+        self, owner_id: int, *, choices: Any, on_pick: Any,
+        custom_id: str, placeholder: str, title: str = "Dank Shield",
+        on_home: Any = None, home_label: str = "Back", page: int = 0,
+    ) -> None:
+        all_choices = list(choices or [])
+        pages = chunk_choices(all_choices) or [[]]
+        page = max(0, min(int(page), len(pages) - 1))
         super().__init__(
-            placeholder="🧭 Choose a section…",
-            min_values=1,
-            max_values=1,
-            custom_id="dank:home:sections:v1",
-            row=row,
-            options=[
-                discord.SelectOption(
-                    label=category.label[:100],
-                    value=category.key,
-                    emoji=category.emoji,
-                    description=category.description[:100],
-                )
-                for category in CATEGORIES
-            ],
+            author_id=int(owner_id),
+            choices=pages[page],
+            on_pick=on_pick,
+            custom_id=f"{custom_id}:{page}" if len(pages) > 1 else custom_id,
+            placeholder=(
+                f"{placeholder} • Page {page + 1}/{len(pages)}"
+                if len(pages) > 1 else placeholder
+            ),
+            title=title,
+            timeout=PRIVATE_MENU_TTL_SECONDS,
+            on_home=on_home,
+            home_label=home_label,
+        )
+        self._all_choices = all_choices
+        self._picker_on_pick = on_pick
+        self._base_custom_id = custom_id
+        self._base_placeholder = placeholder
+        self._picker_title = title
+        self._picker_on_home = on_home
+        self._picker_home_label = home_label
+        self.page = page
+        self.pages = len(pages)
+        if len(pages) > 1:
+            self.add_item(_NavigationPickerPageButton(delta=-1, disabled=page <= 0))
+            self.add_item(_NavigationPickerPageButton(delta=1, disabled=page >= len(pages) - 1))
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if int(interaction.user.id) == int(self.author_id):
+            return True
+        await _private(interaction, "❌ Open your own `/dank home` panel to use these controls.")
+        return False
+
+    def _for_page(self, page: int) -> "_NavigationPickerView":
+        return _NavigationPickerView(
+            int(self.author_id), choices=self._all_choices, on_pick=self._picker_on_pick,
+            custom_id=self._base_custom_id, placeholder=self._base_placeholder,
+            title=self._picker_title, on_home=self._picker_on_home,
+            home_label=self._picker_home_label, page=page,
         )
 
+
+class _NavigationPickerPageButton(discord.ui.Button):
+    def __init__(self, *, delta: int, disabled: bool) -> None:
+        super().__init__(
+            label="Previous" if delta < 0 else "Next",
+            emoji="◀️" if delta < 0 else "▶️",
+            style=discord.ButtonStyle.secondary,
+            custom_id=(
+                "dank:navigation:picker:prev" if delta < 0
+                else "dank:navigation:picker:next"
+            ),
+            row=2, disabled=bool(disabled),
+        )
+        self.delta = int(delta)
+
     async def callback(self, interaction: discord.Interaction) -> None:
-        value = str(self.values[0] if self.values else "").strip()
-        await _open_category(interaction, value)
+        view = self.view
+        if not isinstance(view, _NavigationPickerView) or not await view.interaction_check(interaction):
+            return
+        page = max(0, min(view.page + self.delta, view.pages - 1))
+        await interaction.response.edit_message(view=view._for_page(page))
+
+
+class _NavigationPickerOpenButton(discord.ui.Button):
+    """Swaps the current navigation panel for a house picker on the same message."""
+
+    def __init__(
+        self, *, label: str, emoji: str | None, custom_id: str, row: int,
+        heading: str, description: str,
+        build: Callable[[discord.Interaction], _NavigationPickerView],
+        style: discord.ButtonStyle = discord.ButtonStyle.secondary,
+    ) -> None:
+        super().__init__(label=label, emoji=emoji, style=style, custom_id=custom_id, row=row)
+        self._heading = heading
+        self._description = description
+        self._build = build
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        view = self.view
+        if isinstance(view, _OwnedView) and not await view.interaction_check(interaction):
+            return
+        embed = discord.Embed(
+            title=self._heading, description=self._description,
+            color=discord.Color.blurple(),
+        )
+        await _replace_panel(interaction, embed=embed, view=self._build(interaction))
+
+
+def _section_choices() -> list[DankChoice]:
+    return [
+        DankChoice(
+            label=category.label[:100],
+            value=category.key,
+            emoji=category.emoji,
+            description=category.description[:100],
+        )
+        for category in CATEGORIES
+    ]
+
+
+def _section_picker_view(
+    interaction: discord.Interaction, *, back: str,
+) -> _NavigationPickerView:
+    async def picked(pick_interaction: discord.Interaction, value: str) -> None:
+        await _open_category(pick_interaction, value)
+
+    async def home(home_interaction: discord.Interaction) -> None:
+        if back == "directory":
+            await _open_directory(home_interaction)
+        else:
+            await _open_home(home_interaction)
+
+    return _NavigationPickerView(
+        int(interaction.user.id),
+        choices=_section_choices(),
+        on_pick=picked,
+        custom_id="dank:home:sections:v1",
+        placeholder="🧭 Choose a section…",
+        title="Choose a Section",
+        on_home=home,
+        home_label="Back",
+    )
+
+
+def _section_open_button(*, row: int, back: str) -> _NavigationPickerOpenButton:
+    return _NavigationPickerOpenButton(
+        label="Choose a Section", emoji="🧭",
+        custom_id="dank:home:sections:open:v1", row=row,
+        heading="🧭 Choose a Section",
+        description="Pick a section, then choose what you want to do.",
+        build=lambda interaction: _section_picker_view(interaction, back=back),
+        style=discord.ButtonStyle.primary,
+    )
 
 
 # Blue marks the main starting point, never a staff-access level.
@@ -1067,7 +1195,7 @@ class CompactDankHomeView(_OwnedView):
         super().__init__(owner_id)
         self.status = status
         if status is None:
-            self.add_item(_HomeSectionSelect())
+            self.add_item(_section_open_button(row=0, back="home"))
             self.add_item(_FindFeatureButton(row=1))
             self.add_item(_AllFeaturesButton(row=1))
             self.add_item(_HelpNavigationButton(row=1))
@@ -1081,7 +1209,7 @@ class CompactDankHomeView(_OwnedView):
         for item in attention[:4]:
             self.add_item(_HomeAttentionButton(item.button_label, item.feature_key, row=1))
         select_row = 2 if attention else 1
-        self.add_item(_HomeSectionSelect(row=select_row))
+        self.add_item(_section_open_button(row=select_row, back="home"))
         nav_row = select_row + 1
         self.add_item(_FindFeatureButton(row=nav_row))
         self.add_item(_AllFeaturesButton(row=nav_row))
@@ -1126,7 +1254,7 @@ class RecentFeaturesView(_OwnedView):
 class FeatureDirectoryView(_OwnedView):
     def __init__(self, owner_id: int) -> None:
         super().__init__(owner_id)
-        self.add_item(_HomeSectionSelect())
+        self.add_item(_section_open_button(row=0, back="directory"))
         self.add_item(_FindFeatureButton(row=1))
         self.add_item(_HelpNavigationButton(row=1))
         self.add_item(_HomeButton(row=1))
@@ -1142,27 +1270,49 @@ class FeatureSearchEmptyView(_OwnedView):
         self.add_item(_CloseNavigationButton(row=0))
 
 
-class _HelpTopicSelect(discord.ui.Select):
-    def __init__(self) -> None:
-        super().__init__(
-            placeholder="Choose what you want to learn",
-            options=[
-                discord.SelectOption(label=label, value=key, description=summary[:100])
-                for key, label, summary, _features in _HELP_TOPICS
-            ],
-            min_values=1,
-            max_values=1,
-            custom_id="dank:help:topics:v2",
-            row=0,
+def _help_topic_picker_view(
+    interaction: discord.Interaction, *, back: str, topic_key: str = "",
+) -> _NavigationPickerView:
+    async def picked(pick_interaction: discord.Interaction, value: str) -> None:
+        await _replace_panel(
+            pick_interaction,
+            embed=_help_topic_embed(value),
+            view=HelpTopicView(int(pick_interaction.user.id), value),
         )
 
-    async def callback(self, interaction: discord.Interaction) -> None:
-        topic_key = self.values[0]
-        await _replace_panel(
-            interaction,
-            embed=_help_topic_embed(topic_key),
-            view=HelpTopicView(int(interaction.user.id), topic_key),
-        )
+    async def home(home_interaction: discord.Interaction) -> None:
+        if back == "topic" and topic_key:
+            return await _replace_panel(
+                home_interaction,
+                embed=_help_topic_embed(topic_key),
+                view=HelpTopicView(int(home_interaction.user.id), topic_key),
+            )
+        await _show_help_home(home_interaction)
+
+    return _NavigationPickerView(
+        int(interaction.user.id),
+        choices=[
+            DankChoice(label=label, value=key, description=summary[:100])
+            for key, label, summary, _features in _HELP_TOPICS
+        ],
+        on_pick=picked,
+        custom_id="dank:help:topics:v2",
+        placeholder="Choose what you want to learn",
+        title="Help Topics",
+        on_home=home,
+        home_label="Back",
+    )
+
+
+def _help_topic_open_button(*, back: str, topic_key: str = "") -> _NavigationPickerOpenButton:
+    return _NavigationPickerOpenButton(
+        label="Choose a Topic", emoji="❓",
+        custom_id="dank:help:topics:open:v1", row=0,
+        heading="❓ Choose a Topic",
+        description="Pick a topic, then choose **How to use** for a feature.",
+        build=lambda interaction: _help_topic_picker_view(
+            interaction, back=back, topic_key=topic_key),
+    )
 
 
 class _HelpGuideButton(discord.ui.Button):
@@ -1263,48 +1413,58 @@ class _BrowseHelpButton(discord.ui.Button):
         await _show_help_category(interaction, CATEGORIES[0].key)
 
 
-class _HelpCategorySelect(discord.ui.Select):
-    def __init__(self) -> None:
-        super().__init__(
-            placeholder="Choose a section",
-            options=[
-                discord.SelectOption(
-                    label=cat.label[:100], value=cat.key, emoji=cat.emoji,
-                    description=cat.description[:100],
-                )
-                for cat in CATEGORIES
-            ],
-            min_values=1, max_values=1,
-            custom_id="dank:help:category:v3", row=0,
-        )
+def _help_category_picker_view(
+    interaction: discord.Interaction, category_key: str,
+) -> _NavigationPickerView:
+    async def picked(pick_interaction: discord.Interaction, value: str) -> None:
+        await _show_help_category(pick_interaction, value)
 
-    async def callback(self, interaction: discord.Interaction) -> None:
-        await _show_help_category(interaction, self.values[0])
+    async def home(home_interaction: discord.Interaction) -> None:
+        await _show_help_category(home_interaction, category_key)
+
+    return _NavigationPickerView(
+        int(interaction.user.id),
+        choices=[
+            DankChoice(
+                label=cat.label[:100], value=cat.key, emoji=cat.emoji,
+                description=cat.description[:100],
+            )
+            for cat in CATEGORIES
+        ],
+        on_pick=picked,
+        custom_id="dank:help:category:v3",
+        placeholder="Choose a section",
+        title="Browse Guides",
+        on_home=home,
+        home_label="Back",
+    )
 
 
-class _HelpFeatureSelect(discord.ui.Select):
-    def __init__(self, category_key: str) -> None:
-        features = features_for_category(category_key)
-        if not features or len(features) > 25:
-            raise RuntimeError("Help category exceeds Discord select capacity")
-        self.category_key = category_key
-        super().__init__(
-            placeholder="Read how to use a feature",
-            options=[
-                discord.SelectOption(
-                    label=feature.label[:100], value=feature.key, emoji=feature.emoji,
-                    description=HELP_GUIDES[feature.key].purpose[:100],
-                )
-                for feature in features
-            ],
-            min_values=1, max_values=1,
-            custom_id="dank:help:feature-select:v3", row=1,
-        )
+def _help_feature_picker_view(
+    interaction: discord.Interaction, category_key: str,
+) -> _NavigationPickerView:
+    async def picked(pick_interaction: discord.Interaction, value: str) -> None:
+        await _show_help_guide(pick_interaction, value, category_key=category_key)
 
-    async def callback(self, interaction: discord.Interaction) -> None:
-        await _show_help_guide(
-            interaction, self.values[0], category_key=self.category_key,
-        )
+    async def home(home_interaction: discord.Interaction) -> None:
+        await _show_help_category(home_interaction, category_key)
+
+    return _NavigationPickerView(
+        int(interaction.user.id),
+        choices=[
+            DankChoice(
+                label=feature.label[:100], value=feature.key, emoji=feature.emoji,
+                description=HELP_GUIDES[feature.key].purpose[:100],
+            )
+            for feature in features_for_category(category_key)
+        ],
+        on_pick=picked,
+        custom_id="dank:help:feature-select:v3",
+        placeholder="Read how to use a feature",
+        title="How-to Guides",
+        on_home=home,
+        home_label="Back",
+    )
 
 
 class HelpSearchModal(discord.ui.Modal, title="Find a How-to Guide"):
@@ -1327,36 +1487,59 @@ class HelpSearchModal(discord.ui.Modal, title="Find a How-to Guide"):
         await _replace_panel(
             interaction,
             embed=_help_search_embed(str(self.query.value), results),
-            view=HelpSearchResultsView(self.owner_id, results),
+            view=HelpSearchResultsView(self.owner_id, results, query=str(self.query.value)),
         )
 
 
-class _HelpSearchResultSelect(discord.ui.Select):
-    def __init__(self, matches: list[NavigationFeature]) -> None:
-        super().__init__(
-            placeholder="Select a how-to guide",
-            options=[
-                discord.SelectOption(
-                    label=feature.label[:100], value=feature.key,
-                    emoji=feature.emoji,
-                    description=HELP_GUIDES[feature.key].purpose[:100],
-                )
-                for feature in matches[:25]
-            ],
-            min_values=1, max_values=1,
-            custom_id="dank:help:search-results:v3",
-            row=0,
+def _help_search_picker_view(
+    interaction: discord.Interaction, matches: list[NavigationFeature], query: str,
+) -> _NavigationPickerView:
+    async def picked(pick_interaction: discord.Interaction, value: str) -> None:
+        await _show_help_guide(pick_interaction, value)
+
+    async def home(home_interaction: discord.Interaction) -> None:
+        await _replace_panel(
+            home_interaction,
+            embed=_help_search_embed(query, matches),
+            view=HelpSearchResultsView(
+                int(home_interaction.user.id), matches, query=query),
         )
 
-    async def callback(self, interaction: discord.Interaction) -> None:
-        await _show_help_guide(interaction, self.values[0])
+    return _NavigationPickerView(
+        int(interaction.user.id),
+        choices=[
+            DankChoice(
+                label=feature.label[:100], value=feature.key,
+                emoji=feature.emoji,
+                description=HELP_GUIDES[feature.key].purpose[:100],
+            )
+            for feature in matches
+        ],
+        on_pick=picked,
+        custom_id="dank:help:search-results:v3",
+        placeholder="Select a how-to guide",
+        title="Find a How-to Guide",
+        on_home=home,
+        home_label="Back",
+    )
 
 
 class HelpSearchResultsView(_OwnedView):
-    def __init__(self, owner_id: int, matches: list[NavigationFeature]) -> None:
+    def __init__(
+        self, owner_id: int, matches: list[NavigationFeature], *, query: str = "",
+    ) -> None:
         super().__init__(owner_id)
+        self.matches = list(matches)
+        self.query = str(query)
         if matches:
-            self.add_item(_HelpSearchResultSelect(matches))
+            self.add_item(_NavigationPickerOpenButton(
+                label="Choose a Guide", emoji="🔎",
+                custom_id="dank:help:search-results:open:v1", row=0,
+                heading="🔎 Choose a Guide",
+                description="Pick the guide that matches what you want to learn.",
+                build=lambda interaction: _help_search_picker_view(
+                    interaction, self.matches, self.query),
+            ))
         self.add_item(_FindHelpButton(row=1))
         self.add_item(_BrowseHelpButton(row=1))
         self.add_item(_HelpOverviewButton())
@@ -1367,7 +1550,7 @@ class HelpSearchResultsView(_OwnedView):
 class CompactHelpView(_OwnedView):
     def __init__(self, owner_id: int) -> None:
         super().__init__(owner_id)
-        self.add_item(_HelpTopicSelect())
+        self.add_item(_help_topic_open_button(back="help_home"))
         self.add_item(_FindHelpButton(row=1))
         self.add_item(_BrowseHelpButton(row=1))
         self.add_item(_HomeButton(row=1))
@@ -1378,7 +1561,7 @@ class HelpTopicView(_OwnedView):
     def __init__(self, owner_id: int, topic_key: str) -> None:
         super().__init__(owner_id)
         self.topic_key = topic_key
-        self.add_item(_HelpTopicSelect())
+        self.add_item(_help_topic_open_button(back="topic", topic_key=topic_key))
         _, _, _, feature_keys = _help_topic(topic_key)
         for key in feature_keys:
             feature = feature_by_key(key)
@@ -1395,8 +1578,22 @@ class HelpTopicView(_OwnedView):
 class HelpCategoryView(_OwnedView):
     def __init__(self, owner_id: int, category_key: str) -> None:
         super().__init__(owner_id)
-        self.add_item(_HelpCategorySelect())
-        self.add_item(_HelpFeatureSelect(category_key))
+        self.add_item(_NavigationPickerOpenButton(
+            label="Choose a Section", emoji="📖",
+            custom_id="dank:help:category:open:v1", row=0,
+            heading="📖 Choose a Section",
+            description="Pick a section to browse its how-to guides.",
+            build=lambda interaction: _help_category_picker_view(
+                interaction, category_key),
+        ))
+        self.add_item(_NavigationPickerOpenButton(
+            label="Read a Guide", emoji="📖",
+            custom_id="dank:help:feature-select:open:v1", row=1,
+            heading="📖 Read a How-to Guide",
+            description="Pick a feature to read its full instructions.",
+            build=lambda interaction: _help_feature_picker_view(
+                interaction, category_key),
+        ))
         self.add_item(_FindHelpButton(row=2))
         self.add_item(_HelpOverviewButton())
         self.add_item(_HomeButton(row=2))

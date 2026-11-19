@@ -134,7 +134,8 @@ def test_staff_home_leads_with_four_tasks_then_fixes_then_sections() -> None:
 
     assert [item.label for item in rows[0]] == ["Moderate", "Tickets", "Safety", "Setup"]
     assert [item.label for item in rows[1]] == ["Finish setup", "Review verifications"]
-    assert isinstance(rows[2][0], discord.ui.Select)
+    assert str(getattr(rows[2][0], "custom_id", "")) == "dank:home:sections:open:v1"
+    assert getattr(rows[2][0], "label", "") == "Choose a Section"
     assert [item.label for item in rows[3]] == ["Find Feature", "Directory", "Help", "New & Updated", "Close"]
     assert len(_ids(view)) == len(set(_ids(view)))
     assert max(rows) <= 4 and all(len(items) <= 5 for items in rows.values())
@@ -144,7 +145,7 @@ def test_staff_home_without_problems_skips_the_fix_row() -> None:
     rows = _rows(surface.CompactDankHomeView(1, status=_status()))
 
     assert len(rows[0]) == 4
-    assert isinstance(rows[1][0], discord.ui.Select)
+    assert str(getattr(rows[1][0], "custom_id", "")) == "dank:home:sections:open:v1"
     assert "Close" in [getattr(item, "label", "") for item in rows[2]]
 
 

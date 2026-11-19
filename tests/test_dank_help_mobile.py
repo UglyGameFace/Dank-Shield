@@ -69,7 +69,7 @@ def test_help_entry_is_readable_and_explains_its_guides():
     assert {getattr(item, "label", None) for item in view.children} >= {
         "Find Help", "Browse Guides", "Home", "Close",
     }
-    assert "dank:help:topics:v2" in _ids(view)
+    assert "dank:help:topics:open:v1" in _ids(view)
 
 
 def _ids(view: discord.ui.View) -> list[str]:
@@ -101,13 +101,18 @@ def test_every_registered_feature_is_browsable_by_category():
     rendered = set()
     for cat in navigation_registry.CATEGORIES:
         view = nav.HelpCategoryView(123, cat.key)
-        picker = next(child for child in view.children if isinstance(child, nav._HelpFeatureSelect))
-        keys = {choice.value for choice in picker.options}
+        opener = next(
+            child for child in view.children
+            if getattr(child, "custom_id", "") == "dank:help:feature-select:open:v1"
+        )
+        picker = opener._build(SimpleNamespace(user=SimpleNamespace(id=123)))
+        select = picker.children[0]
+        keys = {choice.value for choice in select.options}
         expected = {feature.key for feature in navigation_registry.features_for_category(cat.key)}
         assert keys == expected
         rendered.update(keys)
         assert nav._help_category_embed(cat.key).title.endswith(cat.label)
-        assert len(picker.options) <= 25
+        assert len(select.options) <= 25
         _assert_mobile_components(view)
     assert rendered == set(HELP_GUIDES)
 
@@ -180,15 +185,13 @@ def test_topic_selector_and_category_selector_do_not_send_public_messages(monkey
     monkeypatch.setattr(nav, "_replace_panel", fake_replace)
     interaction = SimpleNamespace(user=SimpleNamespace(id=42))
 
-    picker = nav._HelpTopicSelect()
-    picker._values = ["safety"]
-    asyncio.run(picker.callback(interaction))
+    picker = nav._help_topic_picker_view(interaction, back="help_home")
+    asyncio.run(picker.handle_pick(interaction, "safety"))
     assert seen[-1]["embed"].title.endswith("Members & safety")
     assert isinstance(seen[-1]["view"], nav.HelpTopicView)
 
-    category = nav._HelpCategorySelect()
-    category._values = ["tickets"]
-    asyncio.run(category.callback(interaction))
+    category = nav._help_category_picker_view(interaction, "design")
+    asyncio.run(category.handle_pick(interaction, "tickets"))
     assert isinstance(seen[-1]["view"], nav.HelpCategoryView)
 
 

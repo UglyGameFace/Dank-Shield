@@ -17,6 +17,7 @@ from typing import Any, Awaitable, Callable, Mapping
 import discord
 
 from ..panel_lifecycle import PRIVATE_MENU_TTL_SECONDS
+from ..ui.picker import DankPickerView, make_choice
 from .. import anti_nuke as anti_nuke_service
 
 from ..guild_config import get_guild_config, invalidate_guild_config, upsert_guild_config
@@ -2227,25 +2228,69 @@ class RestoreMemberModal(discord.ui.Modal, title="Restore Member"):
         )
 
 
-class _ProtectionSectionSelect(discord.ui.Select):
-    def __init__(self, current: str) -> None:
+class _ProtectionSectionPickerView(DankPickerView):
+    """House picker for switching Protection Center sections.
+
+    Keeps the old section select's gate: setup permission is re-checked
+    on every switch before the panel refreshes at the chosen section.
+    """
+
+    def __init__(self, *, author_id: int, current: str) -> None:
+        self.author_id = int(author_id)
+        self.current = current
+
+        async def on_pick(interaction: discord.Interaction, value: str) -> None:
+            if not await _require_setup_permission(interaction):
+                return
+            await _refresh_panel(interaction, section=value)
+
+        async def on_home(interaction: discord.Interaction) -> None:
+            await _refresh_panel(interaction, section=self.current)
+
         super().__init__(
-            placeholder="Choose what to manage",
-            options=[
-                discord.SelectOption(
-                    label=label, value=key, description=hint,
-                    default=(current == key),
-                )
+            author_id=self.author_id,
+            choices=[
+                make_choice(label, key, description=hint, default=(current == key))
                 for key, label, hint in _PROTECTION_SECTIONS
             ],
-            min_values=1, max_values=1, row=0,
+            on_pick=on_pick,
             custom_id="dank_protection:section:v2",
+            placeholder="Choose what to manage",
+            title="Protection Center",
+            timeout=PRIVATE_MENU_TTL_SECONDS,
+            on_home=on_home,
+            home_label="Back",
         )
 
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if int(interaction.user.id) != self.author_id:
+            await safe_send_interaction(interaction, content="Open your own Protection Center with `/dank protection` so settings stay clear.", ephemeral=True, action_name="protection.owner_check")
+            return False
+        return True
+
+
+class _ProtectionSectionOpenButton(discord.ui.Button):
+    """Swaps the Protection Center panel for the section picker on the same message."""
+
+    def __init__(self, *, author_id: int, section: str) -> None:
+        super().__init__(
+            label="Switch Section", emoji="🧭",
+            style=discord.ButtonStyle.secondary,
+            custom_id="dank_protection:section:open:v1", row=0,
+        )
+        self.author_id = int(author_id)
+        self.section = section
+
     async def callback(self, interaction: discord.Interaction) -> None:
-        if not await _require_setup_permission(interaction):
+        view = self.view
+        if not isinstance(view, ProtectionCenterView) or not await view.interaction_check(interaction):
             return
-        await _refresh_panel(interaction, section=self.values[0])
+        message = getattr(interaction, "message", None)
+        embeds = getattr(message, "embeds", None) if message is not None else None
+        await interaction.response.edit_message(
+            embed=embeds[0] if embeds else None,
+            view=_ProtectionSectionPickerView(author_id=self.author_id, current=self.section),
+        )
 
 
 class ProtectionCenterView(discord.ui.View):
@@ -2271,7 +2316,7 @@ class ProtectionCenterView(discord.ui.View):
         existing = {str(getattr(item, "custom_id", "")): item
                     for item in self.children}
         self.clear_items()
-        self.add_item(_ProtectionSectionSelect(self.section))
+        self.add_item(_ProtectionSectionOpenButton(author_id=self.author_id, section=self.section))
         visible = _PROTECTION_SECTION_BUTTONS[self.section] + ("refresh", "close")
         for index, name in enumerate(visible):
             item = existing[f"dank_protection:{name}"]

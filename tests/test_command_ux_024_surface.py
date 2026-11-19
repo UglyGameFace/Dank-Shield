@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import discord
 
@@ -54,12 +55,14 @@ def test_home_uses_categories_without_hiding_feature_destinations() -> None:
     labels = _labels(view)
     assert {"Find Feature", "Directory", "Help", "Close"} <= labels
 
-    section_select = next(
+    section_opener = next(
         item
         for item in view.children
-        if isinstance(item, discord.ui.Select)
-        and str(getattr(item, "custom_id", "")) == "dank:home:sections:v1"
+        if str(getattr(item, "custom_id", "")) == "dank:home:sections:open:v1"
     )
+    section_picker = section_opener._build(SimpleNamespace(user=SimpleNamespace(id=1)))
+    section_select = section_picker.children[0]
+    assert str(getattr(section_select, "custom_id", "")) == "dank:home:sections:v1"
     assert [str(option.label) for option in section_select.options] == [
         category.label for category in CATEGORIES
     ]
