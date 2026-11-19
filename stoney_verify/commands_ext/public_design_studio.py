@@ -30,6 +30,7 @@ from stoney_verify.services import search_safe_naming
 from stoney_verify.services import server_design_plan_service as plan_service
 from stoney_verify.services import server_design_studio as studio
 from stoney_verify.services import server_design_rule_service as rule_service
+from stoney_verify.ui.picker import DankChannelSelect, DankPickerView, chunk_choices, make_choice
 
 _PENDING: dict[str, dict[str, Any]] = {}
 _LAST_SNAPSHOTS: dict[str, list[dict[str, Any]]] = {}
@@ -1080,23 +1081,77 @@ def _consistency_summary(items: list[dict[str, Any]]) -> dict[str, int]:
     return out
 
 
-class CategoryFormatLockSelect(discord.ui.ChannelSelect):
-    def __init__(self) -> None:
-        super().__init__(
-            placeholder="Lock current format to one category",
-            min_values=1,
-            max_values=1,
-            channel_types=[discord.ChannelType.category],
-            custom_id="dank_design:lock_category_select",
-            row=0,
-        )
+async def _restore_design_surface(interaction: discord.Interaction, view: discord.ui.View) -> None:
+    """Put a host design surface back on a message a house picker borrowed."""
+    message = getattr(interaction, "message", None)
+    embeds = getattr(message, "embeds", None) if message is not None else None
+    await interaction.response.edit_message(
+        embed=embeds[0] if embeds else None,
+        view=view,
+    )
+
+
+class DesignPickerOpenButton(discord.ui.Button):
+    """Swap the current design surface for a house picker on the same message.
+
+    The picker is built lazily by ``picker_factory`` so callbacks always work
+    from the state captured when the host view was built. Picking runs the
+    same save/render flow the raw select used; Back/Close on the picker
+    restores the host surface untouched.
+    """
+
+    def __init__(
+        self,
+        *,
+        label: str,
+        custom_id: str,
+        row: int,
+        picker_factory: Callable[[], DankPickerView],
+        emoji: str | None = None,
+    ) -> None:
+        super().__init__(label=label, emoji=emoji, style=discord.ButtonStyle.secondary, custom_id=custom_id, row=row)
+        self._picker_factory = picker_factory
+
+    def build_picker(self) -> DankPickerView:
+        return self._picker_factory()
 
     async def callback(self, interaction: discord.Interaction) -> None:  # type: ignore[override]
         if not await _require_design_permission(interaction):
             return
+        message = getattr(interaction, "message", None)
+        embeds = getattr(message, "embeds", None) if message is not None else None
+        await interaction.response.edit_message(
+            embed=embeds[0] if embeds else None,
+            view=self.build_picker(),
+        )
+
+
+class CategoryFormatLockSelect(DankChannelSelect):
+    """House channel picker for locking the current format to one category.
+
+    Uses the framework's DankChannelSelect wrapper (stable custom_id,
+    resolved guild channel); the pick saves through the same category
+    lock write the raw ChannelSelect used, behind the same design
+    permission gate.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(
+            author_id=0,
+            on_pick=self._save_lock,
+            placeholder="Lock current format to one category",
+            channel_types=[discord.ChannelType.category],
+            min_values=1,
+            max_values=1,
+            row=0,
+        )
+        self.custom_id = "dank_design:lock_category_select"
+
+    async def _save_lock(self, interaction: discord.Interaction, category: discord.abc.GuildChannel) -> None:
+        if not await _require_design_permission(interaction):
+            return
         guild = interaction.guild
         assert guild is not None
-        category = self.values[0]
         if await _reject_reserved_design_target(
             interaction,
             category,
@@ -1111,7 +1166,15 @@ class CategoryFormatLockSelect(discord.ui.ChannelSelect):
         await interaction.edit_original_response(embed=embed, view=FormatLocksView())
 
 
-class ChannelFormatLockSelect(discord.ui.ChannelSelect):
+class ChannelFormatLockSelect(DankChannelSelect):
+    """House channel picker for locking the current format to one channel.
+
+    Uses the framework's DankChannelSelect wrapper (stable custom_id,
+    resolved guild channel); the pick saves through the same channel
+    lock write the raw ChannelSelect used, behind the same design
+    permission gate.
+    """
+
     def __init__(self) -> None:
         channel_types = [discord.ChannelType.text, discord.ChannelType.voice]
         try:
@@ -1127,20 +1190,21 @@ class ChannelFormatLockSelect(discord.ui.ChannelSelect):
         except Exception:
             pass
         super().__init__(
+            author_id=0,
+            on_pick=self._save_lock,
             placeholder="Lock current format to one channel/category override",
+            channel_types=channel_types,
             min_values=1,
             max_values=1,
-            channel_types=channel_types,
-            custom_id="dank_design:lock_channel_select",
             row=0,
         )
+        self.custom_id = "dank_design:lock_channel_select"
 
-    async def callback(self, interaction: discord.Interaction) -> None:  # type: ignore[override]
+    async def _save_lock(self, interaction: discord.Interaction, channel: discord.abc.GuildChannel) -> None:
         if not await _require_design_permission(interaction):
             return
         guild = interaction.guild
         assert guild is not None
-        channel = self.values[0]
         if await _reject_reserved_design_target(
             interaction,
             channel,
@@ -1993,58 +2057,97 @@ def _exact_strength_description(value: int) -> str:
     return descriptions.get(int(value), "Choose how strong the style should be.")[:100]
 
 
-class ExactFontSelect(discord.ui.Select):
+async def _restore_exact_editor(interaction: discord.Interaction, *, scope: str, target_id: int) -> None:
+    """Put the exact format editor back on a message a house picker borrowed."""
+    if not await _require_design_permission(interaction):
+        return
+    guild = interaction.guild
+    assert guild is not None
+    lock = _exact_lock_for_user(guild, int(interaction.user.id), scope, target_id)
+    await interaction.response.edit_message(
+        embed=_exact_format_embed(guild, scope=scope, target_id=target_id, lock=lock),
+        view=ExactFormatEditorViewFactory(guild, scope, target_id, lock),
+    )
+
+
+class ExactFontSelect(DankPickerView):
+    """House picker for the exact editor's text style.
+
+    Picking saves the same {"font": ...} draft patch the raw select
+    saved; Back/Close restores the exact format editor untouched.
+    """
+
     def __init__(self, scope: str, target_id: int, current: str) -> None:
-        options = [
-            discord.SelectOption(
-                label=_exact_font_option_label(font),
-                value=font,
-                default=font == current,
-                description=_exact_font_option_description(font),
-            )
-            for font in EDITOR_FONT_IDS
-        ]
-        super().__init__(
-            placeholder="1) Choose text style",
-            min_values=1,
-            max_values=1,
-            options=options[:25],
-            row=0,
-        )
         self.scope = scope
         self.target_id = int(target_id)
 
-    async def callback(self, interaction: discord.Interaction) -> None:
-        await _update_exact_draft(interaction, scope=self.scope, target_id=self.target_id, patch={"font": self.values[0]})
+        async def on_pick(interaction: discord.Interaction, value: str) -> None:
+            await _update_exact_draft(interaction, scope=self.scope, target_id=self.target_id, patch={"font": value})
 
-class ExactSeparatorSelect(discord.ui.Select):
-    def __init__(self, scope: str, target_id: int, current: str) -> None:
-        options = []
-        for sep_id in EDITOR_SEPARATOR_IDS:
-            spec = studio.SEPARATORS_BY_ID.get(sep_id)
-            if spec is None:
-                continue
-            options.append(
-                discord.SelectOption(
-                    label=_exact_separator_option_label(sep_id),
-                    value=sep_id,
-                    default=sep_id == current,
-                    description=_exact_separator_option_description(sep_id),
+        async def on_home(interaction: discord.Interaction) -> None:
+            await _restore_exact_editor(interaction, scope=self.scope, target_id=self.target_id)
+
+        super().__init__(
+            author_id=0,
+            choices=[
+                make_choice(
+                    _exact_font_option_label(font),
+                    font,
+                    description=_exact_font_option_description(font),
+                    default=font == current,
                 )
-            )
-
-        super().__init__(
-            placeholder=("2) Choose child-channel separator" if scope == "category" else "2) Choose channel separator"),
-            min_values=1,
-            max_values=1,
-            options=options[:25],
-            row=1,
+                for font in EDITOR_FONT_IDS
+            ],
+            on_pick=on_pick,
+            custom_id=f"dank_design:exact_font:picker:{scope}:{int(target_id)}",
+            placeholder="1) Choose text style",
+            title="Custom Format",
+            timeout=900,
+            on_home=on_home,
+            on_cancel=on_home,
+            home_label="Back",
         )
+
+
+class ExactSeparatorSelect(DankPickerView):
+    """House picker for the exact editor's channel separator.
+
+    Picking saves the same {"separator_id": ...} draft patch the raw
+    select saved; Back/Close restores the exact format editor
+    untouched.
+    """
+
+    def __init__(self, scope: str, target_id: int, current: str) -> None:
         self.scope = scope
         self.target_id = int(target_id)
 
-    async def callback(self, interaction: discord.Interaction) -> None:
-        await _update_exact_draft(interaction, scope=self.scope, target_id=self.target_id, patch={"separator_id": self.values[0]})
+        async def on_pick(interaction: discord.Interaction, value: str) -> None:
+            await _update_exact_draft(interaction, scope=self.scope, target_id=self.target_id, patch={"separator_id": value})
+
+        async def on_home(interaction: discord.Interaction) -> None:
+            await _restore_exact_editor(interaction, scope=self.scope, target_id=self.target_id)
+
+        super().__init__(
+            author_id=0,
+            choices=[
+                make_choice(
+                    _exact_separator_option_label(sep_id),
+                    sep_id,
+                    description=_exact_separator_option_description(sep_id),
+                    default=sep_id == current,
+                )
+                for sep_id in EDITOR_SEPARATOR_IDS
+                if sep_id in studio.SEPARATORS_BY_ID
+            ],
+            on_pick=on_pick,
+            custom_id=f"dank_design:exact_separator:picker:{scope}:{int(target_id)}",
+            placeholder=("2) Choose child-channel separator" if scope == "category" else "2) Choose channel separator"),
+            title="Custom Format",
+            timeout=900,
+            on_home=on_home,
+            on_cancel=on_home,
+            home_label="Back",
+        )
 
 EXACT_FRAME_BROWSE_VALUE = "__browse_frames__"
 
@@ -2076,7 +2179,16 @@ def _exact_frame_page_for(frame_id: str) -> int:
     return 0
 
 
-class ExactFrameSelect(discord.ui.Select):
+class ExactFrameSelect(DankPickerView):
+    """House picker for the exact editor's category header style.
+
+    Shows the same first-page frames the raw select showed, plus the
+    same "Browse all frames…" entry that opens the grouped frame
+    browser. Picking a frame saves the same {"category_frame_id": ...}
+    draft patch; Back/Close restores the exact format editor
+    untouched.
+    """
+
     def __init__(self, scope: str, target_id: int, current: str) -> None:
         current = _safe_str(current, "plain")
         if current not in studio.CATEGORY_FRAMES_BY_ID:
@@ -2087,69 +2199,85 @@ class ExactFrameSelect(discord.ui.Select):
         if current_spec is not None and all(frame.id != current for frame in visible):
             visible = visible[:23] + [current_spec]
 
-        options = [
-            discord.SelectOption(
-                label=_category_frame_choice_label(frame.id)[:100],
-                value=frame.id,
-                default=frame.id == current,
+        self.scope = scope
+        self.target_id = int(target_id)
+
+        async def on_pick(interaction: discord.Interaction, value: str) -> None:
+            selected = _safe_str(value, "")
+            if selected != EXACT_FRAME_BROWSE_VALUE:
+                await _update_exact_draft(
+                    interaction,
+                    scope=self.scope,
+                    target_id=self.target_id,
+                    patch={"category_frame_id": selected},
+                )
+                return
+
+            if not await _require_design_permission(interaction):
+                return
+            guild = interaction.guild
+            assert guild is not None
+            lock = _exact_lock_for_user(guild, int(interaction.user.id), self.scope, self.target_id)
+            page = _exact_frame_page_for(_safe_str(lock.get("category_frame_id"), "plain"))
+            await interaction.response.edit_message(
+                embed=_exact_frame_browser_embed(
+                    guild,
+                    scope=self.scope,
+                    target_id=self.target_id,
+                    lock=lock,
+                    page=page,
+                ),
+                view=ExactFrameBrowserView(
+                    guild,
+                    scope=self.scope,
+                    target_id=self.target_id,
+                    lock=lock,
+                    page=page,
+                ),
+            )
+
+        async def on_home(interaction: discord.Interaction) -> None:
+            await _restore_exact_editor(interaction, scope=self.scope, target_id=self.target_id)
+
+        choices = [
+            make_choice(
+                _category_frame_choice_label(frame.id),
+                frame.id,
                 description=_exact_frame_option_description(frame.id),
+                default=frame.id == current,
             )
             for frame in visible
         ]
         if len(frames) > len(visible):
-            options.append(
-                discord.SelectOption(
-                    label=f"Browse all {len(frames)} frames…"[:100],
-                    value=EXACT_FRAME_BROWSE_VALUE,
+            choices.append(
+                make_choice(
+                    f"Browse all {len(frames)} frames…",
+                    EXACT_FRAME_BROWSE_VALUE,
                     description="Open the full grouped frame browser.",
                 )
             )
         super().__init__(
+            author_id=0,
+            choices=choices,
+            on_pick=on_pick,
+            custom_id=f"dank_design:exact_frame:picker:{scope}:{int(target_id)}",
             placeholder="3) Choose category header style",
-            min_values=1,
-            max_values=1,
-            options=options[:25],
-            row=2,
-        )
-        self.scope = scope
-        self.target_id = int(target_id)
-
-    async def callback(self, interaction: discord.Interaction) -> None:
-        selected = _safe_str(self.values[0], "")
-        if selected != EXACT_FRAME_BROWSE_VALUE:
-            await _update_exact_draft(
-                interaction,
-                scope=self.scope,
-                target_id=self.target_id,
-                patch={"category_frame_id": selected},
-            )
-            return
-
-        if not await _require_design_permission(interaction):
-            return
-        guild = interaction.guild
-        assert guild is not None
-        lock = _exact_lock_for_user(guild, int(interaction.user.id), self.scope, self.target_id)
-        page = _exact_frame_page_for(_safe_str(lock.get("category_frame_id"), "plain"))
-        await interaction.response.edit_message(
-            embed=_exact_frame_browser_embed(
-                guild,
-                scope=self.scope,
-                target_id=self.target_id,
-                lock=lock,
-                page=page,
-            ),
-            view=ExactFrameBrowserView(
-                guild,
-                scope=self.scope,
-                target_id=self.target_id,
-                lock=lock,
-                page=page,
-            ),
+            title="Custom Format",
+            timeout=900,
+            on_home=on_home,
+            on_cancel=on_home,
+            home_label="Back",
         )
 
 
-class ExactFrameBrowserSelect(discord.ui.Select):
+class ExactFrameBrowserSelect(DankPickerView):
+    """House picker for one style group in the exact frame browser.
+
+    Picking saves the same {"category_frame_id": ...} draft patch the
+    raw select saved; Back/Close restores the frame browser at the
+    same group page.
+    """
+
     def __init__(self, scope: str, target_id: int, lock: Mapping[str, Any], *, page: int = 0) -> None:
         groups = _exact_frame_groups()
         page = max(0, min(int(page), max(0, len(groups) - 1)))
@@ -2157,31 +2285,49 @@ class ExactFrameBrowserSelect(discord.ui.Select):
         current = _safe_str(lock.get("category_frame_id"), "plain")
         if current not in studio.CATEGORY_FRAMES_BY_ID:
             current = "plain"
-        options = [
-            discord.SelectOption(
-                label=_category_frame_choice_label(frame_id)[:100],
-                value=frame_id,
-                default=frame_id == current,
-                description=_exact_frame_option_description(frame_id),
-            )
-            for frame_id in frame_ids
-        ]
-        super().__init__(
-            placeholder="Choose a category frame from this group",
-            min_values=1,
-            max_values=1,
-            options=options[:25],
-            row=0,
-        )
         self.scope = scope
         self.target_id = int(target_id)
+        self.page = page
+        self.lock = dict(lock)
 
-    async def callback(self, interaction: discord.Interaction) -> None:
-        await _update_exact_draft(
-            interaction,
-            scope=self.scope,
-            target_id=self.target_id,
-            patch={"category_frame_id": _safe_str(self.values[0], "plain")},
+        async def on_pick(interaction: discord.Interaction, value: str) -> None:
+            await _update_exact_draft(
+                interaction,
+                scope=self.scope,
+                target_id=self.target_id,
+                patch={"category_frame_id": _safe_str(value, "plain")},
+            )
+
+        async def on_home(interaction: discord.Interaction) -> None:
+            if not await _require_design_permission(interaction):
+                return
+            guild = interaction.guild
+            assert guild is not None
+            lock = _exact_lock_for_user(guild, int(interaction.user.id), self.scope, self.target_id)
+            await interaction.response.edit_message(
+                embed=_exact_frame_browser_embed(guild, scope=self.scope, target_id=self.target_id, lock=lock, page=self.page),
+                view=ExactFrameBrowserView(guild, scope=self.scope, target_id=self.target_id, lock=lock, page=self.page),
+            )
+
+        super().__init__(
+            author_id=0,
+            choices=[
+                make_choice(
+                    _category_frame_choice_label(frame_id),
+                    frame_id,
+                    description=_exact_frame_option_description(frame_id),
+                    default=frame_id == current,
+                )
+                for frame_id in frame_ids
+            ],
+            on_pick=on_pick,
+            custom_id=f"dank_design:exact_frame_browser:picker:{scope}:{int(target_id)}:{page}",
+            placeholder="Choose a category frame from this group",
+            title="Category Frames",
+            timeout=900,
+            on_home=on_home,
+            on_cancel=on_home,
+            home_label="Back",
         )
 
 
@@ -2241,7 +2387,14 @@ class ExactFrameBrowserView(LegacyDesignView):
         groups = _exact_frame_groups()
         self.total_pages = max(1, len(groups))
         self.page = max(0, min(int(page), self.total_pages - 1))
-        self.add_item(ExactFrameBrowserSelect(scope, target_id, lock, page=self.page))
+        self.add_item(
+            DesignPickerOpenButton(
+                label="Choose a category frame from this group",
+                custom_id="dank_design:exact_frame_browser:open",
+                row=0,
+                picker_factory=lambda: ExactFrameBrowserSelect(scope, target_id, lock, page=self.page),
+            )
+        )
         self.previous.disabled = self.page <= 0
         self.next.disabled = self.page >= self.total_pages - 1
 
@@ -2284,7 +2437,14 @@ class ExactFrameBrowserView(LegacyDesignView):
         )
 
 
-class ExactStrengthSelect(discord.ui.Select):
+class ExactStrengthSelect(DankPickerView):
+    """House picker for how much styling the exact editor applies.
+
+    Picking saves the same {"strength": ...} draft patch the raw
+    select saved; Back/Close restores the exact format editor
+    untouched.
+    """
+
     def __init__(self, scope: str, target_id: int, current: int) -> None:
         labels = {
             1: "1 — Light",
@@ -2293,27 +2453,35 @@ class ExactStrengthSelect(discord.ui.Select):
             4: "4 — Recommended",
             5: "5 — Full Theme",
         }
-        options = [
-            discord.SelectOption(
-                label=label,
-                value=str(value),
-                default=value == current,
-                description=_exact_strength_description(value),
-            )
-            for value, label in labels.items()
-        ]
-        super().__init__(
-            placeholder="4) Pick how much styling to use",
-            min_values=1,
-            max_values=1,
-            options=options,
-            row=3,
-        )
         self.scope = scope
         self.target_id = int(target_id)
 
-    async def callback(self, interaction: discord.Interaction) -> None:
-        await _update_exact_draft(interaction, scope=self.scope, target_id=self.target_id, patch={"strength": int(self.values[0])})
+        async def on_pick(interaction: discord.Interaction, value: str) -> None:
+            await _update_exact_draft(interaction, scope=self.scope, target_id=self.target_id, patch={"strength": int(value)})
+
+        async def on_home(interaction: discord.Interaction) -> None:
+            await _restore_exact_editor(interaction, scope=self.scope, target_id=self.target_id)
+
+        super().__init__(
+            author_id=0,
+            choices=[
+                make_choice(
+                    label,
+                    str(value),
+                    description=_exact_strength_description(value),
+                    default=value == current,
+                )
+                for value, label in labels.items()
+            ],
+            on_pick=on_pick,
+            custom_id=f"dank_design:exact_strength:picker:{scope}:{int(target_id)}",
+            placeholder="4) Pick how much styling to use",
+            title="Custom Format",
+            timeout=900,
+            on_home=on_home,
+            on_cancel=on_home,
+            home_label="Back",
+        )
 
 class CustomEmojiModal(discord.ui.Modal, title="Set Custom Emoji"):
     emoji = discord.ui.TextInput(
@@ -2761,17 +2929,51 @@ def ExactFormatEditorViewFactory(guild: discord.Guild, scope: str, target_id: in
         editor_category_filter_id=editor_category_filter_id,
     )
 
-    # Discord allows max 5 rows. Row 4 is reserved for buttons.
-    view.add_item(ExactFontSelect(scope, target_id, _safe_str(lock.get("font"), "normal")))
-    view.add_item(ExactSeparatorSelect(scope, target_id, _safe_str(lock.get("separator_id"), "none")))
+    # Discord allows max 5 rows. Row 4 is reserved for buttons. The four
+    # option rows are opener buttons that swap in the house pickers.
+    view.add_item(
+        DesignPickerOpenButton(
+            label="1) Choose text style",
+            custom_id="dank_design:exact_font:open",
+            row=0,
+            picker_factory=lambda: ExactFontSelect(scope, target_id, _safe_str(lock.get("font"), "normal")),
+        )
+    )
+    view.add_item(
+        DesignPickerOpenButton(
+            label=("2) Choose child-channel separator" if scope == "category" else "2) Choose channel separator"),
+            custom_id="dank_design:exact_separator:open",
+            row=1,
+            picker_factory=lambda: ExactSeparatorSelect(scope, target_id, _safe_str(lock.get("separator_id"), "none")),
+        )
+    )
 
     if _exact_format_applies_category_frame(scope):
-        view.add_item(ExactFrameSelect(scope, target_id, _safe_str(lock.get("category_frame_id"), "plain")))
-        view.add_item(ExactStrengthSelect(scope, target_id, _safe_int(lock.get("strength"), 4)))
+        view.add_item(
+            DesignPickerOpenButton(
+                label="3) Choose category header style",
+                custom_id="dank_design:exact_frame:open",
+                row=2,
+                picker_factory=lambda: ExactFrameSelect(scope, target_id, _safe_str(lock.get("category_frame_id"), "plain")),
+            )
+        )
+        view.add_item(
+            DesignPickerOpenButton(
+                label="4) Pick how much styling to use",
+                custom_id="dank_design:exact_strength:open",
+                row=3,
+                picker_factory=lambda: ExactStrengthSelect(scope, target_id, _safe_int(lock.get("strength"), 4)),
+            )
+        )
     else:
-        strength = ExactStrengthSelect(scope, target_id, _safe_int(lock.get("strength"), 4))
-        strength.row = 2
-        view.add_item(strength)
+        view.add_item(
+            DesignPickerOpenButton(
+                label="4) Pick how much styling to use",
+                custom_id="dank_design:exact_strength:open",
+                row=2,
+                picker_factory=lambda: ExactStrengthSelect(scope, target_id, _safe_int(lock.get("strength"), 4)),
+            )
+        )
 
     return view
 
@@ -3347,18 +3549,25 @@ def _channel_page_data(
     return page, total_pages, list(group.get("channels") or []), active_category_id
 
 
-class ChannelPageJumpSelect(discord.ui.Select):
-    def __init__(self, guild: discord.Guild, *, page: int, category_id: int | None) -> None:
+class ChannelPageJumpSelect(DankPickerView):
+    """House picker for jumping to a channel-editor page.
+
+    The raw select windowed the page list to 25 entries around the
+    current page; this picker pages EVERY editor page through
+    chunk_choices so distant pages stay reachable. Picking renders
+    the same channel editor page the raw select rendered; Back/Close
+    restores the editor at the page it was opened from.
+    """
+
+    def __init__(self, guild: discord.Guild, *, page: int, category_id: int | None, picker_page: int | None = None) -> None:
         current_page, total_pages, _chunk, _active_category_id = _channel_page_data(
             guild,
             page=page,
             category_id=category_id,
         )
-        window_start = max(0, min(current_page - 12, max(0, total_pages - 25)))
-        window_end = min(total_pages, window_start + 25)
         groups = _channel_editor_groups(guild) if category_id is None else []
-        options: list[discord.SelectOption] = []
-        for index in range(window_start, window_end):
+        all_choices = []
+        for index in range(total_pages):
             if category_id is None and index < len(groups):
                 group = groups[index]
                 label = _safe_str(group.get("label"), "No Category")
@@ -3368,33 +3577,101 @@ class ChannelPageJumpSelect(discord.ui.Select):
                 description = f"{label}{suffix}"[:100]
             else:
                 description = f"Channels page {index + 1} of {total_pages}"
-            options.append(
-                discord.SelectOption(
-                    label=f"Page {index + 1} of {total_pages}",
-                    value=str(index),
+            all_choices.append(
+                make_choice(
+                    f"Page {index + 1} of {total_pages}",
+                    str(index),
                     description=description,
                     default=index == current_page,
                 )
             )
-        super().__init__(
-            placeholder=f"Jump to channel page… ({current_page + 1}/{total_pages})",
-            min_values=1,
-            max_values=1,
-            options=options,
-            custom_id="dank_design:channel_page_jump",
-            row=3,
-        )
+        pages = chunk_choices(all_choices) or [[]]
+        if picker_page is None:
+            picker_page = current_page // 25
+        picker_page = max(0, min(int(picker_page), len(pages) - 1))
         self.category_id = int(category_id) if category_id is not None else None
+        self.current_page = current_page
+        self.total_pages = total_pages
+        self.picker_page = picker_page
+        self.picker_pages = len(pages)
+        self._guild = guild
+
+        async def on_pick(interaction: discord.Interaction, value: str) -> None:
+            if not await _require_design_permission(interaction):
+                return
+            guild_now = interaction.guild
+            assert guild_now is not None
+            target_page = max(0, _safe_int(value, 0))
+            await interaction.response.edit_message(
+                embed=_channel_editor_embed(guild_now, page=target_page, category_id=self.category_id),
+                view=ChannelEditorPickerView(guild_now, page=target_page, category_id=self.category_id),
+            )
+
+        async def on_home(interaction: discord.Interaction) -> None:
+            if not await _require_design_permission(interaction):
+                return
+            guild_now = interaction.guild
+            assert guild_now is not None
+            await interaction.response.edit_message(
+                embed=_channel_editor_embed(guild_now, page=self.current_page, category_id=self.category_id),
+                view=ChannelEditorPickerView(guild_now, page=self.current_page, category_id=self.category_id),
+            )
+
+        super().__init__(
+            author_id=0,
+            choices=pages[picker_page],
+            on_pick=on_pick,
+            custom_id=(
+                f"dank_design:channel_page_jump:picker:v1:{picker_page}"
+                if len(pages) > 1 else "dank_design:channel_page_jump:picker:v1"
+            ),
+            placeholder=(
+                f"Jump to channel page… ({current_page + 1}/{total_pages}) • Page {picker_page + 1}/{len(pages)}"
+                if len(pages) > 1 else f"Jump to channel page… ({current_page + 1}/{total_pages})"
+            ),
+            title="Channel Editor",
+            timeout=900,
+            on_home=on_home,
+            on_cancel=on_home,
+            home_label="Back",
+        )
+        if len(pages) > 1:
+            self.add_item(_ChannelPageJumpPageButton(self, delta=-1, disabled=picker_page <= 0))
+            self.add_item(_ChannelPageJumpPageButton(self, delta=1, disabled=picker_page >= len(pages) - 1))
+
+    def _for_picker_page(self, picker_page: int) -> "ChannelPageJumpSelect":
+        return ChannelPageJumpSelect(
+            self._guild,
+            page=self.current_page,
+            category_id=self.category_id,
+            picker_page=picker_page,
+        )
+
+
+class _ChannelPageJumpPageButton(discord.ui.Button):
+    """Prev/Next for the page-jump picker's own chunk pages."""
+
+    def __init__(self, owner: ChannelPageJumpSelect, *, delta: int, disabled: bool) -> None:
+        target = owner.picker_page + delta
+        super().__init__(
+            label="Previous" if delta < 0 else "Next",
+            emoji="⬅️" if delta < 0 else "➡️",
+            style=discord.ButtonStyle.secondary,
+            custom_id=f"dank_design:channel_page_jump:page:{target}",
+            row=1,
+            disabled=disabled,
+        )
+        self._owner = owner
+        self._target = target
 
     async def callback(self, interaction: discord.Interaction) -> None:  # type: ignore[override]
         if not await _require_design_permission(interaction):
             return
-        guild = interaction.guild
-        assert guild is not None
-        page = max(0, _safe_int(self.values[0], 0))
+        message = getattr(interaction, "message", None)
+        embeds = getattr(message, "embeds", None) if message is not None else None
         await interaction.response.edit_message(
-            embed=_channel_editor_embed(guild, page=page, category_id=self.category_id),
-            view=ChannelEditorPickerView(guild, page=page, category_id=self.category_id),
+            embed=embeds[0] if embeds else None,
+            view=self._owner._for_picker_page(self._target),
         )
 
 
@@ -3421,7 +3698,14 @@ class ChannelEditorPickerView(LegacyDesignView):
             )
 
         if total_pages > 1:
-            self.add_item(ChannelPageJumpSelect(guild, page=page, category_id=category_id))
+            self.add_item(
+                DesignPickerOpenButton(
+                    label=f"Jump to Page… ({page + 1}/{total_pages})",
+                    custom_id="dank_design:channel_page_jump:open",
+                    row=3,
+                    picker_factory=lambda: ChannelPageJumpSelect(guild, page=page, category_id=category_id),
+                )
+            )
 
         nav_row = 4
 
@@ -4634,7 +4918,14 @@ class ProtectionManagerView(LegacyDesignView):
         await interaction.edit_original_response(embed=_home_embed(interaction.guild, options), view=DesignHomeView(options))
 
 
-class ProtectionModeSelect(discord.ui.Select):
+class ProtectionModeSelect(DankPickerView):
+    """House picker for one item's exact protection mode.
+
+    Picking saves the same protection rule the raw select saved
+    (with "__clear__" still clearing the exact override); Back/Close
+    restores the protection mode screen untouched.
+    """
+
     def __init__(
         self,
         *,
@@ -4643,54 +4934,89 @@ class ProtectionModeSelect(discord.ui.Select):
         editor_page: int = 0,
         editor_category_filter_id: int | None = None,
     ) -> None:
-        current = _normalize_protection_mode(current, "") if current else ""
-        options = [discord.SelectOption(label=label, value=mode, default=mode == current, description=description[:100]) for mode, (label, description) in PROTECTION_LABELS.items()]
-        options.append(discord.SelectOption(label="Clear exact override", value="__clear__", description="Return this exact item to inherited/default protection behavior."))
-        super().__init__(placeholder="Choose protection mode for this exact item", min_values=1, max_values=1, options=options[:25], row=0)
         self.channel_id = int(channel_id)
+        self.current = current
         self.editor_page = max(0, int(editor_page))
         self.editor_category_filter_id = (
             int(editor_category_filter_id) if editor_category_filter_id is not None else None
         )
+        normalized = _normalize_protection_mode(current, "") if current else ""
 
-    async def callback(self, interaction: discord.Interaction) -> None:
-        if not await _require_design_permission(interaction):
-            return
-        guild = interaction.guild
-        assert guild is not None
-        channel = guild.get_channel(self.channel_id)
-        if channel is None:
-            return await interaction.response.send_message("That channel/category no longer exists.", ephemeral=True)
-        if await _reject_reserved_design_target(
-            interaction,
-            channel,
-            action_name="design.protection.reserved",
-        ):
-            return
-        selected = self.values[0]
-        mode = None if selected == "__clear__" else selected
-        await interaction.response.defer(ephemeral=True, thinking=False)
-        options = await _save_protection_rule(interaction, target_id=self.channel_id, mode=mode)
-        base = _base_for_channel(channel)
-        inherited = _inherited_protection_mode(options, base)
-        actual = _protection_item_rules(options).get(str(self.channel_id)) or inherited
-        embed = _category_action_embed(channel) if isinstance(channel, discord.CategoryChannel) else _channel_action_embed(channel)
-        embed.title = "✅ Exact Protection Rule Updated"
-        embed.description = f"`{getattr(channel, 'name', self.channel_id)}` now uses **{_protection_mode_label(actual)}**. This rule is keyed to Discord ID `{self.channel_id}` and cannot affect another item with the same name."
-        if isinstance(channel, discord.CategoryChannel):
-            view = CategoryEditorActionView(
-                self.channel_id,
-                editor_page=self.editor_page,
+        async def on_pick(interaction: discord.Interaction, value: str) -> None:
+            if not await _require_design_permission(interaction):
+                return
+            guild = interaction.guild
+            assert guild is not None
+            channel = guild.get_channel(self.channel_id)
+            if channel is None:
+                return await interaction.response.send_message("That channel/category no longer exists.", ephemeral=True)
+            if await _reject_reserved_design_target(
+                interaction,
+                channel,
+                action_name="design.protection.reserved",
+            ):
+                return
+            selected = value
+            mode = None if selected == "__clear__" else selected
+            await interaction.response.defer(ephemeral=True, thinking=False)
+            options = await _save_protection_rule(interaction, target_id=self.channel_id, mode=mode)
+            base = _base_for_channel(channel)
+            inherited = _inherited_protection_mode(options, base)
+            actual = _protection_item_rules(options).get(str(self.channel_id)) or inherited
+            embed = _category_action_embed(channel) if isinstance(channel, discord.CategoryChannel) else _channel_action_embed(channel)
+            embed.title = "✅ Exact Protection Rule Updated"
+            embed.description = f"`{getattr(channel, 'name', self.channel_id)}` now uses **{_protection_mode_label(actual)}**. This rule is keyed to Discord ID `{self.channel_id}` and cannot affect another item with the same name."
+            if isinstance(channel, discord.CategoryChannel):
+                view = CategoryEditorActionView(
+                    self.channel_id,
+                    editor_page=self.editor_page,
+                )
+            else:
+                parent = getattr(channel, "category", None)
+                view = ChannelEditorActionView(
+                    self.channel_id,
+                    category_id=_safe_int(getattr(parent, "id", 0), 0) or None,
+                    editor_page=self.editor_page,
+                    editor_category_filter_id=self.editor_category_filter_id,
+                )
+            await interaction.edit_original_response(embed=embed, view=view)
+
+        async def on_home(interaction: discord.Interaction) -> None:
+            if not await _require_design_permission(interaction):
+                return
+            await _restore_design_surface(
+                interaction,
+                ProtectionModeView(
+                    channel_id=self.channel_id,
+                    current=self.current,
+                    editor_page=self.editor_page,
+                    editor_category_filter_id=self.editor_category_filter_id,
+                ),
             )
-        else:
-            parent = getattr(channel, "category", None)
-            view = ChannelEditorActionView(
-                self.channel_id,
-                category_id=_safe_int(getattr(parent, "id", 0), 0) or None,
-                editor_page=self.editor_page,
-                editor_category_filter_id=self.editor_category_filter_id,
+
+        choices = [
+            make_choice(label, mode, description=description[:100], default=mode == normalized)
+            for mode, (label, description) in PROTECTION_LABELS.items()
+        ]
+        choices.append(
+            make_choice(
+                "Clear exact override",
+                "__clear__",
+                description="Return this exact item to inherited/default protection behavior.",
             )
-        await interaction.edit_original_response(embed=embed, view=view)
+        )
+        super().__init__(
+            author_id=0,
+            choices=choices,
+            on_pick=on_pick,
+            custom_id=f"dank_design:protection_mode:picker:{int(channel_id)}",
+            placeholder="Choose protection mode for this exact item",
+            title="Exact Protection",
+            timeout=900,
+            on_home=on_home,
+            on_cancel=on_home,
+            home_label="Back",
+        )
 
 
 class ProtectionModeView(LegacyDesignView):
@@ -4704,16 +5030,22 @@ class ProtectionModeView(LegacyDesignView):
     ) -> None:
         super().__init__(timeout=900)
         self.channel_id = int(channel_id)
+        self.current_mode = current
         self.editor_page = max(0, int(editor_page))
         self.editor_category_filter_id = (
             int(editor_category_filter_id) if editor_category_filter_id is not None else None
         )
         self.add_item(
-            ProtectionModeSelect(
-                channel_id=self.channel_id,
-                current=current,
-                editor_page=self.editor_page,
-                editor_category_filter_id=self.editor_category_filter_id,
+            DesignPickerOpenButton(
+                label="Choose protection mode for this exact item",
+                custom_id="dank_design:protection_mode:open",
+                row=0,
+                picker_factory=lambda: ProtectionModeSelect(
+                    channel_id=self.channel_id,
+                    current=self.current_mode,
+                    editor_page=self.editor_page,
+                    editor_category_filter_id=self.editor_category_filter_id,
+                ),
             )
         )
 
@@ -5281,38 +5613,70 @@ def _style_change_preview_embed(guild: discord.Guild, items: list[dict[str, Any]
     return _clean_design_embed(embed)
 
 
-class StyleChangeSeparatorSelect(discord.ui.Select):
+class StyleChangeSeparatorSelect(DankPickerView):
+    """House picker for the style-change channel separator.
+
+    Picking reloads the same style-change screen with the chosen
+    separator the raw select rendered; Back/Close restores the
+    screen untouched.
+    """
+
     def __init__(self, selected_id: str) -> None:
         self.selected_id = _safe_str(selected_id, "bar_heavy")
+
+        async def on_pick(interaction: discord.Interaction, value: str) -> None:
+            if not await _require_design_permission(interaction):
+                return
+            guild = interaction.guild
+            assert guild is not None
+
+            selected = _safe_str(value, "bar_heavy")
+            await interaction.response.defer(ephemeral=True, thinking=False)
+            options = await _load_design_options(int(guild.id))
+            await interaction.edit_original_response(
+                embed=_style_change_embed(guild, options, separator_id=selected),
+                view=StyleChangeView(separator_id=selected),
+            )
+
+        async def on_home(interaction: discord.Interaction) -> None:
+            if not await _require_design_permission(interaction):
+                return
+            await _restore_design_surface(interaction, StyleChangeView(separator_id=self.selected_id))
+
         super().__init__(
+            author_id=0,
+            choices=[
+                make_choice(
+                    str(option.label),
+                    str(option.value),
+                    description=str(option.description or ""),
+                    default=bool(option.default),
+                )
+                for option in _style_change_separator_options(self.selected_id)
+            ],
+            on_pick=on_pick,
+            custom_id="dank_design:style_change_separator:picker:v1",
             placeholder="Choose channel separator",
-            min_values=1,
-            max_values=1,
-            options=_style_change_separator_options(self.selected_id),
-            row=0,
+            title="Style Change",
+            timeout=900,
+            on_home=on_home,
+            on_cancel=on_home,
+            home_label="Back",
         )
-
-    async def callback(self, interaction: discord.Interaction) -> None:
-        if not await _require_design_permission(interaction):
-            return
-        guild = interaction.guild
-        assert guild is not None
-
-        selected = _safe_str(self.values[0], "bar_heavy")
-        await interaction.response.defer(ephemeral=True, thinking=False)
-        options = await _load_design_options(int(guild.id))
-        await interaction.edit_original_response(
-            embed=_style_change_embed(guild, options, separator_id=selected),
-            view=StyleChangeView(separator_id=selected),
-        )
-
 
 
 class StyleChangeView(LegacyDesignView):
     def __init__(self, *, separator_id: str = "bar_heavy") -> None:
         super().__init__(timeout=900)
         self.separator_id = _safe_str(separator_id, "bar_heavy")
-        self.add_item(StyleChangeSeparatorSelect(self.separator_id))
+        self.add_item(
+            DesignPickerOpenButton(
+                label="Choose channel separator",
+                custom_id="dank_design:style_change_separator:open",
+                row=0,
+                picker_factory=lambda: StyleChangeSeparatorSelect(self.separator_id),
+            )
+        )
 
     @discord.ui.button(label="Preview This Change", emoji="👁️", style=discord.ButtonStyle.success, custom_id="dank_design:style_change_preview_separator", row=1)
     async def preview_separator_change(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
