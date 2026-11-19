@@ -14,6 +14,143 @@ from .member_role_browser_common import (
 )
 from .member_role_browser_review import open_review_panel
 from .member_role_browser_roster import RoleMemberBrowserView, role_browser_embed
+from ..ui.picker import (
+    DankPickerView,
+    DankRoleSelect,
+    DankUserSelect,
+    chunk_choices,
+    make_choice,
+)
+
+
+async def _ignore_user_pick(interaction: discord.Interaction, user: object) -> None:
+    return None
+
+
+class _CenterPickerView(DankPickerView):
+    """Paged house picker bound to one member-center panel owner.
+
+    Pages long choice lists with chunk_choices so every option stays
+    reachable past Discord's 25-option select limit. Keeps the member
+    panels' owner gate and denial wording exactly.
+    """
+
+    def __init__(
+        self,
+        owner_id: int,
+        *,
+        choices,
+        on_pick,
+        custom_id: str,
+        placeholder: str,
+        title: str,
+        on_home=None,
+        on_cancel=None,
+        home_label: str = "Back",
+        page: int = 0,
+    ) -> None:
+        all_choices = list(choices or [])
+        pages = chunk_choices(all_choices) or [[]]
+        page = max(0, min(int(page), len(pages) - 1))
+        super().__init__(
+            author_id=int(owner_id),
+            choices=pages[page],
+            on_pick=on_pick,
+            custom_id=f"{custom_id}:{page}" if len(pages) > 1 else custom_id,
+            placeholder=(
+                f"{placeholder} \u2022 Page {page + 1}/{len(pages)}"
+                if len(pages) > 1 else placeholder
+            ),
+            title=title,
+            timeout=900,
+            on_home=on_home,
+            on_cancel=on_cancel,
+            home_label=home_label,
+        )
+        self._all_choices = all_choices
+        self._picker_on_pick = on_pick
+        self._base_custom_id = custom_id
+        self._base_placeholder = placeholder
+        self._picker_title = title
+        self._picker_on_home = on_home
+        self._picker_on_cancel = on_cancel
+        self._picker_home_label = home_label
+        self.page = page
+        self.pages = len(pages)
+        if len(pages) > 1:
+            self.add_item(_CenterPickerPageButton(delta=-1, disabled=page <= 0))
+            self.add_item(_CenterPickerPageButton(delta=1, disabled=page >= len(pages) - 1))
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if int(interaction.user.id) != int(self.author_id):
+            await reply_ephemeral(
+                interaction,
+                "\u274c This private member browser belongs to another staff member.",
+            )
+            return False
+        return await require_review(interaction)
+
+    def _for_page(self, page: int) -> "_CenterPickerView":
+        return _CenterPickerView(
+            int(self.author_id),
+            choices=self._all_choices,
+            on_pick=self._picker_on_pick,
+            custom_id=self._base_custom_id,
+            placeholder=self._base_placeholder,
+            title=self._picker_title,
+            on_home=self._picker_on_home,
+            on_cancel=self._picker_on_cancel,
+            home_label=self._picker_home_label,
+            page=page,
+        )
+
+
+class _CenterPickerPageButton(discord.ui.Button):
+    def __init__(self, *, delta: int, disabled: bool) -> None:
+        super().__init__(
+            label="Previous" if delta < 0 else "Next",
+            emoji="\u25c0\ufe0f" if delta < 0 else "\u25b6\ufe0f",
+            style=discord.ButtonStyle.secondary,
+            custom_id=(
+                "dank_members_center:picker:prev" if delta < 0
+                else "dank_members_center:picker:next"
+            ),
+            row=2,
+            disabled=bool(disabled),
+        )
+        self.delta = int(delta)
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        view = self.view
+        if not isinstance(view, _CenterPickerView) or not await view.interaction_check(interaction):
+            return
+        page = max(0, min(view.page + self.delta, view.pages - 1))
+        await interaction.response.edit_message(view=view._for_page(page))
+
+
+class _CenterPickerOpenButton(discord.ui.Button):
+    """Swaps a member-center panel for a house picker on the same message."""
+
+    def __init__(self, *, label: str, custom_id: str, row: int, build) -> None:
+        super().__init__(
+            label=label,
+            style=discord.ButtonStyle.secondary,
+            custom_id=custom_id,
+            row=row,
+        )
+        self._build = build
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        host = self.view
+        if isinstance(host, OwnedView) and not await host.interaction_check(interaction):
+            return
+        picker = self._build(interaction)
+        message = getattr(interaction, "message", None)
+        embeds = getattr(message, "embeds", None) if message is not None else None
+        await interaction.response.edit_message(
+            embed=embeds[0] if embeds else None,
+            view=picker,
+        )
 
 
 async def _replace_panel(
@@ -248,19 +385,27 @@ class MemberCommandCenterView(OwnedView):
         await _replace_panel(interaction, embed=_operations_embed(), view=view)
 
 
-class CenterRoleSelect(discord.ui.RoleSelect):
+class CenterRoleSelect(DankRoleSelect):
+    """House role picker for the Member Command Center.
+
+    Uses the framework's DankRoleSelect wrapper (owner check, house
+    wording); the pick routes into the same role-browser flow the raw
+    RoleSelect used.
+    """
+
     def __init__(self, parent: "LiveMembersMenuView") -> None:
         self.parent_view = parent
         super().__init__(
-            placeholder="Choose a server role to browse…",
+            author_id=int(parent.owner_id),
+            on_pick=self._browse_role,
+            placeholder="Choose a server role to browse\u2026",
             min_values=1,
             max_values=1,
-            custom_id="dank_members_center:role",
             row=0,
         )
+        self.custom_id = "dank_members_center:role"
 
-    async def callback(self, interaction: discord.Interaction) -> None:
-        role = self.values[0] if self.values else None
+    async def _browse_role(self, interaction: discord.Interaction, role: discord.Role) -> None:
         if not isinstance(role, discord.Role) or role.is_default():
             await reply_ephemeral(
                 interaction,
@@ -325,19 +470,27 @@ class CenterQuickRoleButton(discord.ui.Button):
             await interaction.followup.send(f"⚠️ {warning}", ephemeral=True)
 
 
-class DirectMemberSelect(discord.ui.UserSelect):
+class DirectMemberSelect(DankUserSelect):
+    """House member picker for direct member lookup.
+
+    Uses the framework's DankUserSelect wrapper (owner check, house
+    wording); the pick routes into the same member-actions flow the raw
+    UserSelect used.
+    """
+
     def __init__(self, parent: "LiveMembersMenuView") -> None:
         self.parent_view = parent
         super().__init__(
-            placeholder="Or select one member directly…",
+            author_id=int(parent.owner_id),
+            on_pick=self._open_member,
+            placeholder="Or select one member directly\u2026",
             min_values=1,
             max_values=1,
-            custom_id="dank_members_center:direct_member",
             row=1,
         )
+        self.custom_id = "dank_members_center:direct_member"
 
-    async def callback(self, interaction: discord.Interaction) -> None:
-        selected = self.values[0] if self.values else None
+    async def _open_member(self, interaction: discord.Interaction, selected: object) -> None:
         member_id = int(getattr(selected, "id", 0) or 0)
         if member_id <= 0:
             return await reply_ephemeral(interaction, "❌ Select a member or use Find Member by ID.")
@@ -437,18 +590,26 @@ class CenterRoleBrowserView(RoleMemberBrowserView):
         await _replace_panel(interaction, embed=_center_embed(), view=view)
 
 
-class CleanupMemberSelect(discord.ui.UserSelect):
-    def __init__(self) -> None:
+class CleanupMemberSelect(DankUserSelect):
+    """House member picker for the cleanup pre-check.
+
+    Uses the framework's DankUserSelect wrapper (owner check, house
+    wording); the pick routes into the same cleanup flow the raw
+    UserSelect used.
+    """
+
+    def __init__(self, owner_id: int) -> None:
         super().__init__(
-            placeholder="Check one member for kicking…",
+            author_id=int(owner_id),
+            on_pick=self._check_member,
+            placeholder="Check one member for kicking\u2026",
             min_values=1,
             max_values=1,
-            custom_id="dank_members_center:cleanup_member",
             row=3,
         )
+        self.custom_id = "dank_members_center:cleanup_member"
 
-    async def callback(self, interaction: discord.Interaction) -> None:
-        selected = self.values[0] if self.values else None
+    async def _check_member(self, interaction: discord.Interaction, selected: object) -> None:
         member_id = int(getattr(selected, "id", 0) or 0)
         if member_id <= 0:
             return await reply_ephemeral(interaction, "❌ Select a member first.")
@@ -469,7 +630,7 @@ class CleanupMemberSelect(discord.ui.UserSelect):
         await _invoke_command(members_cleanup_user, interaction, member)
 
 
-class ActivityLookupMemberSelect(discord.ui.UserSelect):
+class ActivityLookupMemberSelect(DankUserSelect):
     """Pick ANY current member — active included — and see their activity.
 
     This is the lookup the Activity & Cleanup panel was missing: the scans
@@ -482,15 +643,16 @@ class ActivityLookupMemberSelect(discord.ui.UserSelect):
     def __init__(self, parent: "ActivityCleanupMenuView") -> None:
         self.parent_view = parent
         super().__init__(
-            placeholder="Look up one member's activity…",
+            author_id=int(parent.owner_id),
+            on_pick=self._lookup_member,
+            placeholder="Look up one member's activity\u2026",
             min_values=1,
             max_values=1,
-            custom_id="dank_members_center:activity_lookup_member",
             row=2,
         )
+        self.custom_id = "dank_members_center:activity_lookup_member"
 
-    async def callback(self, interaction: discord.Interaction) -> None:
-        selected = self.values[0] if self.values else None
+    async def _lookup_member(self, interaction: discord.Interaction, selected: object) -> None:
         user_id = int(getattr(selected, "id", 0) or 0)
         if user_id <= 0:
             await reply_ephemeral(interaction, "❌ Select a member first.")
@@ -546,7 +708,7 @@ class ActivityCleanupMenuView(OwnedView):
     def __init__(self, owner_id: int) -> None:
         super().__init__(owner_id)
         self.add_item(ActivityLookupMemberSelect(self))
-        self.add_item(CleanupMemberSelect())
+        self.add_item(CleanupMemberSelect(owner_id))
 
     async def _scan(self, interaction: discord.Interaction, days: int) -> None:
         from .public_members_group import _run_activity_scan
@@ -690,16 +852,26 @@ def _intelligence_presence_text(status: str) -> str:
     }.get(status, "⚠️ Current membership not checked.")
 
 
-class IntelligenceMemberSelect(discord.ui.UserSelect):
+class IntelligenceMemberSelect(DankUserSelect):
+    """House member picker for Intelligence lookup.
+
+    DankUserSelect's own callback only forwards the first value, so this
+    subclass keeps the framework wrapper (owner check contract, house
+    wording) and overrides the callback with the exact resolver flow the
+    raw UserSelect used — one stored-history panel per pick.
+    """
+
     def __init__(self, parent: "IntelligenceMenuView") -> None:
         self.parent_view = parent
         super().__init__(
-            placeholder="Select a current member to inspect…",
+            author_id=int(parent.owner_id),
+            on_pick=_ignore_user_pick,
+            placeholder="Select a current member to inspect\u2026",
             min_values=1,
             max_values=1,
-            custom_id="dank_members_center:intelligence_member",
             row=0,
         )
+        self.custom_id = "dank_members_center:intelligence_member"
 
     async def callback(self, interaction: discord.Interaction) -> None:
         selected = self.values[0] if self.values else None
@@ -1659,54 +1831,30 @@ class OwnerAffiliationModal(discord.ui.Modal, title="Owner Affiliate Review"):
         )
 
 
-class OwnerAffiliationChoiceSelect(discord.ui.Select):
-    def __init__(self, target_id: int) -> None:
-        self.target_id = target_id
-        super().__init__(
-            placeholder="Choose relationship review",
-            options=[
-                discord.SelectOption(label="Known Affiliate", value="known",
-                                     description="Owner-reported association, not an alt"),
-                discord.SelectOption(label="Possible Affiliate", value="possible",
-                                     description="Unverified relationship lead"),
-                discord.SelectOption(label="Clear Association", value="cleared",
-                                     description="Withdraw an earlier affiliate claim"),
-            ],
-            row=0,
-        )
+class OwnerAffiliationUserSelect(DankUserSelect):
+    """House member picker for owner affiliation reviews.
 
-    async def callback(self, interaction: discord.Interaction) -> None:
-        if not _is_guild_owner_for_affiliations(interaction):
-            return await reply_ephemeral(interaction, "Only the server owner can review affiliates.")
-        mode = str(self.values[0])
-        embed = discord.Embed(
-            title="🔖 Choose the Associated Account",
-            description=(
-                f"Account: `{self.target_id}`\\n"
-                "Choose a current member from the Discord picker, or enter the ID "
-                "of an account that left or was banned. You'll then record your evidence."
-            ).replace("\\n", "\n"),
-            color=discord.Color.blurple(),
-        )
-        await _replace_panel(
-            interaction, embed=embed,
-            view=OwnerAffiliationTargetView(int(interaction.user.id), self.target_id, mode),
-        )
+    Uses the framework's DankUserSelect wrapper (owner check, house
+    wording); the pick opens the same evidence modal the raw UserSelect
+    used.
+    """
 
-
-class OwnerAffiliationUserSelect(discord.ui.UserSelect):
-    def __init__(self, target_id: int, mode: str) -> None:
+    def __init__(self, target_id: int, mode: str, *, owner_id: int = 0) -> None:
         self.target_id = target_id
         self.mode = mode
         super().__init__(
+            author_id=int(owner_id),
+            on_pick=self._choose_member,
             placeholder="Choose a current member",
-            min_values=1, max_values=1, row=0,
+            min_values=1,
+            max_values=1,
+            row=0,
         )
+        self.custom_id = "dank_members_center:affiliation_member"
 
-    async def callback(self, interaction: discord.Interaction) -> None:
+    async def _choose_member(self, interaction: discord.Interaction, chosen: object) -> None:
         if not _is_guild_owner_for_affiliations(interaction):
             return await reply_ephemeral(interaction, "Only the server owner can review affiliates.")
-        chosen = self.values[0]
         if int(chosen.id) == self.target_id:
             return await reply_ephemeral(interaction, "Choose a different account.")
         await interaction.response.send_modal(
@@ -1719,9 +1867,9 @@ class OwnerAffiliationTargetView(OwnedView):
         super().__init__(owner_id)
         self.target_id = target_id
         self.mode = mode
-        self.add_item(OwnerAffiliationUserSelect(target_id, mode))
+        self.add_item(OwnerAffiliationUserSelect(target_id, mode, owner_id=owner_id))
 
-    @discord.ui.button(label="Enter Account ID", emoji="🔢",
+    @discord.ui.button(label="Enter Account ID", emoji="\U0001f522",
                        style=discord.ButtonStyle.secondary, row=1)
     async def by_id(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
@@ -1731,7 +1879,7 @@ class OwnerAffiliationTargetView(OwnedView):
             OwnerAffiliationModal(self.target_id, self.mode),
         )
 
-    @discord.ui.button(label="Back to Relationship", emoji="↩️",
+    @discord.ui.button(label="Back to Relationship", emoji="\u21a9\ufe0f",
                        style=discord.ButtonStyle.secondary, row=1)
     async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
@@ -1739,7 +1887,7 @@ class OwnerAffiliationTargetView(OwnedView):
             return await reply_ephemeral(interaction, "Only the server owner can review affiliates.")
         await _replace_panel(
             interaction, embed=discord.Embed(
-                title="🔖 Review Known Affiliates",
+                title="\U0001f516 Review Known Affiliates",
                 description="Choose known, possible, or clear an earlier owner-reported association.",
                 color=discord.Color.blurple(),
             ),
@@ -1751,9 +1899,59 @@ class OwnerAffiliationChoiceView(OwnedView):
     def __init__(self, owner_id: int, target_id: int) -> None:
         super().__init__(owner_id)
         self.target_id = target_id
-        self.add_item(OwnerAffiliationChoiceSelect(target_id))
+        self.add_item(_CenterPickerOpenButton(
+            label="Choose relationship review",
+            custom_id="dank_members_center:affiliation_choice:open:v1",
+            row=0,
+            build=lambda interaction: self._choice_picker(),
+        ))
 
-    @discord.ui.button(label="Back to Connections", emoji="↩️",
+    def _choice_picker(self) -> _CenterPickerView:
+        choices = [
+            make_choice("Known Affiliate", "known",
+                        description="Owner-reported association, not an alt"),
+            make_choice("Possible Affiliate", "possible",
+                        description="Unverified relationship lead"),
+            make_choice("Clear Association", "cleared",
+                        description="Withdraw an earlier affiliate claim"),
+        ]
+        return _CenterPickerView(
+            self.owner_id,
+            choices=choices,
+            on_pick=self._pick_choice,
+            custom_id="dank_members_center:affiliation_choice:v1",
+            placeholder="Choose relationship review",
+            title="Review Known Affiliates",
+            on_home=self._restore_choice,
+            on_cancel=self._restore_choice,
+        )
+
+    async def _restore_choice(self, interaction: discord.Interaction) -> None:
+        message = getattr(interaction, "message", None)
+        embeds = getattr(message, "embeds", None) if message is not None else None
+        await interaction.response.edit_message(
+            embed=embeds[0] if embeds else None,
+            view=OwnerAffiliationChoiceView(self.owner_id, self.target_id),
+        )
+
+    async def _pick_choice(self, interaction: discord.Interaction, mode: str) -> None:
+        if not _is_guild_owner_for_affiliations(interaction):
+            return await reply_ephemeral(interaction, "Only the server owner can review affiliates.")
+        embed = discord.Embed(
+            title="\U0001f516 Choose the Associated Account",
+            description=(
+                f"Account: `{self.target_id}`\n"
+                "Choose a current member from the Discord picker, or enter the ID "
+                "of an account that left or was banned. You'll then record your evidence."
+            ),
+            color=discord.Color.blurple(),
+        )
+        await _replace_panel(
+            interaction, embed=embed,
+            view=OwnerAffiliationTargetView(int(interaction.user.id), self.target_id, mode),
+        )
+
+    @discord.ui.button(label="Back to Connections", emoji="\u21a9\ufe0f",
                        style=discord.ButtonStyle.secondary, row=1)
     async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
@@ -1763,69 +1961,60 @@ class OwnerAffiliationChoiceView(OwnedView):
         await _show_connection_report(interaction, self.owner_id, self.target_id)
 
 
-class RecentBanConnectionSelect(discord.ui.Select):
-    def __init__(self, owner_id: int, bans: list[Any], page: int = 0) -> None:
-        self.owner_id = owner_id
-        page_bans = bans[page * 25:(page + 1) * 25]
-        options = [
-            discord.SelectOption(
-                label=str(entry.user)[:90],
-                value=str(entry.user.id),
-                description="Review stored links to this banned account",
-            ) for entry in page_bans
-        ]
-        super().__init__(
-            placeholder=f"Choose a banned account (page {page + 1})…",
-            options=options,
-            min_values=1,
-            max_values=1,
-            row=0,
-        )
-
-    async def callback(self, interaction: discord.Interaction) -> None:
-        if not await require_review(interaction):
-            return
-        await interaction.response.defer(ephemeral=True)
-        await _show_connection_report(interaction, self.owner_id, int(self.values[0]))
-
-
 class RecentBanConnectionView(OwnedView):
-    def __init__(self, owner_id: int, bans: list[Any], page: int = 0) -> None:
+    """Recent-ban list: the ban picker is a paged house picker.
+
+    The raw select paged by rebuilding this whole view; the house
+    picker pages internally with chunk_choices, so every banned
+    account stays reachable from one panel.
+    """
+
+    def __init__(self, owner_id: int, bans: list, page: int = 0) -> None:
         super().__init__(owner_id)
         self.bans = bans
-        self.page = max(0, min(page, (len(bans) - 1) // 25))
-        self.add_item(RecentBanConnectionSelect(owner_id, bans, self.page))
-        self.previous.disabled = self.page == 0
-        self.next_page.disabled = (self.page + 1) * 25 >= len(bans)
+        self.page = 0
+        self.add_item(_CenterPickerOpenButton(
+            label="Choose a banned account\u2026",
+            custom_id="dank_members_center:recent_bans:open:v1",
+            row=0,
+            build=lambda interaction: self._ban_picker(),
+        ))
 
-    async def _navigate(self, interaction: discord.Interaction, page: int) -> None:
+    def _ban_picker(self) -> _CenterPickerView:
+        choices = [
+            make_choice(
+                str(entry.user)[:90],
+                str(entry.user.id),
+                description="Review stored links to this banned account",
+            )
+            for entry in self.bans
+        ]
+        return _CenterPickerView(
+            self.owner_id,
+            choices=choices,
+            on_pick=self._pick_ban,
+            custom_id="dank_members_center:recent_bans:v1",
+            placeholder="Choose a banned account\u2026",
+            title="Recent Ban Connections",
+            on_home=self._back_to_intelligence,
+            on_cancel=self._back_to_intelligence,
+            home_label="Intelligence Menu",
+        )
+
+    async def _pick_ban(self, interaction: discord.Interaction, value: str) -> None:
         if not await require_review(interaction):
             return
         await interaction.response.defer(ephemeral=True)
-        embed = discord.Embed(
-            title="🔗 Recent Ban Connections",
-            description=(
-                f"**{len(self.bans)} banned accounts** · Page "
-                f"**{page + 1}/{(len(self.bans) + 24) // 25}**. "
-                "Choose an account to review stored server evidence."
-            ),
-            color=discord.Color.blurple(),
-        )
+        await _show_connection_report(interaction, self.owner_id, int(value))
+
+    async def _back_to_intelligence(self, interaction: discord.Interaction) -> None:
         await _replace_panel(
-            interaction, embed=embed,
-            view=RecentBanConnectionView(self.owner_id, self.bans, page),
+            interaction, embed=_intelligence_embed(), view=IntelligenceMenuView(self.owner_id),
         )
 
-    @discord.ui.button(label="Previous", emoji="◀️", style=discord.ButtonStyle.secondary, row=1)
-    async def previous(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        await self._navigate(interaction, max(0, self.page - 1))
-
-    @discord.ui.button(label="Next", emoji="▶️", style=discord.ButtonStyle.secondary, row=1)
-    async def next_page(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        await self._navigate(interaction, min((len(self.bans) - 1) // 25, self.page + 1))
-
-    @discord.ui.button(label="Intelligence Menu", emoji="◀️", style=discord.ButtonStyle.secondary, row=2)
+    @discord.ui.button(label="Intelligence Menu", emoji="\u25c0\ufe0f", style=discord.ButtonStyle.secondary, row=2)
     async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
         await _replace_panel(interaction, embed=_intelligence_embed(), view=IntelligenceMenuView(self.owner_id))
 
 

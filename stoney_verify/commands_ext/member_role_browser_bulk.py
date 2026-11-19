@@ -7,6 +7,7 @@ from typing import Optional
 
 import discord
 
+from ..ui.picker import DankMultiPickerView, DankRoleSelect, make_choice
 from .member_role_browser_common import (
     OwnedView,
     action_blockers,
@@ -311,37 +312,65 @@ async def _execute_bulk_member_action(
     )
 
 
-class BulkMemberSelect(discord.ui.Select):
+class BulkSelectView(DankMultiPickerView):
+    """House multi-picker for bulk member selection.
+
+    The whole panel is the framework's DankMultiPickerView: page members
+    become house choices (the browser page size keeps them under the
+    25-option select limit), and the pick routes into the same
+    BulkActionView confirmation panel the raw Select used.
+    """
+
     def __init__(self, browser: "RoleMemberBrowserView") -> None:
+        self.browser = browser
         members = browser.page_members()[:25]
-        options = [
-            discord.SelectOption(
-                label=trim(str(member.display_name or member.name), 100),
-                value=str(member.id),
+        choices = [
+            make_choice(
+                trim(str(member.display_name or member.name), 100),
+                str(member.id),
                 description=_member_option_description(member),
             )
             for member in members
         ]
-        if not options:
-            options = [
-                discord.SelectOption(
-                    label="No members on this page",
-                    value="none",
-                )
-            ]
         super().__init__(
-            placeholder="Select members for bulk actions…",
+            author_id=int(browser.owner_id),
+            choices=choices,
+            on_pick=self._pick_members,
+            custom_id="dank_members_browser:bulk_select",
+            placeholder="Select members for bulk actions\u2026",
+            title="Select Members",
+            timeout=900,
+            include_cancel=False,
             min_values=1,
             max_values=max(1, len(members)),
-            options=options,
-            disabled=not members,
-            custom_id="dank_members_browser:bulk_select",
-            row=0,
         )
-        self.browser = browser
+        back = discord.ui.Button(
+            label="Back",
+            emoji="\u25c0\ufe0f",
+            style=discord.ButtonStyle.secondary,
+            row=1,
+        )
+        back.callback = self._back  # type: ignore[assignment]
+        self.add_item(back)
 
-    async def callback(self, interaction: discord.Interaction) -> None:
-        ids = [int(value) for value in self.values if value != "none"]
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if int(interaction.user.id) != int(self.author_id):
+            await reply_ephemeral(
+                interaction,
+                "\u274c This private member browser belongs to another staff member.",
+            )
+            return False
+        return await require_review(interaction)
+
+    async def _back(self, interaction: discord.Interaction) -> None:
+        self.browser.rebuild()
+        await interaction.response.edit_message(
+            embed=self.browser.render_embed(),
+            view=self.browser,
+        )
+
+    async def _pick_members(self, interaction: discord.Interaction, values: list) -> None:
+        ids = [int(value) for value in values if value != "none"]
         members = [interaction.guild.get_member(user_id) for user_id in ids]
         selected = [
             member
@@ -351,7 +380,7 @@ class BulkMemberSelect(discord.ui.Select):
         if not selected:
             await reply_ephemeral(
                 interaction,
-                "❌ None of the selected members are still available.",
+                "\u274c None of the selected members are still available.",
             )
             return
         view = BulkActionView(self.browser, selected)
@@ -386,31 +415,6 @@ class BulkMemberSelect(discord.ui.Select):
             inline=False,
         )
         await interaction.response.edit_message(embed=embed, view=view)
-
-
-class BulkSelectView(OwnedView):
-    def __init__(self, browser: "RoleMemberBrowserView") -> None:
-        self.browser = browser
-        super().__init__(browser.owner_id)
-        self.add_item(BulkMemberSelect(browser))
-
-    @discord.ui.button(
-        label="Back",
-        emoji="◀️",
-        style=discord.ButtonStyle.secondary,
-        row=1,
-    )
-    async def back(
-        self,
-        interaction: discord.Interaction,
-        button: discord.ui.Button,
-    ) -> None:
-        _ = button
-        self.browser.rebuild()
-        await interaction.response.edit_message(
-            embed=self.browser.render_embed(),
-            view=self.browser,
-        )
 
 
 class BulkActionView(OwnedView):
@@ -830,23 +834,31 @@ class BulkReminderModal(discord.ui.Modal, title="Send bulk reminder"):
         )
 
 
-class BulkRoleSelect(discord.ui.RoleSelect):
+class BulkRoleSelect(DankRoleSelect):
+    """House role picker for bulk role actions.
+
+    Uses the framework's DankRoleSelect wrapper (owner check, house
+    wording); the pick routes into the same bulk add/remove execution
+    the raw RoleSelect used.
+    """
+
     def __init__(self, parent: "BulkRoleActionView") -> None:
         self.parent_view = parent
         super().__init__(
-            placeholder="Choose a role…",
+            author_id=int(parent.owner_id),
+            on_pick=self._execute,
+            placeholder="Choose a role\u2026",
             min_values=1,
             max_values=1,
-            custom_id=f"dank_members_browser:bulk_{parent.action}",
             row=0,
         )
+        self.custom_id = f"dank_members_browser:bulk_{parent.action}"
 
-    async def callback(self, interaction: discord.Interaction) -> None:
-        role = self.values[0] if self.values else None
+    async def _execute(self, interaction: discord.Interaction, role: discord.Role) -> None:
         if not isinstance(role, discord.Role):
             await reply_ephemeral(
                 interaction,
-                "❌ Discord did not return a valid role.",
+                "\u274c Discord did not return a valid role.",
             )
             return
         await interaction.response.defer(ephemeral=True, thinking=True)
@@ -983,6 +995,7 @@ class BulkRoleSelect(discord.ui.RoleSelect):
             ephemeral=True,
             allowed_mentions=discord.AllowedMentions.none(),
         )
+
 
 
 class BulkRoleActionView(OwnedView):

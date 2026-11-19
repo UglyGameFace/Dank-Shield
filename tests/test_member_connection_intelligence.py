@@ -597,9 +597,11 @@ def test_affiliate_action_is_server_owner_only_and_uses_existing_private_view() 
         user=owner.user, guild=None,
     ))
     review_view = OwnerAffiliationChoiceView(123, int(TARGET))
-    select = next(item for item in review_view.children
-                  if getattr(item, "placeholder", None) == "Choose relationship review")
-    assert {option.value for option in select.options} == {"known", "possible", "cleared"}
+    opener = next(item for item in review_view.children
+                  if getattr(item, "custom_id", None) == "dank_members_center:affiliation_choice:open:v1")
+    assert getattr(opener, "label", None) == "Choose relationship review"
+    picker = review_view._choice_picker()
+    assert {choice.value for choice in picker._all_choices} == {"known", "possible", "cleared"}
     assert len(review_view.children) == 2
     choice = OwnerAffiliationTargetView(123, int(TARGET), "known")
     assert len(choice.children) == 3

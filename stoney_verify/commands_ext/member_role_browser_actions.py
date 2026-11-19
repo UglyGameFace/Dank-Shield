@@ -20,6 +20,7 @@ from .member_role_browser_common import (
     trim,
 )
 from .member_role_browser_review import open_review_panel
+from ..ui.picker import DankRoleSelect
 
 
 _DESTRUCTIVE_PRECHECK_TIMEOUT_SECONDS = 8.0
@@ -382,19 +383,27 @@ class MemberActionView(OwnedView):
         )
 
 
-class MemberRoleSelect(discord.ui.RoleSelect):
+class MemberRoleSelect(DankRoleSelect):
+    """House role picker for single-member role actions.
+
+    Uses the framework's DankRoleSelect wrapper (owner check, house
+    wording); the pick routes into the same add/remove flow the raw
+    RoleSelect used.
+    """
+
     def __init__(self, parent: "MemberRoleActionView") -> None:
         self.parent_view = parent
         super().__init__(
-            placeholder="Choose a role…",
+            author_id=int(parent.owner_id),
+            on_pick=self._apply_role,
+            placeholder="Choose a role\u2026",
             min_values=1,
             max_values=1,
-            custom_id=f"dank_members_browser:{parent.action}",
             row=0,
         )
+        self.custom_id = f"dank_members_browser:{parent.action}"
 
-    async def callback(self, interaction: discord.Interaction) -> None:
-        role = self.values[0] if self.values else None
+    async def _apply_role(self, interaction: discord.Interaction, role: discord.Role) -> None:
         await interaction.response.defer(ephemeral=True, thinking=True)
         target = await self.parent_view.parent._fresh_target(interaction)
         if not isinstance(role, discord.Role) or target is None:

@@ -4,6 +4,8 @@ from typing import Any
 
 import discord
 
+from ..ui.picker import DankRoleSelect
+
 from .member_role_browser_common import (
     OwnedView,
     action_lock,
@@ -289,23 +291,31 @@ class ConfirmedBulkRoleModal(discord.ui.Modal):
         )
 
 
-class ConfirmedBulkRoleSelect(discord.ui.RoleSelect):
+class ConfirmedBulkRoleSelect(DankRoleSelect):
+    """House role picker for confirmed bulk role actions.
+
+    Uses the framework's DankRoleSelect wrapper (owner check, house
+    wording); the pick opens the same confirmation modal the raw
+    RoleSelect used.
+    """
+
     def __init__(self, parent: "ConfirmedBulkRoleActionView") -> None:
         self.parent_view = parent
         super().__init__(
-            placeholder="Choose a role to review and confirm…",
+            author_id=int(parent.owner_id),
+            on_pick=self._confirm,
+            placeholder="Choose a role to review and confirm\u2026",
             min_values=1,
             max_values=1,
-            custom_id=f"dank_members_browser:bulk_confirmed_{parent.action}",
             row=0,
         )
+        self.custom_id = f"dank_members_browser:bulk_confirmed_{parent.action}"
 
-    async def callback(self, interaction: discord.Interaction) -> None:
-        role = self.values[0] if self.values else None
+    async def _confirm(self, interaction: discord.Interaction, role: discord.Role) -> None:
         if not isinstance(role, discord.Role):
             await reply_ephemeral(
                 interaction,
-                "❌ Discord did not return a valid role.",
+                "\u274c Discord did not return a valid role.",
             )
             return
         await interaction.response.send_modal(

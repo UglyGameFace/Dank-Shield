@@ -56,6 +56,127 @@ _REGISTERED = False
 # instead of dumping the user at the generic Control Center. Never mint
 # per-instance ids here; dispatch stays message-scoped while a view is alive.
 MEMBER_REVIEW_CUSTOM_ID_PREFIX = "dank:members_review:"
+
+
+from ..ui.picker import DankPickerView, chunk_choices, make_choice
+
+
+class _ReviewPickerView(DankPickerView):
+    """Paged house picker for the Member Activity Review family.
+
+    Pages long choice lists with chunk_choices so every option stays
+    reachable past Discord's 25-option select limit. The review views
+    have no single owner (any reviewer with permission may use them),
+    so the picker is opened with author_id 0 and the permission check
+    stays inside each pick, exactly as the raw selects did. All custom
+    ids stay inside the ``dank:members_review:`` namespace so the
+    component runtime's stale-press recovery keeps recognising them.
+    """
+
+    def __init__(
+        self,
+        *,
+        choices,
+        on_pick,
+        custom_id: str,
+        placeholder: str,
+        title: str,
+        page: int = 0,
+    ) -> None:
+        all_choices = list(choices or [])
+        pages = chunk_choices(all_choices) or [[]]
+        page = max(0, min(int(page), len(pages) - 1))
+        super().__init__(
+            author_id=0,
+            choices=pages[page],
+            on_pick=on_pick,
+            custom_id=f"{custom_id}:{page}" if len(pages) > 1 else custom_id,
+            placeholder=(
+                f"{placeholder} \u2022 Page {page + 1}/{len(pages)}"
+                if len(pages) > 1 else placeholder
+            ),
+            title=title,
+            timeout=900,
+        )
+        self._all_choices = all_choices
+        self._picker_on_pick = on_pick
+        self._base_custom_id = custom_id
+        self._base_placeholder = placeholder
+        self._picker_title = title
+        self.page = page
+        self.pages = len(pages)
+        if len(pages) > 1:
+            self.add_item(_ReviewPickerPageButton(delta=-1, disabled=page <= 0))
+            self.add_item(_ReviewPickerPageButton(delta=1, disabled=page >= len(pages) - 1))
+
+    def _for_page(self, page: int) -> "_ReviewPickerView":
+        return _ReviewPickerView(
+            choices=self._all_choices,
+            on_pick=self._picker_on_pick,
+            custom_id=self._base_custom_id,
+            placeholder=self._base_placeholder,
+            title=self._picker_title,
+            page=page,
+        )
+
+
+class _ReviewPickerPageButton(discord.ui.Button):
+    def __init__(self, *, delta: int, disabled: bool) -> None:
+        super().__init__(
+            label="Previous" if delta < 0 else "Next",
+            emoji="\u25c0\ufe0f" if delta < 0 else "\u25b6\ufe0f",
+            style=discord.ButtonStyle.secondary,
+            custom_id=(
+                f"{MEMBER_REVIEW_CUSTOM_ID_PREFIX}picker_prev" if delta < 0
+                else f"{MEMBER_REVIEW_CUSTOM_ID_PREFIX}picker_next"
+            ),
+            row=2,
+            disabled=bool(disabled),
+        )
+        self.delta = int(delta)
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        view = self.view
+        if not isinstance(view, _ReviewPickerView):
+            return
+        page = max(0, min(view.page + self.delta, view.pages - 1))
+        await interaction.response.edit_message(view=view._for_page(page))
+
+
+class _ReviewPickerOpenButton(discord.ui.Button):
+    """Opens a house picker as its own ephemeral message.
+
+    The review dashboards keep every other control live on the panel
+    message (PR #874 contract), so the picker arrives as a follow-up
+    message instead of swapping the panel's view away.
+    """
+
+    def __init__(
+        self,
+        *,
+        label: str,
+        custom_id: str,
+        build,
+        disabled: bool = False,
+    ) -> None:
+        super().__init__(
+            label=label,
+            emoji="\U0001f50e",
+            style=discord.ButtonStyle.secondary,
+            custom_id=custom_id,
+            row=0,
+            disabled=bool(disabled),
+        )
+        self._build = build
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        picker, content = self._build(interaction)
+        await interaction.response.send_message(
+            content=content,
+            view=picker,
+            ephemeral=True,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
 _FIELD_LIMIT = 1024
 _SAFE_FIELD_LIMIT = 950
 _PAGE_SIZE = 4
@@ -1339,64 +1460,91 @@ class UserDetailLockView(discord.ui.View):
             pass
 
 
-class LockedUserSelect(discord.ui.Select):
-    def __init__(self, parent: "LockedUsersReviewView") -> None:
-        self.parent_view = parent
-        page, start, end = _locked_page_bounds(parent.records, parent.page)
-        records = parent.records[start:end]
-
-        options: list[discord.SelectOption] = []
-        for idx, record in enumerate(records, start=start + 1):
-            name = _member_display_name(parent.guild, int(record.user_id))
-            locked_at = "unknown"
-            try:
-                if record.locked_at is not None:
-                    locked_at = f"{int((parent.now_ts - record.locked_at.timestamp()) // 3600)}h ago"
-            except Exception:
-                locked_at = "locked"
-            options.append(
-                discord.SelectOption(
-                    label=_trim(f"{idx}. {name}", 95),
-                    description=_trim(f"{locked_at} • {record.reason}", 95),
-                    value=str(record.user_id),
-                    emoji="🔒",
-                )
-            )
-
-        if not options:
-            options.append(discord.SelectOption(label="No locked users", description="Nothing to unlock.", value="none", emoji="✅"))
-
-        super().__init__(
-            placeholder="Select a locked user to review",
-            custom_id=f"{MEMBER_REVIEW_CUSTOM_ID_PREFIX}locked_select",
-            min_values=1,
-            max_values=1,
-            options=options,
-            row=0,
-            disabled=not records,
-        )
-
-    async def callback(self, interaction: discord.Interaction) -> None:
-        if not await _require_review_permission(interaction):
-            return
-        value = self.values[0] if self.values else "none"
-        if value == "none":
-            return await reply_once(interaction, {"content": "No locked users to review.", "ephemeral": True})
-        self.parent_view.selected_user_id = int(value)
-        self.parent_view.last_unlocked_user_id = None
-        self.parent_view.confirm_unlock_ready = True
-        self.parent_view._rebuild_items()
-        await interaction.response.edit_message(
+async def _review_locked_user(parent: "LockedUsersReviewView", interaction: discord.Interaction, value: str) -> None:
+    """Original LockedUserSelect pick flow, unchanged."""
+    if not await _require_review_permission(interaction):
+        return
+    if value == "none":
+        return await reply_once(interaction, {"content": "No locked users to review.", "ephemeral": True})
+    parent.selected_user_id = int(value)
+    parent.last_unlocked_user_id = None
+    parent.confirm_unlock_ready = True
+    parent._rebuild_items()
+    panel_message = getattr(parent, "_panel_message", None)
+    if panel_message is not None:
+        await panel_message.edit(
             embed=_build_locked_users_embed(
-                self.parent_view.records,
-                self.parent_view.persistence,
+                parent.records,
+                parent.persistence,
                 guild=interaction.guild,
-                page=self.parent_view.page,
-                selected_user_id=self.parent_view.selected_user_id,
+                page=parent.page,
+                selected_user_id=parent.selected_user_id,
             ),
-            view=self.parent_view,
+            view=parent,
             allowed_mentions=discord.AllowedMentions.none(),
         )
+    await interaction.response.edit_message(
+        content="\u2705 Selected \u2014 the locked-users panel above has been updated.",
+        view=None,
+    )
+
+
+def _locked_user_picker(parent: "LockedUsersReviewView") -> _ReviewPickerView:
+    """Every locked user as a house-picker choice — no 25-option cap.
+
+    The raw LockedUserSelect only ever showed one locked page; the
+    house picker pages all records with chunk_choices.
+    """
+    choices = []
+    for idx, record in enumerate(parent.records, start=1):
+        name = _member_display_name(parent.guild, int(record.user_id))
+        locked_at = "unknown"
+        try:
+            if record.locked_at is not None:
+                locked_at = f"{int((parent.now_ts - record.locked_at.timestamp()) // 3600)}h ago"
+        except Exception:
+            locked_at = "locked"
+        choices.append(
+            make_choice(
+                _trim(f"{idx}. {name}", 95),
+                str(record.user_id),
+                description=_trim(f"{locked_at} \u2022 {record.reason}", 95),
+                emoji="\U0001f512",
+            )
+        )
+
+    if not choices:
+        choices.append(
+            make_choice(
+                "No locked users",
+                "none",
+                description="Nothing to unlock.",
+                emoji="\u2705",
+            )
+        )
+
+    async def on_pick(interaction: discord.Interaction, value: str) -> None:
+        await _review_locked_user(parent, interaction, value)
+
+    return _ReviewPickerView(
+        choices=choices,
+        on_pick=on_pick,
+        custom_id=f"{MEMBER_REVIEW_CUSTOM_ID_PREFIX}locked_pick",
+        placeholder="Select a locked user to review",
+        title="Locked Users",
+    )
+
+
+def _locked_picker_opener(parent: "LockedUsersReviewView") -> _ReviewPickerOpenButton:
+    def build(interaction: discord.Interaction):
+        parent._panel_message = getattr(interaction, "message", None)
+        return _locked_user_picker(parent), "Pick a locked user to review:"
+
+    return _ReviewPickerOpenButton(
+        label="Select a locked user to review",
+        custom_id=f"{MEMBER_REVIEW_CUSTOM_ID_PREFIX}locked_select",
+        build=build,
+    )
 
 
 class LockedUsersReviewView(discord.ui.View):
@@ -1430,7 +1578,7 @@ class LockedUsersReviewView(discord.ui.View):
 
     def _rebuild_items(self) -> None:
         self.clear_items()
-        self.add_item(LockedUserSelect(self))
+        self.add_item(_locked_picker_opener(self))
 
         previous_button = discord.ui.Button(
             label="Previous",
@@ -1627,45 +1775,78 @@ class LockedUsersReviewView(discord.ui.View):
         )
 
 
-class MemberSelect(discord.ui.Select):
-    def __init__(self, parent: "MemberActivityReviewView") -> None:
-        self.parent_view = parent
-        report = parent.report
-        page, start, end = _page_bounds(report, parent.page)
-        options: list[discord.SelectOption] = []
-        for display_idx, candidate in enumerate(report.candidates[start:end], start=start + 1):
-            icon, label = _status_icon(candidate)
-            days = "unknown" if candidate.inactivity_days is None else f"{candidate.inactivity_days}d"
-            options.append(
-                discord.SelectOption(
-                    label=_trim(f"{display_idx}. {candidate.display_name}", 95),
-                    description=_trim(f"{label} • quiet {days} • {candidate.confidence} confidence", 95),
-                    value=str(candidate.user_id),
-                    emoji=icon,
-                )
-            )
-        if not options:
-            options.append(discord.SelectOption(label="No users found", description="Nothing to inspect on this scan.", value="none", emoji="✅"))
-        super().__init__(placeholder="Select a user to inspect manually", custom_id=f"{MEMBER_REVIEW_CUSTOM_ID_PREFIX}select", min_values=1, max_values=1, options=options, row=0, disabled=not report.candidates)
+async def _inspect_scanned_member(parent: "MemberActivityReviewView", interaction: discord.Interaction, value: str) -> None:
+    """Original MemberSelect pick flow, unchanged."""
+    if not await _require_review_permission(interaction):
+        return
+    if value == "none":
+        return await reply_once(interaction, {"content": "No users were found in this scan.", "ephemeral": True})
+    candidate = parent.find_candidate(value)
+    if candidate is None:
+        return await reply_once(interaction, {"content": "That user is no longer available in this scan. Refresh and try again.", "ephemeral": True})
+    locked = False
+    if interaction.guild is not None:
+        locked = await is_scan_user_locked(int(interaction.guild.id), int(candidate.user_id))
+    await interaction.response.send_message(
+        embed=_build_user_detail_embed(candidate, locked=locked),
+        view=UserDetailLockView(candidate, locked=locked),
+        ephemeral=True,
+        allowed_mentions=discord.AllowedMentions.none(),
+    )
 
-    async def callback(self, interaction: discord.Interaction) -> None:
-        if not await _require_review_permission(interaction):
-            return
-        value = self.values[0] if self.values else "none"
-        if value == "none":
-            return await reply_once(interaction, {"content": "No users were found in this scan.", "ephemeral": True})
-        candidate = self.parent_view.find_candidate(value)
-        if candidate is None:
-            return await reply_once(interaction, {"content": "That user is no longer available in this scan. Refresh and try again.", "ephemeral": True})
-        locked = False
-        if interaction.guild is not None:
-            locked = await is_scan_user_locked(int(interaction.guild.id), int(candidate.user_id))
-        await interaction.response.send_message(
-            embed=_build_user_detail_embed(candidate, locked=locked),
-            view=UserDetailLockView(candidate, locked=locked),
-            ephemeral=True,
-            allowed_mentions=discord.AllowedMentions.none(),
+
+def _member_inspect_picker(parent: "MemberActivityReviewView") -> _ReviewPickerView:
+    """Every scanned candidate as a house-picker choice — no cap.
+
+    The raw MemberSelect only listed the current report page; the
+    house picker pages the whole scan with chunk_choices, in the
+    same order and with the same labels.
+    """
+    report = parent.report
+    choices = []
+    for display_idx, candidate in enumerate(report.candidates, start=1):
+        icon, label = _status_icon(candidate)
+        days = "unknown" if candidate.inactivity_days is None else f"{candidate.inactivity_days}d"
+        choices.append(
+            make_choice(
+                _trim(f"{display_idx}. {candidate.display_name}", 95),
+                str(candidate.user_id),
+                description=_trim(f"{label} \u2022 quiet {days} \u2022 {candidate.confidence} confidence", 95),
+                emoji=icon,
+            )
         )
+
+    if not choices:
+        choices.append(
+            make_choice(
+                "No users found",
+                "none",
+                description="Nothing to inspect on this scan.",
+                emoji="\u2705",
+            )
+        )
+
+    async def on_pick(interaction: discord.Interaction, value: str) -> None:
+        await _inspect_scanned_member(parent, interaction, value)
+
+    return _ReviewPickerView(
+        choices=choices,
+        on_pick=on_pick,
+        custom_id=f"{MEMBER_REVIEW_CUSTOM_ID_PREFIX}inspect",
+        placeholder="Select a user to inspect manually",
+        title="Inspect a Member",
+    )
+
+
+def _member_picker_opener(parent: "MemberActivityReviewView") -> _ReviewPickerOpenButton:
+    def build(interaction: discord.Interaction):
+        return _member_inspect_picker(parent), "Pick a member from this scan to inspect them:"
+
+    return _ReviewPickerOpenButton(
+        label="Select a user to inspect manually",
+        custom_id=f"{MEMBER_REVIEW_CUSTOM_ID_PREFIX}select",
+        build=build,
+    )
 
 
 class MemberActivityReviewView(discord.ui.View):
@@ -1677,7 +1858,7 @@ class MemberActivityReviewView(discord.ui.View):
 
     def _rebuild_items(self) -> None:
         self.clear_items()
-        self.add_item(MemberSelect(self))
+        self.add_item(_member_picker_opener(self))
         previous_button = discord.ui.Button(label="Previous", emoji="⬅️", style=discord.ButtonStyle.secondary, custom_id=f"{MEMBER_REVIEW_CUSTOM_ID_PREFIX}prev", disabled=self.page <= 0, row=1)
         next_button = discord.ui.Button(label="Next", emoji="➡️", style=discord.ButtonStyle.secondary, custom_id=f"{MEMBER_REVIEW_CUSTOM_ID_PREFIX}next", disabled=self.page >= _page_count(self.report) - 1, row=1)
         refresh_button = discord.ui.Button(label="Refresh", emoji="🔄", style=discord.ButtonStyle.primary, custom_id=f"{MEMBER_REVIEW_CUSTOM_ID_PREFIX}refresh", row=1)

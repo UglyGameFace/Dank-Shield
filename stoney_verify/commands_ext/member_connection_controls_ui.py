@@ -7,6 +7,7 @@ from typing import Any
 import discord
 
 from .member_role_browser_common import OwnedView, reply_ephemeral, require_review
+from ..ui.picker import DankPickerView, chunk_choices, make_choice
 from ..member_connection_controls import (
     ConnectionControlError, channel_protection_status, load_controls,
     protect_channel, remove_protection, toggle_review,
@@ -254,6 +255,130 @@ async def _browse_private_channels(interaction: discord.Interaction, owner_id: i
     await _display(interaction, browser.embed(), browser)
 
 
+class _ConnectionPickerView(DankPickerView):
+    """Paged house picker for connection-control panels.
+
+    Pages long choice lists with chunk_choices so every option stays
+    reachable past Discord's 25-option select limit (the protected
+    channel list used to be silently cut off). Keeps the panel owner
+    gate; feature-level authorization still runs inside each pick.
+    """
+
+    def __init__(
+        self,
+        owner_id: int,
+        *,
+        choices,
+        on_pick,
+        custom_id: str,
+        placeholder: str,
+        title: str,
+        on_home=None,
+        on_cancel=None,
+        home_label: str = "Back",
+        page: int = 0,
+    ) -> None:
+        all_choices = list(choices or [])
+        pages = chunk_choices(all_choices) or [[]]
+        page = max(0, min(int(page), len(pages) - 1))
+        super().__init__(
+            author_id=int(owner_id),
+            choices=pages[page],
+            on_pick=on_pick,
+            custom_id=f"{custom_id}:{page}" if len(pages) > 1 else custom_id,
+            placeholder=(
+                f"{placeholder} \u2022 Page {page + 1}/{len(pages)}"
+                if len(pages) > 1 else placeholder
+            ),
+            title=title,
+            timeout=900,
+            on_home=on_home,
+            on_cancel=on_cancel,
+            home_label=home_label,
+        )
+        self._all_choices = all_choices
+        self._picker_on_pick = on_pick
+        self._base_custom_id = custom_id
+        self._base_placeholder = placeholder
+        self._picker_title = title
+        self._picker_on_home = on_home
+        self._picker_on_cancel = on_cancel
+        self._picker_home_label = home_label
+        self.page = page
+        self.pages = len(pages)
+        if len(pages) > 1:
+            self.add_item(_ConnectionPickerPageButton(delta=-1, disabled=page <= 0))
+            self.add_item(_ConnectionPickerPageButton(delta=1, disabled=page >= len(pages) - 1))
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if int(interaction.user.id) != int(self.author_id):
+            await reply_ephemeral(
+                interaction,
+                "\u274c This private member browser belongs to another staff member.",
+            )
+            return False
+        return await require_review(interaction)
+
+    def _for_page(self, page: int) -> "_ConnectionPickerView":
+        return _ConnectionPickerView(
+            int(self.author_id),
+            choices=self._all_choices,
+            on_pick=self._picker_on_pick,
+            custom_id=self._base_custom_id,
+            placeholder=self._base_placeholder,
+            title=self._picker_title,
+            on_home=self._picker_on_home,
+            on_cancel=self._picker_on_cancel,
+            home_label=self._picker_home_label,
+            page=page,
+        )
+
+
+class _ConnectionPickerPageButton(discord.ui.Button):
+    def __init__(self, *, delta: int, disabled: bool) -> None:
+        super().__init__(
+            label="Previous" if delta < 0 else "Next",
+            emoji="\u25c0\ufe0f" if delta < 0 else "\u25b6\ufe0f",
+            style=discord.ButtonStyle.secondary,
+            custom_id=(
+                "dank:connection_controls:picker:prev" if delta < 0
+                else "dank:connection_controls:picker:next"
+            ),
+            row=2,
+            disabled=bool(disabled),
+        )
+        self.delta = int(delta)
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        view = self.view
+        if not isinstance(view, _ConnectionPickerView) or not await view.interaction_check(interaction):
+            return
+        page = max(0, min(view.page + self.delta, view.pages - 1))
+        await interaction.response.edit_message(view=view._for_page(page))
+
+
+class _ConnectionPickerOpenButton(discord.ui.Button):
+    """Swaps a connection-control panel for a house picker on the same message."""
+
+    def __init__(self, *, label: str, custom_id: str, row: int, build) -> None:
+        super().__init__(
+            label=label,
+            style=discord.ButtonStyle.secondary,
+            custom_id=custom_id,
+            row=row,
+        )
+        self._build = build
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        host = self.view
+        if isinstance(host, OwnedView) and not await host.interaction_check(interaction):
+            return
+        picker = self._build(interaction)
+        message = getattr(interaction, "message", None)
+        embeds = getattr(message, "embeds", None) if message is not None else None
+        await _display(interaction, embeds[0] if embeds else discord.Embed(title="\U0001f517 Connection Intelligence"), picker)
+
+
 class ConfirmProtectionView(OwnedView):
     def __init__(self, owner_id: int, channel_id: int, role_id: int) -> None:
         super().__init__(owner_id)
@@ -283,53 +408,80 @@ class ConfirmProtectionView(OwnedView):
         await _render_protection(interaction, self.owner_id)
 
 
-class ProtectedChannelSelect(discord.ui.Select):
-    def __init__(self, owner_id: int, guild: discord.Guild, entries: dict[str, dict[str, Any]]) -> None:
-        self.owner_id = owner_id
-        options = []
-        for cid, entry in entries.items():
-            channel = guild.get_channel(int(cid))
-            name = str(getattr(channel, "name", None) or "Deleted channel")
-            status = channel_protection_status(guild, cid, entry)
-            options.append(discord.SelectOption(
-                label=name[:100], value=cid, description=status[:100],
-            ))
-        super().__init__(placeholder="Choose a protected channel…", options=options[:10], row=0)
+async def _review_protected_channel(interaction: discord.Interaction, owner_id: int, cid: str) -> None:
+    """Original ProtectedChannelSelect pick flow, unchanged."""
+    if not await _authorized(interaction):
+        return
+    await interaction.response.defer(ephemeral=True)
+    try:
+        _, config = await load_controls(interaction.guild.id)
+    except Exception:
+        return await reply_ephemeral(interaction, "Cannot verify the current channel record.")
+    entry = config["protected"].get(cid)
+    if not entry:
+        return await reply_ephemeral(interaction, "That channel is no longer protected.")
+    channel = interaction.guild.get_channel(int(cid))
+    role = interaction.guild.get_role(int(entry["role_id"]))
+    embed = discord.Embed(
+        title="Review channel protection",
+        description=(
+            f"**Channel:** {channel.mention if channel else cid}\n"
+            f"**Trusted role:** {role.mention if role else 'Removed role'}\n"
+            f"**Status:** {channel_protection_status(interaction.guild, cid, entry)}\n\n"
+            "Restoring changes only the two visibility permissions Dank Shield set. "
+            "If someone changed those permissions, restoration stops rather than overwriting them."
+        ),
+        color=discord.Color.blurple(),
+    )
+    await _display(interaction, embed, ConfirmRestoreView(owner_id, cid))
 
-    async def callback(self, interaction: discord.Interaction) -> None:
-        if not await _authorized(interaction):
-            return
+
+def _protected_channel_picker(owner_id: int, guild: discord.Guild, entries: dict) -> _ConnectionPickerView:
+    """Every protected channel as a house-picker choice — no truncation.
+
+    The raw ProtectedChannelSelect silently cut the list off; the house
+    picker pages with chunk_choices so all entries stay reachable.
+    """
+    choices = []
+    for cid, entry in entries.items():
+        channel = guild.get_channel(int(cid))
+        name = str(getattr(channel, "name", None) or "Deleted channel")
+        status = channel_protection_status(guild, cid, entry)
+        choices.append(make_choice(name[:100], str(cid), description=status[:100]))
+
+    async def on_pick(interaction: discord.Interaction, value: str) -> None:
+        await _review_protected_channel(interaction, owner_id, str(value))
+
+    async def back(interaction: discord.Interaction) -> None:
         await interaction.response.defer(ephemeral=True)
-        cid = self.values[0]
-        try:
-            _, config = await load_controls(interaction.guild.id)
-        except Exception:
-            return await reply_ephemeral(interaction, "Cannot verify the current channel record.")
-        entry = config["protected"].get(cid)
-        if not entry:
-            return await reply_ephemeral(interaction, "That channel is no longer protected.")
-        channel = interaction.guild.get_channel(int(cid))
-        role = interaction.guild.get_role(int(entry["role_id"]))
-        embed = discord.Embed(
-            title="Review channel protection",
-            description=(
-                f"**Channel:** {channel.mention if channel else cid}\n"
-                f"**Trusted role:** {role.mention if role else 'Removed role'}\n"
-                f"**Status:** {channel_protection_status(interaction.guild, cid, entry)}\n\n"
-                "Restoring changes only the two visibility permissions Dank Shield set. "
-                "If someone changed those permissions, restoration stops rather than overwriting them."
-            ),
-            color=discord.Color.blurple(),
-        )
-        await _display(interaction, embed, ConfirmRestoreView(self.owner_id, cid))
+        await _render_protection(interaction, owner_id)
+
+    return _ConnectionPickerView(
+        owner_id,
+        choices=choices,
+        on_pick=on_pick,
+        custom_id="dank:connection_controls:protected_channel:v1",
+        placeholder="Choose a protected channel\u2026",
+        title="Protected Channels",
+        on_home=back,
+        on_cancel=back,
+        home_label="Restricted channels",
+    )
 
 
 class RemoveProtectionView(OwnedView):
-    def __init__(self, owner_id: int, guild: discord.Guild, entries: dict[str, dict[str, Any]]) -> None:
+    def __init__(self, owner_id: int, guild: discord.Guild, entries: dict) -> None:
         super().__init__(owner_id)
-        self.add_item(ProtectedChannelSelect(owner_id, guild, entries))
+        self._picker_guild = guild
+        self._picker_entries = entries
+        self.add_item(_ConnectionPickerOpenButton(
+            label="Choose a protected channel\u2026",
+            custom_id="dank:connection_controls:protected_channel:open:v1",
+            row=0,
+            build=lambda interaction: _protected_channel_picker(owner_id, guild, entries),
+        ))
 
-    @discord.ui.button(label="Restricted channels", emoji="◀️", style=discord.ButtonStyle.secondary, row=1)
+    @discord.ui.button(label="Restricted channels", emoji="\u25c0\ufe0f", style=discord.ButtonStyle.secondary, row=1)
     async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         await interaction.response.defer(ephemeral=True)
         await _render_protection(interaction, self.owner_id)
