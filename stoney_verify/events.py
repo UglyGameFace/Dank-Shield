@@ -1335,6 +1335,10 @@ async def on_member_join(member: discord.Member):
                 "excluded_bot": "Excluded from human alt scoring",
             }
             alt_label = alt_labels.get(alt_tier, "No linked-account evidence")
+            if alt_tier == "suspicious" and int(
+                risk_profile.get("strong_name_match_count") or 0
+            ) > 0:
+                alt_label = "Possible alt — similar name to an existing member"
             if alt_score > 0 and alt_tier not in {"clear", "excluded_bot"}:
                 alt_label += f" ({alt_score}/100)"
             spam_label = (

@@ -1886,6 +1886,10 @@ async def _build_member_context_fields(
         "excluded_bot": "Excluded from human alt scoring",
     }
     alt_label = alt_labels.get(alt_tier, "No linked-account evidence")
+    if alt_tier == "suspicious" and _safe_int(
+        merged_risk.get("strong_name_match_count"), 0
+    ) > 0:
+        alt_label = "Possible alt — similar name to an existing member"
     if alt_score > 0 and alt_tier not in {"clear", "excluded_bot"}:
         alt_label += f" ({alt_score}/100)"
 
@@ -1979,6 +1983,9 @@ async def _build_member_context_fields(
         cluster_bits.append(f"shared profile matches={fingerprint_count}")
     if similar_name_count > 0:
         cluster_bits.append(f"similar recent names={similar_name_count}")
+    strong_name_count = _safe_int(merged_risk.get("strong_name_match_count"), 0)
+    if strong_name_count > 0:
+        cluster_bits.append(f"strong guild name matches={strong_name_count}")
     if burst_count >= 3:
         cluster_bits.append(f"join surge={burst_count}")
     if cluster_bits:
