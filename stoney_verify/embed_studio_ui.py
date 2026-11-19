@@ -2894,7 +2894,33 @@ class StudioReviewView(_StudioView):
                 item = lib["published"].get(self.session.post_key)
                 if not item or int(item.get("channel_id", 0)) != channel.id:
                     return await _say(interaction, "Tracked post changed or was removed; no edit made.")
-                message = await channel.fetch_message(int(item["message_id"]))
+                try:
+                    message = await channel.fetch_message(int(item["message_id"]))
+                except discord.NotFound:
+                    # The tracked Discord message was deleted, so there is
+                    # nothing left to edit. Drop the stale tracking record —
+                    # left in place it strands every later edit on this same
+                    # raw error and keeps haunting Edit Posted — detach the
+                    # session from it, and leave the draft untouched:
+                    # publishing again posts the draft as a brand-new message.
+                    dead_key = self.session.post_key
+                    lib["published"].pop(dead_key, None)
+                    try:
+                        await _save_library(self.session.guild_id, source, lib)
+                    except Exception:
+                        pass
+                    if self.session.post_key == dead_key:
+                        self.session.post_key = ""
+                    self.session.dirty = True
+                    autosave_warning = await _autosave(interaction, self.session)
+                    return await _say(
+                        interaction,
+                        "That post was deleted, so there is nothing to edit. "
+                        "I removed its stale tracking entry, and your changes "
+                        "are saved in your draft — publish again and it will "
+                        "post as a brand-new message."
+                        + (f"\n⚠️ {autosave_warning}" if autosave_warning else ""),
+                    )
                 if message.author.id != interaction.client.user.id:
                     return await _say(interaction, "This message is not owned by Dank Shield. Edit rejected.")
                 await message.edit(content=draft["content"] or None, embeds=embeds, view=action_view, allowed_mentions=_MENTIONS)

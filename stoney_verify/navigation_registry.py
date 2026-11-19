@@ -541,11 +541,17 @@ RECENT_UPDATES: tuple[RecentFeatureUpdate, ...] = (
     # used max_length=4096 but Discord caps modal text inputs at 4000, so the
     # modal never opened. Repair of this already-advertised flow, not a new
     # feature, so no new entry here.
+    # 2026-11-19: editing a tracked post whose Discord message was deleted
+    # used to strand the user on a raw "Publish failed: NotFound" and keep
+    # the ghost entry in Edit Posted forever. Post Builder now explains it
+    # plainly, clears the stale entry, and lets the draft publish fresh.
     RecentFeatureUpdate(
         "embed_studio", "Scheduled and recurring posts are in Post Builder",
         "Announcements in 4 steps: schedule for later, repeat daily or "
         "weekly, run a campaign, add a form or a live-updating post — "
-        "plus JSON backups, all in Post Builder.", "2026-11-18",
+        "plus JSON backups, all in Post Builder. If a post you are "
+        "editing was deleted, Post Builder now says so, clears the stale "
+        "entry, and lets you publish your draft as a new post.", "2026-11-19",
     ),
     RecentFeatureUpdate(
         "share_router", "Share videos from regular channels",
