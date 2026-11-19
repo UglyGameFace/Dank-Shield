@@ -8,6 +8,7 @@ from typing import Any
 import discord
 
 from .. import network_safety as network
+from ..ui.picker import DankPickerView, DankUserSelect, chunk_choices, make_choice
 from .public_setup_group import dank_group
 
 _REGISTERED = False
@@ -186,9 +187,30 @@ class SubjectIDModal(discord.ui.Modal, title="Enter a Discord account ID"):
         await _edit(interaction, SubjectActionsView(subject), _subject_embed(subject))
 
 
-class SubjectUserSelect(discord.ui.UserSelect):
+async def _ignore_user_pick(interaction: discord.Interaction, user: object) -> None:
+    return None
+
+
+class SubjectUserSelect(DankUserSelect):
+    """House member picker for choosing the account to review.
+
+    The callback keeps the exact original flow (owner gate, current-
+    member check, then the account review panel); the framework
+    wrapper's own callback only forwards the picked user. The panel
+    is gated by _deny (physical server owner), so the framework
+    owner check stays open (author_id=0), as before.
+    """
+
     def __init__(self) -> None:
-        super().__init__(placeholder="Choose a current member", min_values=1, max_values=1, row=0)
+        super().__init__(
+            author_id=0,
+            on_pick=_ignore_user_pick,
+            placeholder="Choose a current member",
+            min_values=1,
+            max_values=1,
+            row=0,
+        )
+        self.custom_id = "dank_network_safety:subject_user:v1"
 
     async def callback(self, interaction: discord.Interaction) -> None:
         if await _deny(interaction):
@@ -262,51 +284,169 @@ class NewEventModal(discord.ui.Modal):
             )
 
 
-class CategorySelect(discord.ui.Select):
+class CategoryPickerView(DankPickerView):
+    """House picker for the incident type of a new owner report.
+
+    Picking a type opens the same NewEventModal the raw category
+    select opened, behind the same owner gate. Back/Close returns
+    to the account review panel. The flow is gated by _deny
+    (physical server owner), so the framework owner check stays
+    open (author_id=0), as before.
+    """
+
     def __init__(self, subject: int) -> None:
-        self.subject = subject
-        super().__init__(placeholder="Select the incident type",
-                         options=[discord.SelectOption(label=x.title(), value=x) for x in network.CATEGORIES])
+        self.subject = int(subject)
+
+        async def on_pick(interaction: discord.Interaction, value: str) -> None:
+            if not await _deny(interaction):
+                await interaction.response.send_modal(NewEventModal(self.subject, value))
+
+        async def on_home(interaction: discord.Interaction) -> None:
+            await _edit(interaction, SubjectActionsView(self.subject), _subject_embed(self.subject))
+
+        super().__init__(
+            author_id=0,
+            choices=[make_choice(x.title(), x) for x in network.CATEGORIES],
+            on_pick=on_pick,
+            custom_id="dank_network_safety:category:v1",
+            placeholder="Select the incident type",
+            title="Record an owner report",
+            timeout=300,
+            on_home=on_home,
+            on_cancel=on_home,
+            home_label="Back",
+        )
+
+
+def _amend_reports_embed(active: bool) -> discord.Embed:
+    return discord.Embed(
+        title="Amend your server's incidents",
+        description=("Select an original report. Corrections and withdrawals preserve a dated history. "
+                     if active else "No active incidents from your server. This cannot change another server's reports."),
+    )
+
+
+class _OriginalReportPickerView(DankPickerView):
+    """Paged house picker for a server's own reports on one account.
+
+    The raw select silently truncated the list to the first 25
+    reports; this picker pages every report with chunk_choices so
+    older reports stay reachable. Picking opens the same amendment
+    panel the raw select opened, behind the same owner gate.
+    Back/Close returns to the amend panel.
+    """
+
+    def __init__(self, subject: int, reports: list[dict[str, Any]], *, page: int = 0) -> None:
+        self.subject = int(subject)
+        self.reports = list(reports or [])
+        self._reports_by_id = {str(x["id"]): x for x in self.reports}
+        all_choices = [
+            make_choice(
+                f"{str(x.get('category','other')).title()} • {str(x.get('occurred_at',''))[:10]}",
+                str(x["id"]),
+                description=str(x.get("reason", ""))[:90],
+            )
+            for x in self.reports
+        ]
+        pages = chunk_choices(all_choices) or [[]]
+        page = max(0, min(int(page), len(pages) - 1))
+
+        async def on_pick(interaction: discord.Interaction, value: str) -> None:
+            if await _deny(interaction):
+                return
+            report = self._reports_by_id.get(value)
+            if report:
+                await _edit(interaction,
+                            AmendmentActionsView(self.subject, report),
+                            _subject_embed(self.subject))
+
+        async def on_home(interaction: discord.Interaction) -> None:
+            await _edit(interaction,
+                        OriginalReportsView(self.subject, self.reports),
+                        _amend_reports_embed(bool(self.reports)))
+
+        super().__init__(
+            author_id=0,
+            choices=pages[page],
+            on_pick=on_pick,
+            custom_id=(
+                f"dank_network_safety:original_reports:v1:{page}"
+                if len(pages) > 1 else "dank_network_safety:original_reports:v1"
+            ),
+            placeholder=(
+                f"Choose your server's report to amend • Page {page + 1}/{len(pages)}"
+                if len(pages) > 1 else "Choose your server's report to amend"
+            ),
+            title="Amend your server's incidents",
+            timeout=300,
+            on_home=on_home,
+            on_cancel=on_home,
+            home_label="Back",
+        )
+        self.page = page
+        self.pages = len(pages)
+        self._all_reports = self.reports
+        if len(pages) > 1:
+            self.add_item(_OriginalReportPageButton(delta=-1, disabled=page <= 0))
+            self.add_item(_OriginalReportPageButton(delta=1, disabled=page >= len(pages) - 1))
+
+    def _for_page(self, page: int) -> "_OriginalReportPickerView":
+        return _OriginalReportPickerView(self.subject, self._all_reports, page=page)
+
+
+class _OriginalReportPageButton(discord.ui.Button):
+    def __init__(self, *, delta: int, disabled: bool) -> None:
+        super().__init__(
+            label="Previous" if delta < 0 else "Next",
+            emoji="◀️" if delta < 0 else "▶️",
+            style=discord.ButtonStyle.secondary,
+            custom_id=(
+                "dank_network_safety:original_reports:prev" if delta < 0
+                else "dank_network_safety:original_reports:next"
+            ),
+            row=2,
+            disabled=bool(disabled),
+        )
+        self.delta = int(delta)
 
     async def callback(self, interaction: discord.Interaction) -> None:
-        if not await _deny(interaction):
-            await interaction.response.send_modal(NewEventModal(self.subject, self.values[0]))
+        view = self.view
+        if not isinstance(view, _OriginalReportPickerView):
+            return
+        page = max(0, min(view.page + self.delta, view.pages - 1))
+        await _edit(interaction, view._for_page(page), _amend_reports_embed(bool(view.reports)))
 
 
-class CategoryPickerView(discord.ui.View):
-    def __init__(self, subject: int) -> None:
-        super().__init__(timeout=300)
-        self.add_item(CategorySelect(subject))
+class _OriginalReportOpenButton(discord.ui.Button):
+    """Swaps the amend panel for the report picker on the same message."""
 
-
-class OriginalReportSelect(discord.ui.Select):
     def __init__(self, subject: int, reports: list[dict[str, Any]]) -> None:
-        self.subject = subject
-        self.reports = {str(x["id"]): x for x in reports[:25]}
-        super().__init__(placeholder="Choose your server's report to amend",
-                         options=[
-                             discord.SelectOption(
-                                 label=f"{str(x.get('category','other')).title()} • {str(x.get('occurred_at',''))[:10]}",
-                                 description=str(x.get("reason", ""))[:90],
-                                 value=str(x["id"]),
-                             ) for x in reports[:25]
-                         ])
+        super().__init__(
+            label="Choose your server's report to amend…",
+            style=discord.ButtonStyle.primary,
+            custom_id="dank_network_safety:original_reports:open:v1",
+            row=0,
+        )
+        self.subject = int(subject)
+        self.reports = list(reports or [])
 
     async def callback(self, interaction: discord.Interaction) -> None:
         if await _deny(interaction):
             return
-        report = self.reports.get(self.values[0])
-        if report:
-            await _edit(interaction,
-                        AmendmentActionsView(self.subject, report),
-                        _subject_embed(self.subject))
+        message = getattr(interaction, "message", None)
+        embeds = getattr(message, "embeds", None) if message is not None else None
+        await _edit(
+            interaction,
+            _OriginalReportPickerView(self.subject, self.reports),
+            embeds[0] if embeds else _amend_reports_embed(bool(self.reports)),
+        )
 
 
 class OriginalReportsView(discord.ui.View):
     def __init__(self, subject: int, reports: list[dict[str, Any]]) -> None:
         super().__init__(timeout=300)
         if reports:
-            self.add_item(OriginalReportSelect(subject, reports))
+            self.add_item(_OriginalReportOpenButton(subject, reports))
 
     @discord.ui.button(label="Back", style=discord.ButtonStyle.secondary, row=1)
     async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -430,11 +570,8 @@ class SubjectActionsView(discord.ui.View):
             active = network._reconcile_events(own)
             view = OriginalReportsView(self.subject, active)
             await interaction.edit_original_response(
-                embed=discord.Embed(
-                    title="Amend your server's incidents",
-                    description=("Select an original report. Corrections and withdrawals preserve a dated history. "
-                                 if active else "No active incidents from your server. This cannot change another server's reports."),
-                ), view=view, allowed_mentions=discord.AllowedMentions.none(),
+                embed=_amend_reports_embed(bool(active)),
+                view=view, allowed_mentions=discord.AllowedMentions.none(),
             )
         except Exception:
             await interaction.edit_original_response(content="Own report history is unavailable. No change made.")

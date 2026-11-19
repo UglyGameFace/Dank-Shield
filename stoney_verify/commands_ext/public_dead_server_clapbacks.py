@@ -13,6 +13,7 @@ from typing import Any, Optional
 import discord
 
 from ..panel_lifecycle import PRIVATE_MENU_TTL_SECONDS
+from ..ui.picker import DankRoleSelect
 
 from stoney_verify.dead_server_clapbacks import (
     ENABLED_KEY,
@@ -225,16 +226,30 @@ class DeadServerClapbackView(_OwnedView):
         await _replace(interaction, embed=_center_embed(), view=CommunityToolsView(self.owner_id))
 
 
-class ClapbackRoleSelect(discord.ui.RoleSelect):
-    def __init__(self) -> None:
-        super().__init__(placeholder="Choose the Stoners / sesh ping role", min_values=1, max_values=1)
+class ClapbackRoleSelect(DankRoleSelect):
+    """House role picker for the clapback ping role.
 
-    async def callback(self, interaction: discord.Interaction) -> None:
+    Uses the framework's DankRoleSelect wrapper (owner check, house
+    wording); the pick saves through the same guild-config write the
+    raw RoleSelect used, behind the same Manage Server gate.
+    """
+
+    def __init__(self, owner_id: int) -> None:
+        super().__init__(
+            author_id=int(owner_id),
+            on_pick=self._save_role,
+            placeholder="Choose the Stoners / sesh ping role",
+            min_values=1,
+            max_values=1,
+            row=0,
+        )
+        self.custom_id = "dank_clapbacks:ping_role:v1"
+
+    async def _save_role(self, interaction: discord.Interaction, role: discord.Role) -> None:
         if not _manage_clapbacks(interaction):
             return await _private(interaction, "❌ Dead Server Clapbacks require **Manage Server**.")
-        if interaction.guild is None or not self.values:
+        if interaction.guild is None or role is None:
             return await _private(interaction, "❌ No role was chosen.")
-        role = self.values[0]
         try:
             await upsert_guild_config(
                 int(interaction.guild.id),
@@ -255,7 +270,7 @@ class ClapbackRoleSelect(discord.ui.RoleSelect):
 class ClapbackRoleSelectView(_OwnedView):
     def __init__(self, owner_id: int) -> None:
         super().__init__(owner_id, timeout=300)
-        self.add_item(ClapbackRoleSelect())
+        self.add_item(ClapbackRoleSelect(self.owner_id))
 
     @discord.ui.button(label="Clear Ping Role", emoji="🗑️", style=discord.ButtonStyle.danger, row=1)
     async def clear_role(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:

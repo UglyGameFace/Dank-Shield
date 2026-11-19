@@ -598,18 +598,20 @@ RECENT_UPDATES: tuple[RecentFeatureUpdate, ...] = (
         "Save categories, channels, roles and permissions, then restore from a reviewed plan.",
         "2026-11-18",
     ),
-    # Picker migration slice 2 (2026-11-19): the /dank home section picker,
-    # the Help topic/section/guide pickers, and the section pickers in
-    # Protection Center, Member Setup and the Action Center moved to the
-    # house picker framework, like the studios did in slice 1.
+    # Picker migration slices 2 + 6 (2026-11-19): the /dank home and Help
+    # pickers, the section pickers in Protection Center, Member Setup and
+    # the Action Center (slice 2), and the remaining Protection Center,
+    # SpamGuard, Safety Network and Dead Server Clapbacks pickers
+    # (slice 6) moved to the house picker framework, like the studios
+    # did in slice 1.
     RecentFeatureUpdate(
         "help", "Home, Help and panel pickers use the standard picker",
-        "The section picker on /dank home, the Help topic, section and "
-        "guide pickers, and the section pickers in Protection Center, "
-        "Member Setup and the Action Center now use the standard Dank "
-        "Shield picker — the same one Post Builder uses — with fixed "
-        "IDs that keep working after a restart, and paging when a list "
-        "outgrows one screen.",
+        "Pickers across Dank Shield — /dank home, Help, Protection "
+        "Center, SpamGuard, the Safety Network, Member Setup, the "
+        "Action Center and Dead Server Clapbacks — now use the "
+        "standard Dank Shield picker, the same one Post Builder "
+        "uses, with fixed IDs that keep working after a restart, "
+        "and paging when a list outgrows one screen.",
         "2026-11-19",
     ),
 )

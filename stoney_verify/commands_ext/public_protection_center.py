@@ -17,7 +17,7 @@ from typing import Any, Awaitable, Callable, Mapping
 import discord
 
 from ..panel_lifecycle import PRIVATE_MENU_TTL_SECONDS
-from ..ui.picker import DankPickerView, make_choice
+from ..ui.picker import DankPickerView, DankRoleSelect, make_choice
 from .. import anti_nuke as anti_nuke_service
 
 from ..guild_config import get_guild_config, invalidate_guild_config, upsert_guild_config
@@ -1572,15 +1572,31 @@ async def _edit_antinuke_trust_manager(
     )
 
 
-class AntiNukeTrustedRoleAddSelect(discord.ui.RoleSelect):
+async def _ignore_role_pick(interaction: discord.Interaction, role: object) -> None:
+    return None
+
+
+class AntiNukeTrustedRoleAddSelect(DankRoleSelect):
+    """House role picker for adding AntiNuke trusted roles.
+
+    Uses the framework's DankRoleSelect wrapper. The wrapper's own
+    callback only forwards the first picked role, so this subclass
+    keeps the exact guarded multi-role flow the raw RoleSelect used.
+    The trust manager view carries no single owner, so the framework
+    owner check is open (author_id=0) and the real gate stays in
+    _guard_protection_action / _require_antinuke_owner, as before.
+    """
+
     def __init__(self) -> None:
         super().__init__(
+            author_id=0,
+            on_pick=_ignore_role_pick,
             placeholder="Add trusted moderator roles…",
             min_values=1,
             max_values=10,
-            custom_id="dank_protection:antinuke_trusted_roles_add",
             row=0,
         )
+        self.custom_id = "dank_protection:antinuke_trusted_roles_add"
 
     async def callback(self, interaction: discord.Interaction) -> None:
         async def action() -> None:
@@ -1600,15 +1616,22 @@ class AntiNukeTrustedRoleAddSelect(discord.ui.RoleSelect):
         )
 
 
-class AntiNukeTrustedRoleRemoveSelect(discord.ui.RoleSelect):
+class AntiNukeTrustedRoleRemoveSelect(DankRoleSelect):
+    """House role picker for removing AntiNuke trusted roles.
+
+    Same contract as AntiNukeTrustedRoleAddSelect, with remove=True.
+    """
+
     def __init__(self) -> None:
         super().__init__(
+            author_id=0,
+            on_pick=_ignore_role_pick,
             placeholder="Remove trusted roles…",
             min_values=1,
             max_values=10,
-            custom_id="dank_protection:antinuke_trusted_roles_remove",
             row=1,
         )
+        self.custom_id = "dank_protection:antinuke_trusted_roles_remove"
 
     async def callback(self, interaction: discord.Interaction) -> None:
         async def action() -> None:
@@ -1895,24 +1918,82 @@ async def _set_spam_response_mode(interaction: discord.Interaction, mode: str) -
     )
 
 
-class SpamResponseModeSelect(discord.ui.Select):
-    def __init__(self, current_mode: str):
-        clean = _normalize_spam_mode_for_ui(current_mode)
-        options = [
-            discord.SelectOption(label="Alert Only", value="log_only", description="Log the incident without punishment.", default=clean == "log_only"),
-            discord.SelectOption(label="Delete Messages", value="delete_only", description="Delete matching spam messages only.", default=clean == "delete_only"),
-            discord.SelectOption(label="Timeout User", value="timeout", description="Delete matching spam and timeout the user.", default=clean == "timeout"),
-            discord.SelectOption(label="Quarantine + Restore", value="quarantine", description="Move to quarantine and show staff restore.", default=clean == "quarantine"),
-            discord.SelectOption(label="Kick User", value="kick", description="Delete matching spam and kick the user.", default=clean == "kick"),
-            discord.SelectOption(label="Ban User", value="ban", description="Delete matching spam and ban the user.", default=clean == "ban"),
-        ]
-        super().__init__(placeholder=f"Response action: {SPAM_MODE_LABELS.get(clean, 'Timeout User')}", min_values=1, max_values=1, options=options, custom_id="dank_protection:spam_response_mode")
+class SpamResponseModePickerView(DankPickerView):
+    """House picker for the Spam Guard response action.
+
+    Keeps the old mode select's gate and save exactly: the pick runs
+    the same guarded action, which saves {"enabled": True, "mode": ...}
+    through _set_spam_response_mode and refreshes the Protection
+    panel. Back/Close returns to the Spam Guard editor untouched.
+    """
+
+    def __init__(self, *, author_id: int, spam: dict[str, Any]) -> None:
+        self.author_id = int(author_id)
+        self.spam = dict(spam or {})
+        clean = _normalize_spam_mode_for_ui(self.spam.get("mode", "timeout"))
+
+        async def on_pick(interaction: discord.Interaction, value: str) -> None:
+            async def action() -> None:
+                await _set_spam_response_mode(interaction, value)
+
+            await _guard_protection_action(interaction, "protection.spam_response_mode", action, defer=True)
+
+        async def on_home(interaction: discord.Interaction) -> None:
+            await interaction.response.edit_message(
+                view=SpamGuardEditorView(author_id=self.author_id, spam=self.spam),
+            )
+
+        super().__init__(
+            author_id=self.author_id,
+            choices=[
+                make_choice("Alert Only", "log_only", description="Log the incident without punishment.", default=clean == "log_only"),
+                make_choice("Delete Messages", "delete_only", description="Delete matching spam messages only.", default=clean == "delete_only"),
+                make_choice("Timeout User", "timeout", description="Delete matching spam and timeout the user.", default=clean == "timeout"),
+                make_choice("Quarantine + Restore", "quarantine", description="Move to quarantine and show staff restore.", default=clean == "quarantine"),
+                make_choice("Kick User", "kick", description="Delete matching spam and kick the user.", default=clean == "kick"),
+                make_choice("Ban User", "ban", description="Delete matching spam and ban the user.", default=clean == "ban"),
+            ],
+            on_pick=on_pick,
+            custom_id="dank_protection:spam_response_mode:v2",
+            placeholder=f"Response action: {SPAM_MODE_LABELS.get(clean, 'Timeout User')}",
+            title="Spam Guard Actions",
+            timeout=300,
+            on_home=on_home,
+            on_cancel=on_home,
+            home_label="Back",
+        )
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if int(interaction.user.id) != self.author_id:
+            await safe_send_interaction(interaction, content="Open your own Protection Center so settings stay clear.", ephemeral=True, action_name="protection.editor.owner_check")
+            return False
+        return True
+
+
+class SpamResponseModeOpenButton(discord.ui.Button):
+    """Swaps the Spam Guard editor for the response-action picker on the same message."""
+
+    def __init__(self, spam: dict[str, Any]) -> None:
+        clean = _normalize_spam_mode_for_ui((spam or {}).get("mode", "timeout"))
+        super().__init__(
+            label=f"Response Action: {SPAM_MODE_LABELS.get(clean, 'Timeout User')}",
+            emoji="⚖️",
+            style=discord.ButtonStyle.primary,
+            custom_id="dank_protection:spam_response_mode:open:v1",
+            row=0,
+        )
+        self.spam = dict(spam or {})
 
     async def callback(self, interaction: discord.Interaction) -> None:
-        async def action() -> None:
-            await _set_spam_response_mode(interaction, self.values[0] if self.values else "timeout")
-
-        await _guard_protection_action(interaction, "protection.spam_response_mode", action, defer=True)
+        view = self.view
+        if not isinstance(view, SpamGuardEditorView) or not await view.interaction_check(interaction):
+            return
+        message = getattr(interaction, "message", None)
+        embeds = getattr(message, "embeds", None) if message is not None else None
+        await interaction.response.edit_message(
+            embed=embeds[0] if embeds else None,
+            view=SpamResponseModePickerView(author_id=view.author_id, spam=self.spam),
+        )
 
 
 class SpamGuardActionSettingsModal(discord.ui.Modal, title="Spam Guard Actions"):
@@ -1992,7 +2073,7 @@ class SpamGuardEditorView(discord.ui.View):
         super().__init__(timeout=300)
         self.author_id = int(author_id)
         self.spam = dict(spam or {})
-        self.add_item(SpamResponseModeSelect(_normalize_spam_mode_for_ui(self.spam.get("mode", "timeout"))))
+        self.add_item(SpamResponseModeOpenButton(self.spam))
         self.add_item(SpamGuardDetectionButton(self.spam))
         self.add_item(SpamGuardActionsButton(self.spam))
 
