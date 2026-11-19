@@ -33,9 +33,7 @@ def test_ticket_type_selection_transitions_to_confirm_view(monkeypatch) -> None:
             {"slug": "report-member", "name": "Report a Member"},
             {"slug": "support", "name": "Support"},
         ]
-        select = panel.TicketSelect(rows, owner.id, "session-select")
-        select._values = ["support"]
-        await select.callback(interaction)
+        await panel._apply_ticket_type_pick(interaction, rows, owner.id, "session-select", "support")
 
         assert captured["content"] == "Confirm this ticket type."
         assert isinstance(captured["view"], panel.TicketConfirmView)

@@ -128,8 +128,8 @@ def test_ticket_select_shows_only_the_legacy_guilds_current_enabled_set() -> Non
         _legacy_managed_rows(),
         panel._DEFAULT_BOOTSTRAP_CATEGORIES,
     )
-    select = ticket_menu.TicketCategorySelect(rows)
-    labels = [option.label for option in select.options]
+    picker = ticket_menu.TicketCategorySelectView(rows)
+    labels = [choice.label for choice in picker.choices]
 
     assert "Partnership" not in labels
     assert "COD Services" not in labels
@@ -152,5 +152,5 @@ def test_category_manager_requires_explicit_selection_instead_of_seed_all() -> N
     view = setup.CategoryManagerView(state=state)
     custom_ids = {str(getattr(child, "custom_id", "")) for child in view.children}
 
-    assert "dank_ticket_category_setup:managed_selection" in custom_ids
+    assert "dank_ticket_category_setup:managed_selection:open" in custom_ids
     assert "stoney_solid:cat_seed" not in custom_ids

@@ -371,24 +371,26 @@ class SelectedTicketRepairButton(discord.ui.Button):
         await _edit_component(interaction, embed=embed, view=view)
 
 
-class ContextualTicketChannelPicker(center.TicketChannelPicker):
-    async def callback(self, interaction: discord.Interaction) -> None:
-        guild = interaction.guild
-        selected = self.values[0] if self.values else None
-        channel = guild.get_channel(int(getattr(selected, "id", 0) or 0)) if guild is not None else None
-        if not isinstance(channel, discord.TextChannel):
-            return await center._private(interaction, "❌ Choose a text channel from this server.")
+class ContextualTicketChannelPickOpenButton(center.TicketChannelPickOpenButton):
+    """House channel picker opener whose pick rebuilds the contextual center.
 
+    Rebuilding (instead of reusing the current view) refreshes the
+    Selected Ticket repair button for the newly picked channel, exactly
+    as the previous contextual channel select did.
+    """
+
+    async def _apply_pick(self, interaction: discord.Interaction, channel: discord.TextChannel) -> None:
+        guild = interaction.guild
         self.parent_view.channel_id = int(channel.id)
         view = ContextualTicketActionCenterView(
             int(self.parent_view.owner_id),
             channel_id=int(channel.id),
             guild=guild,
         )
-        await interaction.response.edit_message(
+        await center._replace(
+            interaction,
             embed=center._ticket_center_embed(channel),
             view=view,
-            allowed_mentions=discord.AllowedMentions.none(),
         )
 
 
@@ -405,11 +407,11 @@ class ContextualTicketActionCenterView(_ORIGINAL_TICKET_ACTION_CENTER_VIEW):
         for child in list(self.children):
             custom_id = str(getattr(child, "custom_id", "") or "")
             if custom_id in {
-                "dank:ticket:center:channel:v1",
+                "dank:ticket:center:channel:open:v1",
                 "dank:ticket:center:contextual_repair:v1",
             }:
                 self.remove_item(child)
-        self.add_item(ContextualTicketChannelPicker(self))
+        self.add_item(ContextualTicketChannelPickOpenButton(self))
 
         channel = None
         if guild is not None and int(channel_id or 0) > 0:

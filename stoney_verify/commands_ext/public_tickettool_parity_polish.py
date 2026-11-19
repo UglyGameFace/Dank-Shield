@@ -25,6 +25,7 @@ from . import ticket_admin as legacy_ticket_admin
 from . import public_ticket_category_group as category_group_module
 from .public_ticket_category_group import ticket_category_group, _add_governance_warnings
 from ..tickets_new.managed_category_service import canonical_category_key as _managed_category_key
+from ..ui.picker import DankPickerView, chunk_choices, make_choice
 
 _ATTACHED = False
 _CHECKER_PATCHED = False
@@ -693,25 +694,89 @@ async def _create_ticket_from_row(interaction: discord.Interaction, row: Dict[st
     return await _send_ephemeral(interaction, "✅ Ticket created. If you do not see it, ask staff to check ticket category permissions.")
 
 
-class TicketCategorySelect(discord.ui.Select):
-    def __init__(self, rows: List[Dict[str, Any]]) -> None:
+async def _apply_ticket_category_pick(
+    interaction: discord.Interaction,
+    rows: List[Dict[str, Any]],
+    selected_value: str,
+) -> None:
+    """Create the picked ticket exactly as the old category select did."""
+    selected = _safe_str(selected_value, "support")
+    row = next((item for item in rows if _row_slug(item) == selected), {"name": "Support", "slug": selected})
+    await _create_ticket_from_row(interaction, row)
+
+
+class TicketCategorySelectView(DankPickerView):
+    """House picker for the public create-a-ticket category menu.
+
+    Class C fit: the menu is member-facing (any member who pressed the
+    persistent panel button may pick), so the picker is ``allow_anyone``
+    with a stable custom_id, and ticket creation keeps its own checks
+    inside ``_create_ticket_from_row``. Category lists longer than
+    Discord's 25-option limit page with chunk_choices instead of the
+    old silent ``rows[:25]`` truncation.
+    """
+
+    def __init__(self, rows: List[Dict[str, Any]], *, page: int = 0) -> None:
         self.rows = rows
-        options = [
-            discord.SelectOption(label=_row_name(row), value=_row_slug(row), description=_row_description(row), emoji="🎫")
-            for row in rows[:25]
-        ] or [discord.SelectOption(label="Support", value="support", description="General support request", emoji="🎫")]
-        super().__init__(placeholder="Choose a ticket type", min_values=1, max_values=1, options=options)
+        all_choices = [
+            make_choice(_row_name(row), _row_slug(row), description=_row_description(row), emoji="\U0001f3ab")
+            for row in rows
+        ]
+        if not all_choices:
+            all_choices = [
+                make_choice("Support", "support", description="General support request", emoji="\U0001f3ab")
+            ]
+        pages = chunk_choices(all_choices) or [[]]
+        page = max(0, min(int(page), len(pages) - 1))
+        self._all_choices = all_choices
+        self.page = page
+        self.pages = len(pages)
+
+        async def on_pick(interaction: discord.Interaction, value: str) -> None:
+            await _apply_ticket_category_pick(interaction, rows, value)
+
+        super().__init__(
+            author_id=0,
+            choices=pages[page],
+            on_pick=on_pick,
+            custom_id=(
+                f"dank:tickets:parity_polish:category:v1:{page}"
+                if len(pages) > 1 else "dank:tickets:parity_polish:category:v1"
+            ),
+            placeholder="Choose a ticket type",
+            title="Create Ticket",
+            timeout=300,
+            allow_anyone=True,
+        )
+        if len(pages) > 1:
+            self.add_item(_TicketCategoryPageButton(delta=-1, disabled=page <= 0))
+            self.add_item(_TicketCategoryPageButton(delta=1, disabled=page >= len(pages) - 1))
+
+    def _for_page(self, page: int) -> "TicketCategorySelectView":
+        return TicketCategorySelectView(self.rows, page=page)
+
+
+class _TicketCategoryPageButton(discord.ui.Button):
+    def __init__(self, *, delta: int, disabled: bool) -> None:
+        super().__init__(
+            label="Previous" if delta < 0 else "Next",
+            emoji="\u25c0\ufe0f" if delta < 0 else "\u25b6\ufe0f",
+            style=discord.ButtonStyle.secondary,
+            custom_id=(
+                "dank:tickets:parity_polish:category:prev" if delta < 0
+                else "dank:tickets:parity_polish:category:next"
+            ),
+            row=2,
+            disabled=bool(disabled),
+        )
+        self.delta = int(delta)
 
     async def callback(self, interaction: discord.Interaction) -> None:
-        selected = _safe_str(self.values[0], "support")
-        row = next((item for item in self.rows if _row_slug(item) == selected), {"name": "Support", "slug": selected})
-        await _create_ticket_from_row(interaction, row)
-
-
-class TicketCategorySelectView(discord.ui.View):
-    def __init__(self, rows: List[Dict[str, Any]]) -> None:
-        super().__init__(timeout=300)
-        self.add_item(TicketCategorySelect(rows))
+        view = self.view
+        if not isinstance(view, TicketCategorySelectView):
+            return
+        page = max(0, min(view.page + self.delta, view.pages - 1))
+        await interaction.response.edit_message(view=view._for_page(page))
 
 
 class PublicCreateTicketPanelView(discord.ui.View):

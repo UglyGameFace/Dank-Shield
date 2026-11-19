@@ -235,11 +235,10 @@ async def _recover_ticket_category_select(
         _trace(interaction, "category_fallback_invalid_value", elapsed_ms=elapsed_ms)
         return
 
-    # Delegate the actual transition to the canonical TicketSelect callback.
-    # This runtime layer does not create tickets or own category semantics.
-    select = panel.TicketSelect(rows, user_id, session_id)
-    select._values = [slug]
-    await select.callback(interaction)
+    # Delegate the actual transition to the canonical ticket-type pick
+    # handler. This runtime layer does not create tickets or own
+    # category semantics.
+    await panel._apply_ticket_type_pick(interaction, rows, user_id, session_id, slug)
     elapsed_ms = int(round((time.monotonic() - started) * 1000.0))
     _trace(interaction, "category_fallback_return", elapsed_ms=elapsed_ms)
 

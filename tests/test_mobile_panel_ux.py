@@ -229,10 +229,12 @@ def test_ticket_operations_sections_keep_all_actions_and_history():
     for section, names in tickets._TICKET_OPERATIONS_SECTIONS.items():
         view = tickets.TicketOperationsView(123, section=section)
         button_labels = [item.label for item in view.children if isinstance(item, __import__("discord").ui.Button)]
-        assert set(button_labels) == set(names)
+        # "Switch Section" is the house-picker opener replacing the old
+        # section select (Slice 4); every section action must still exist.
+        assert set(button_labels) == set(names) | {"Switch Section"}
         assert len(view.children) <= 9
         assert max((item.row or 0) for item in view.children) < 5
-        assert sum(isinstance(item, tickets.TicketHistoryUserSelect) for item in view.children) == (1 if section == "queues" else 0)
+        assert sum(isinstance(item, tickets.DankUserSelect) for item in view.children) == (1 if section == "queues" else 0)
         assert len(tickets._operations_embed(section=section).fields) == 0
 
 
@@ -244,9 +246,9 @@ def test_ticket_section_navigation_does_not_execute_actions(monkeypatch):
     async def replace(_, **kwargs): events.append(kwargs)
     monkeypatch.setattr(tickets, "_require_staff", allowed)
     monkeypatch.setattr(tickets, "_replace", replace)
-    select = tickets.TicketOperationsSectionSelect(123, "queues")
-    select._values = ["setup"]
-    asyncio.run(select.callback(SimpleNamespace(user=SimpleNamespace(id=123))))
+    opener = tickets.TicketOperationsSectionOpenButton(123, "queues")
+    picker = opener._build(SimpleNamespace(user=SimpleNamespace(id=123)))
+    asyncio.run(picker.handle_pick(SimpleNamespace(user=SimpleNamespace(id=123)), "setup"))
     assert isinstance(events[0]["view"], tickets.TicketOperationsView)
     assert events[0]["view"].section == "setup"
 

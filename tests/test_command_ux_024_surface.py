@@ -83,8 +83,18 @@ def test_home_uses_categories_without_hiding_feature_destinations() -> None:
     assert feature_labels <= surfaced
 
 
+def _picker_values(view: discord.ui.View, opener_custom_id: str) -> set[str]:
+    opener = next(
+        item
+        for item in view.children
+        if str(getattr(item, "custom_id", "")) == opener_custom_id
+    )
+    picker = opener._build(SimpleNamespace(user=SimpleNamespace(id=1)))
+    return {str(choice.value) for choice in picker.choices}
+
+
 def test_current_ticket_center_preserves_complete_action_menu() -> None:
-    actions = _select_values(TicketActionCenterView(1), "dank:ticket:center:action:v1")
+    actions = _picker_values(TicketActionCenterView(1), "dank:ticket:center:action:open:v1")
     assert len(actions) == 16
     assert {"info", "claim", "unclaim", "transfer", "priority", "close", "reopen", "transcript"} <= actions
     assert {"add", "remove", "rename", "lock", "unlock", "owner", "access", "delete"} <= actions
@@ -99,16 +109,14 @@ def test_ticket_operations_preserve_queue_lookup_and_setup_families() -> None:
     assert "Public Panel" not in queues
     assert "Active" not in setup
     for section in ("queues", "setup"):
-        picker = next(
-            item for item in TicketOperationsView(1, section=section).children
-            if isinstance(item, discord.ui.Select)
-            and getattr(item, "custom_id", "") == "dank:tickets:operations:section:v2"
-        )
-        assert {str(option.value) for option in picker.options} == {"queues", "setup"}
-    assert _select_values(TicketIntakeToolsView(1), "dank:tickets:intake:action:v1") == {
+        assert _picker_values(
+            TicketOperationsView(1, section=section),
+            "dank:tickets:operations:section:open:v1",
+        ) == {"queues", "setup"}
+    assert _picker_values(TicketIntakeToolsView(1), "dank:tickets:intake:action:open:v1") == {
         "categories", "status", "match", "preview", "post-actions"
     }
-    assert _select_values(TicketCategoryToolsView(1), "dank:tickets:categories:action:v1") == {
+    assert _picker_values(TicketCategoryToolsView(1), "dank:tickets:categories:action:open:v1") == {
         "sync", "create", "edit", "delete", "set-default", "reorder", "keywords"
     }
 
@@ -125,20 +133,23 @@ def test_ticket_staff_alerts_fit_mobile_discord_component_rows() -> None:
         item for item in setup.children
         if getattr(item, "label", None) == "Staff Alerts"
     )
-    # The section picker owns row 0; the history UserSelect owns row 1.
-    # Queue buttons start on row 2, while setup buttons use rows 1-2.
+    # The section picker opener owns row 0; the history UserSelect owns
+    # row 1. Queue buttons start on row 2, while setup buttons use rows 1-2.
     assert history.row == 1
     assert alerts_button.row == 2
     assert "Staff Alerts" not in _labels(operations)
+    section_opener_id = "dank:tickets:operations:section:open:v1"
     assert all(
         item.row in (2, 3)
         for item in operations.children
         if isinstance(item, discord.ui.Button)
+        and getattr(item, "custom_id", "") != section_opener_id
     )
     assert all(
         item.row in (1, 2)
         for item in setup.children
         if isinstance(item, discord.ui.Button)
+        and getattr(item, "custom_id", "") != section_opener_id
     )
 
     settings = TicketNotificationSettingsView(1, [("support", "Support")])
@@ -147,6 +158,13 @@ def test_ticket_staff_alerts_fit_mobile_discord_component_rows() -> None:
     for item in settings.children:
         if isinstance(item, (discord.ui.Select, discord.ui.RoleSelect, discord.ui.ChannelSelect)):
             assert item.row in (0, 1, 2)
+        elif getattr(item, "custom_id", None) in (
+            "dank:tickets:notifications:category:open:v1",
+            "dank:tickets:notifications:channel:open:v1",
+        ):
+            # Picker opener buttons own rows 0 and 1 (they replaced the
+            # full-width category/channel selects).
+            assert item.row in (0, 1)
         elif getattr(item, "label", None) == "Use This Channel":
             # Row 3 already contains five staff-alert actions. Discord
             # cannot add a sixth button, so the shortcut uses row 4.

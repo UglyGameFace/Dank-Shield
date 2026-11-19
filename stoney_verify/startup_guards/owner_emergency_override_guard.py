@@ -453,6 +453,7 @@ async def _refresh_existing_control_messages(bot: discord.Client) -> None:
         "ticket_claim_request",
         "ticket_unclaim_request",
         "ticket_actions_more_select",
+        "ticket_actions_more_open",
         "ticket_transfer_request",
         "ticket_close_request",
         "ticket_owner_emergency_override",
