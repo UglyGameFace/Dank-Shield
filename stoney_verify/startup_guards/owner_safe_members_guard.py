@@ -4,7 +4,13 @@ from typing import Any
 
 import discord
 
+from ..ui.picker import DankUserSelect
+
 _KEY = "owner_safe_member_ids"
+
+
+async def _ignore_safe_member_pick(interaction: discord.Interaction, user: object) -> None:
+    return None
 
 
 def _log(message: str) -> None:
@@ -117,9 +123,26 @@ async def _require_owner(interaction: discord.Interaction) -> bool:
     return False
 
 
-class AddSafeMemberSelect(discord.ui.UserSelect):
+class AddSafeMemberSelect(DankUserSelect):
+    """House user picker for adding safe members (framework wrapper).
+
+    Was a raw ``discord.ui.UserSelect`` with no custom_id. This is a
+    multi-user pick (up to 5), which the framework wrapper's
+    single-pick handler does not cover, so the multi-value callback
+    is retained under the framework wrapper with the owner gate and
+    save flow unchanged; the picker now carries a stable custom_id.
+    """
+
     def __init__(self) -> None:
-        super().__init__(placeholder="Add selected member(s)…", min_values=1, max_values=5, row=0)
+        super().__init__(
+            author_id=0,
+            on_pick=_ignore_safe_member_pick,
+            placeholder="Add selected member(s)…",
+            min_values=1,
+            max_values=5,
+            row=0,
+        )
+        self.custom_id = "dank:owner_safe_members:add:v1"
 
     async def callback(self, interaction: discord.Interaction) -> None:  # type: ignore[override]
         if not await _require_owner(interaction):
@@ -134,9 +157,23 @@ class AddSafeMemberSelect(discord.ui.UserSelect):
         await interaction.response.edit_message(embed=await _embed(guild), view=SafeMembersView())
 
 
-class RemoveSafeMemberSelect(discord.ui.UserSelect):
+class RemoveSafeMemberSelect(DankUserSelect):
+    """House user picker for removing safe members (framework wrapper).
+
+    Multi-user pick retained under the framework wrapper, like
+    AddSafeMemberSelect; now with a stable custom_id.
+    """
+
     def __init__(self) -> None:
-        super().__init__(placeholder="Remove selected member(s)…", min_values=1, max_values=5, row=1)
+        super().__init__(
+            author_id=0,
+            on_pick=_ignore_safe_member_pick,
+            placeholder="Remove selected member(s)…",
+            min_values=1,
+            max_values=5,
+            row=1,
+        )
+        self.custom_id = "dank:owner_safe_members:remove:v1"
 
     async def callback(self, interaction: discord.Interaction) -> None:  # type: ignore[override]
         if not await _require_owner(interaction):

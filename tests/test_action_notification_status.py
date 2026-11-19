@@ -109,7 +109,9 @@ def test_bad_policy_data_and_timeouts_never_claim_disabled(monkeypatch):
 def test_private_directory_status_button_and_no_new_workflows():
     view = ui.NotificationOwnerDirectoryView(42, 123)
     labels = {c.label for c in view.children if isinstance(c, discord.ui.Button)}
-    assert labels == {"Check Saved Status", "Back to Action Center"}
+    # Slice 9: the owner picker is a house picker behind a
+    # "Choose a System" opener button on the directory view.
+    assert labels == {"Check Saved Status", "Back to Action Center", "Choose a System"}
     assert len(view.children) <= 25
     assert all((getattr(c, "row", 0) or 0) <= 4 for c in view.children)
 

@@ -19,7 +19,9 @@ def test_canonical_setup_has_a_member_profile_feature_center():
 
 
 def test_profile_setup_uses_a_real_multi_channel_picker_without_ids():
-    assert "class LiveProfileChannelSelect(discord.ui.ChannelSelect)" in SETUP_UI
+    # Slice 9: the multi-channel picker is the framework's
+    # DankChannelSelect wrapper (still a real ChannelSelect).
+    assert "class LiveProfileChannelSelect(DankChannelSelect)" in SETUP_UI
     assert "channel_types=[discord.ChannelType.text]" in SETUP_UI
     assert "max_values=_MAX_LIVE_CHANNELS" in SETUP_UI
     assert 'placeholder="Choose channels — selection saves immediately…"' in SETUP_UI

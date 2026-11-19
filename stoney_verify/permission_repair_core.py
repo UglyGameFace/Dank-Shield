@@ -22,6 +22,7 @@ from typing import Any, Iterable, Optional
 import discord
 
 from .operation_queue import run_interaction_exclusive, with_retry
+from .ui.picker import DankChannelSelect, DankPagedPickerView, DankPickerOpenButton, make_choice
 
 try:
     from .globals import get_supabase
@@ -1382,11 +1383,21 @@ def _result_embed(result: TargetRepairResult, *, undo: bool = False) -> discord.
     return embed
 
 
-class _TargetChannelSelect(discord.ui.ChannelSelect):
+class _TargetChannelSelect(DankChannelSelect):
+    """House channel picker for the Fix Access target (framework wrapper).
+
+    Was a raw ``discord.ui.ChannelSelect``; the actor gate and its
+    denial wording stay inside the pick handler, exactly as the raw
+    callback had them, and picking stores the same target on the
+    repair state and re-renders the same repair view.
+    """
+
     def __init__(self, state: PermissionRepairState) -> None:
         self.state = state
         selected = _target_name(state.target) if state.target is not None else "Choose a channel or category…"
         super().__init__(
+            author_id=0,
+            on_pick=self._store_target,
             placeholder=(f"Target: {selected}" if state.target is not None else selected)[:100],
             min_values=1,
             max_values=1,
@@ -1398,17 +1409,16 @@ class _TargetChannelSelect(discord.ui.ChannelSelect):
                 discord.ChannelType.stage_voice,
                 discord.ChannelType.forum,
             ],
-            custom_id="dank_permission_repair:target",
             row=0,
         )
+        self.custom_id = "dank_permission_repair:target"
 
-    async def callback(self, interaction: discord.Interaction) -> None:
+    async def _store_target(self, interaction: discord.Interaction, target: object) -> None:
         if interaction.user.id != self.state.actor_id:
             return await interaction.response.send_message(
                 "❌ This Fix Access screen belongs to another admin.",
                 ephemeral=True,
             )
-        target = self.values[0] if self.values else None
         if not isinstance(target, discord.abc.GuildChannel):
             return await interaction.response.send_message(
                 "❌ That channel could not be resolved.",
@@ -1423,7 +1433,34 @@ class _TargetChannelSelect(discord.ui.ChannelSelect):
         )
 
 
-class _FeatureSelect(discord.ui.Select):
+async def _repair_actor_gate(interaction: discord.Interaction, state: "PermissionRepairState") -> bool:
+    if interaction.user.id != state.actor_id:
+        await interaction.response.send_message(
+            "❌ This Fix Access screen belongs to another admin.",
+            ephemeral=True,
+        )
+        return False
+    return True
+
+
+async def _restore_repair_view(interaction: discord.Interaction, state: "PermissionRepairState") -> None:
+    embed = build_preview_embed(state)
+    view = TargetPermissionRepairView(state)
+    if interaction.response.is_done():
+        await interaction.edit_original_response(embed=embed, view=view)
+    else:
+        await interaction.response.edit_message(embed=embed, view=view)
+
+
+class _FeatureSelect(DankPagedPickerView):
+    """House picker for the Fix Access feature area.
+
+    Was a raw ``discord.ui.Select``; picking runs the same actor
+    gate (same denial wording), stores the same ``state.feature``
+    value, and re-renders the same repair view. Back/Close restores
+    the repair view untouched.
+    """
+
     def __init__(self, state: PermissionRepairState) -> None:
         self.state = state
         rows = (
@@ -1435,73 +1472,80 @@ class _FeatureSelect(discord.ui.Select):
             ("Activity", "activity", "History/thread access for inactivity truth"),
             ("Community Tools", "community", "Stickies, polls and embeds"),
         )
-        options = [
-            discord.SelectOption(
-                label=label,
-                value=value,
-                description=description,
-                default=value == state.feature,
-            )
-            for label, value, description in rows
-        ]
+
+        async def on_pick(interaction: discord.Interaction, value: str) -> None:
+            if not await _repair_actor_gate(interaction, self.state):
+                return
+            self.state.feature = value
+            await _restore_repair_view(interaction, self.state)
+
+        async def on_home(interaction: discord.Interaction) -> None:
+            if not await _repair_actor_gate(interaction, self.state):
+                return
+            await _restore_repair_view(interaction, self.state)
+
         super().__init__(
-            placeholder=f"Feature: {_feature_label(state.feature)}"[:100],
-            options=options,
-            min_values=1,
-            max_values=1,
+            author_id=0,
+            choices=[
+                make_choice(label, value, description=description, default=value == state.feature)
+                for label, value, description in rows
+            ],
+            on_pick=on_pick,
             custom_id="dank_permission_repair:feature",
-            row=1,
-        )
-
-    async def callback(self, interaction: discord.Interaction) -> None:
-        if interaction.user.id != self.state.actor_id:
-            return await interaction.response.send_message(
-                "❌ This Fix Access screen belongs to another admin.",
-                ephemeral=True,
-            )
-        self.state.feature = self.values[0]
-        await interaction.response.edit_message(
-            embed=build_preview_embed(self.state),
-            view=TargetPermissionRepairView(self.state),
+            placeholder=f"Feature: {_feature_label(state.feature)}"[:100],
+            title="Fix Access",
+            timeout=900,
+            on_home=on_home,
+            on_cancel=on_home,
         )
 
 
-class _ModeSelect(discord.ui.Select):
+class _ModeSelect(DankPagedPickerView):
+    """House picker for the Fix Access repair mode.
+
+    Was a raw ``discord.ui.Select``; picking runs the same actor
+    gate (same denial wording), stores the same ``state.mode``
+    value, and re-renders the same repair view. Back/Close restores
+    the repair view untouched.
+    """
+
     def __init__(self, state: PermissionRepairState) -> None:
         self.state = state
-        options = [
-            discord.SelectOption(
-                label="Recommended minimum",
-                value="minimum",
-                description="Only permissions required by the selected feature",
-                default=state.mode != "full",
-            ),
-            discord.SelectOption(
-                label="Full Dank Shield control",
-                value="full",
-                description="Broad non-Administrator channel control",
-                default=state.mode == "full",
-            ),
-        ]
-        super().__init__(
-            placeholder=f"Repair mode: {_mode_label(state.mode)}"[:100],
-            options=options,
-            min_values=1,
-            max_values=1,
-            custom_id="dank_permission_repair:mode",
-            row=2,
-        )
 
-    async def callback(self, interaction: discord.Interaction) -> None:
-        if interaction.user.id != self.state.actor_id:
-            return await interaction.response.send_message(
-                "❌ This Fix Access screen belongs to another admin.",
-                ephemeral=True,
-            )
-        self.state.mode = self.values[0]
-        await interaction.response.edit_message(
-            embed=build_preview_embed(self.state),
-            view=TargetPermissionRepairView(self.state),
+        async def on_pick(interaction: discord.Interaction, value: str) -> None:
+            if not await _repair_actor_gate(interaction, self.state):
+                return
+            self.state.mode = value
+            await _restore_repair_view(interaction, self.state)
+
+        async def on_home(interaction: discord.Interaction) -> None:
+            if not await _repair_actor_gate(interaction, self.state):
+                return
+            await _restore_repair_view(interaction, self.state)
+
+        super().__init__(
+            author_id=0,
+            choices=[
+                make_choice(
+                    "Recommended minimum",
+                    "minimum",
+                    description="Only permissions required by the selected feature",
+                    default=state.mode != "full",
+                ),
+                make_choice(
+                    "Full Dank Shield control",
+                    "full",
+                    description="Broad non-Administrator channel control",
+                    default=state.mode == "full",
+                ),
+            ],
+            on_pick=on_pick,
+            custom_id="dank_permission_repair:mode",
+            placeholder=f"Repair mode: {_mode_label(state.mode)}"[:100],
+            title="Fix Access",
+            timeout=900,
+            on_home=on_home,
+            on_cancel=on_home,
         )
 
 
@@ -1616,8 +1660,28 @@ class TargetPermissionRepairView(discord.ui.View):
         super().__init__(timeout=900)
         self.state = state
         self.add_item(_TargetChannelSelect(state))
-        self.add_item(_FeatureSelect(state))
-        self.add_item(_ModeSelect(state))
+        self.add_item(
+            DankPickerOpenButton(
+                # The old embedded select's placeholder showed the
+                # current feature ("Feature: Tickets"); the opener
+                # label carries it now so the panel still visibly
+                # preserves the selection before a target is picked.
+                label=f"Feature: {_feature_label(state.feature)}"[:80],
+                custom_id="dank_permission_repair:feature:open",
+                row=1,
+                build=lambda interaction: _FeatureSelect(state),
+            )
+        )
+        self.add_item(
+            DankPickerOpenButton(
+                # Same visible-preservation as the feature opener:
+                # the old select placeholder showed the current mode.
+                label=f"Repair mode: {_mode_label(state.mode)}"[:80],
+                custom_id="dank_permission_repair:mode:open",
+                row=2,
+                build=lambda interaction: _ModeSelect(state),
+            )
+        )
 
         is_category = isinstance(state.target, discord.CategoryChannel)
         self.toggle_children.disabled = not is_category

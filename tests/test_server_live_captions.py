@@ -87,8 +87,16 @@ def test_member_live_caption_panel_exposes_dropdown_language_accuracy_control() 
     assert "My Language" in labels
     assert "Refresh" in labels
 
+    # Slice 9: the language selects are house pickers behind opener
+    # buttons on these views; the pickers keep the same options.
+    from stoney_verify.commands_ext.public_live_captions import (
+        CaptionLanguageChoiceSelect,
+        CaptionLanguageGroupSelect,
+    )
+
     group_view = CaptionLanguageGroupView(7, "")
-    group_select = next(item for item in group_view.children if isinstance(item, discord.ui.Select))
+    assert any(getattr(item, "label", "") == "Choose Language Group" for item in group_view.children)
+    group_select = CaptionLanguageGroupSelect(7, "")
     assert group_select.options[0].value == "__auto__"
     assert "All Supported Languages" in group_select.options[0].label
     assert len(group_select.options) <= 25
@@ -96,8 +104,7 @@ def test_member_live_caption_panel_exposes_dropdown_language_accuracy_control() 
     grouped_codes = set()
     for group_key, group in _CAPTION_LANGUAGE_GROUPS.items():
         assert len(group["options"]) <= 25
-        choice_view = CaptionLanguageChoiceView(7, group_key, "")
-        choice_select = next(item for item in choice_view.children if isinstance(item, discord.ui.Select))
+        choice_select = CaptionLanguageChoiceSelect(7, group_key, "")
         assert 1 <= len(choice_select.options) <= 25
         grouped_codes.update(option.value for option in choice_select.options)
 
@@ -120,7 +127,10 @@ def test_caption_language_output_modes_are_owner_configurable() -> None:
     assert _caption_output_mode({CAPTION_OUTPUT_MODE_KEY: "bilingual"}) == "bilingual"
 
     view = CaptionLanguageOutputView(7, "original")
-    select = next(item for item in view.children if isinstance(item, discord.ui.Select))
+    assert any(getattr(item, "label", "") == "Choose Output Mode" for item in view.children)
+    from stoney_verify.commands_ext.public_live_captions import CaptionLanguageOutputSelect
+
+    select = CaptionLanguageOutputSelect(7, "original")
     assert {option.value for option in select.options} == {"original", "english", "bilingual"}
 
     ui = _text(GENERAL_UI)

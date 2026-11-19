@@ -13,6 +13,7 @@ from typing import Any, Mapping
 import discord
 
 from .embed_studio_core import StudioValidationError, validate_project
+from .ui.picker import DankPersistentSelect
 
 ROLE_PREFIX = "dank:es:role:v1:"
 _ATTACHED_BOT_IDS: set[int] = set()
@@ -76,7 +77,12 @@ def member_role_view(project: Mapping[str, Any], token: str) -> discord.ui.View 
     if not roles:
         return view
     if model["role_mode"] == "dropdown":
-        select = discord.ui.Select(
+        # Framework-owned persistent select: identical stable
+        # custom_id, placeholder and options. It is resolved by the
+        # module's global on_interaction listener (never by a
+        # per-message View registration), so the persistent
+        # contract is unchanged.
+        select = DankPersistentSelect(
             custom_id=role_custom_id(token, "pick"),
             placeholder="Select a role to add or remove",
             min_values=1, max_values=1,

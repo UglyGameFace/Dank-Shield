@@ -7,6 +7,7 @@ from typing import Any, Optional
 import discord
 
 from ..panel_lifecycle import PRIVATE_MENU_TTL_SECONDS
+from ..ui.picker import DankRoleSelect, DankUserSelect
 
 from stoney_verify.interaction_guard import run_guarded_interaction
 from ..guild_config import get_guild_config, invalidate_guild_config
@@ -155,20 +156,28 @@ def _target_embed(member: discord.Member) -> discord.Embed:
     return embed
 
 
-class VerifyMemberSelect(discord.ui.UserSelect):
+class VerifyMemberSelect(DankUserSelect):
+    """House user picker for the Verify Center (framework wrapper).
+
+    Was a raw ``discord.ui.UserSelect``; picking still resolves the
+    chosen user to a current guild member and opens the same member
+    action view, with the same rejection for a non-member.
+    """
+
     def __init__(self, parent: "VerifyCenterView") -> None:
         self.parent_view = parent
         super().__init__(
+            author_id=int(getattr(parent, "owner_id", 0) or 0),
+            on_pick=self._open_member,
             placeholder="Choose a member to inspect or repair…",
             min_values=1,
             max_values=1,
-            custom_id="dank:verify:center:member:v1",
             row=0,
         )
+        self.custom_id = "dank:verify:center:member:v1"
 
-    async def callback(self, interaction: discord.Interaction) -> None:
-        selected = self.values[0] if self.values else None
-        member = interaction.guild.get_member(int(getattr(selected, "id", 0) or 0))
+    async def _open_member(self, interaction: discord.Interaction, selected: object) -> None:
+        member = interaction.guild.get_member(int(getattr(selected, "id", 0) or 0)) if interaction.guild else None
         if not isinstance(member, discord.Member):
             return await _private(interaction, "❌ That user is not currently a member of this server.")
         view = VerifyMemberActionView(self.parent_view.owner_id, member.id)
@@ -411,18 +420,29 @@ class VerifyRoleMappingView(_OwnedView):
         await _replace(interaction, embed=_center_embed(), view=VerifyCenterView(self.owner_id))
 
 
-class VerifyRoleSelect(discord.ui.RoleSelect):
+class VerifyRoleSelect(DankRoleSelect):
+    """House role picker for verification role mapping (framework wrapper).
+
+    Was a raw ``discord.ui.RoleSelect``; picking still runs the same
+    guarded ``_save_mapping`` flow with the same staff and hierarchy
+    checks inside it.
+    """
+
     def __init__(self, parent: "VerifySingleRoleMapView") -> None:
         self.parent_view = parent
         super().__init__(
+            author_id=int(getattr(parent, "owner_id", 0) or 0),
+            on_pick=self._run_guarded,
             placeholder="Choose the exact server role…",
             min_values=1,
             max_values=1,
-            custom_id=f"dank:verify:role_map:{parent.logical}:v1",
             row=0,
         )
+        self.custom_id = f"dank:verify:role_map:{parent.logical}:v1"
 
-    async def callback(self, interaction: discord.Interaction) -> None:
+    async def _run_guarded(self, interaction: discord.Interaction, role: object) -> None:
+        self._picked_role = role
+
         async def action() -> None:
             await self._save_mapping(interaction)
 
@@ -440,7 +460,7 @@ class VerifyRoleSelect(discord.ui.RoleSelect):
         )
 
     async def _save_mapping(self, interaction: discord.Interaction) -> None:
-        role = self.values[0] if self.values else None
+        role = getattr(self, "_picked_role", None) or (self.values[0] if self.values else None)
         if not isinstance(role, discord.Role):
             await _private(interaction, "❌ Choose a server role.")
             return

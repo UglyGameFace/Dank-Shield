@@ -12,36 +12,87 @@ from .startup_guards.discord_api_safety import fetch_message_with_api_safety
 from .embed_studio_core import StudioValidationError
 from .embed_studio_live_text import enroll,disable,live_project
 from .embed_studio_ui import (
-    _StudioView, _home, _say, _menu, _load_library, _save_library,
+    _StudioPickerView, _StudioView, _home, _say, _menu, _load_library, _save_library,
     _post_blockers, _published, StudioSession,
+)
+from .ui.picker import make_choice
+
+
+_LIVE_HEADING = "🔄 Hourly Live Text"
+_LIVE_DESCRIPTION = (
+    "Choose an existing tracked post. Updates are optional and "
+    "recheck the moderator's access, bot authorship and content "
+    "before editing. A later manual Publish resets enrollment."
 )
 
 
-class LiveTextSelect(discord.ui.Select):
+class LiveTextSelect(_StudioPickerView):
+    """House picker for choosing a Live Text post to manage.
+
+    Was a raw ``discord.ui.Select`` inside LiveTextMenu; picking a
+    post opens the same manage menu, and Back returns to the Live
+    Text menu.
+    """
+
     def __init__(self,session: StudioSession,rows: list[tuple[str,dict[str,Any]]]) -> None:
-        self.session=session
-        opts=[
-            discord.SelectOption(
-                label=f"{'On' if row.get('live_nonce') else 'Off'} • Channel {str(row['channel_id'])[:19]}",
+        self.rows=list(rows)
+
+        async def on_pick(interaction: discord.Interaction,value: str) -> None:
+            if value=="none":
+                return await _say(interaction,"Publish Smart Text in an embed first, then reopen Edit Posted.")
+            await _menu(interaction,heading="Manage This Live Text Post",
+                        description="Hourly text updates only. No new posts or automatic role controls.",
+                        view=LiveTextChoice(session,value))
+
+        async def on_home(interaction: discord.Interaction) -> None:
+            await _menu(interaction,heading=_LIVE_HEADING,
+                        description=_LIVE_DESCRIPTION,
+                        view=LiveTextMenu(session,self.rows))
+
+        choices=[
+            make_choice(
+                f"{'On' if row.get('live_nonce') else 'Off'} • Channel {str(row['channel_id'])[:19]}",
+                key,
                 description=f"Message {str(row['message_id'])[:20]}",
-                value=key,
-            ) for key,row in rows
-        ] or [discord.SelectOption(label="No eligible Smart Text posts",value="none")]
-        super().__init__(placeholder="Choose a bot-owned Smart Text post",options=opts,row=0)
+            ) for key,row in self.rows
+        ] or [make_choice("No eligible Smart Text posts","none")]
+        super().__init__(
+            session,
+            choices=choices,
+            on_pick=on_pick,
+            custom_id="dank:embed_studio:live_text:picker:v1",
+            placeholder="Choose a bot-owned Smart Text post",
+            title="Live Text",
+            on_home=on_home,
+            home_label="Back",
+        )
+
+
+class _LiveTextPickerOpenButton(discord.ui.Button):
+    """Swaps the Live Text menu for its house picker via _menu."""
+
+    def __init__(self,session: StudioSession,rows: list[tuple[str,dict[str,Any]]]) -> None:
+        super().__init__(
+            label="Choose a Post",emoji="🔄",
+            style=discord.ButtonStyle.primary,
+            custom_id="dank:embed_studio:live_text:open",row=0,
+        )
+        self.session=session
+        self.rows=list(rows)
 
     async def callback(self,interaction: discord.Interaction) -> None:
-        key=self.values[0]
-        if key=="none":
-            return await _say(interaction,"Publish Smart Text in an embed first, then reopen Edit Posted.")
-        await _menu(interaction,heading="Manage This Live Text Post",
-                    description="Hourly text updates only. No new posts or automatic role controls.",
-                    view=LiveTextChoice(self.session,key))
+        view=self.view
+        if isinstance(view,_StudioView) and not await view.interaction_check(interaction):
+            return
+        await _menu(interaction,heading=_LIVE_HEADING,
+                    description=_LIVE_DESCRIPTION,
+                    view=LiveTextSelect(self.session,self.rows))
 
 
 class LiveTextMenu(_StudioView):
     def __init__(self,session: StudioSession,rows: list[tuple[str,dict[str,Any]]]) -> None:
         super().__init__(session)
-        self.add_item(LiveTextSelect(session,rows))
+        self.add_item(_LiveTextPickerOpenButton(session,rows))
 
     @discord.ui.button(label="Back to Posted",emoji="◀️",style=discord.ButtonStyle.secondary,row=1)
     async def back(self,interaction: discord.Interaction,_button: discord.ui.Button) -> None:

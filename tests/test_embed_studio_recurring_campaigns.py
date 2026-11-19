@@ -167,5 +167,9 @@ def test_private_campaign_ui_is_importable_and_has_four_inputs():
                                 channel_id=789, post_key="", review=review)
     assert len(modal.children) == 4
     assert all(child.required for child in modal.children)
-    assert any("No active" in o.label for child in StudioCampaignsMenu(session, []).children
-               if hasattr(child, "options") for o in child.options)
+    # Slice 9: the campaign select is a house picker behind an
+    # opener button on the menu; the picker itself keeps the
+    # "No active" empty-state option.
+    from stoney_verify.embed_studio_campaign_ui import StudioCampaignSelect
+
+    assert any("No active" in o.label for o in StudioCampaignSelect(session, []).options)

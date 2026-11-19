@@ -186,7 +186,10 @@ def test_directory_uses_registered_canonical_routes_only() -> None:
         assert item.delivery_contract
     assert find_notification_owner("unrecognized") is None
     view = directory.NotificationOwnerDirectoryView(42, 987)
-    picker = next(c for c in view.children if isinstance(c, discord.ui.Select))
+    # Slice 9: the owner select is a house picker behind an opener
+    # button on the directory view; the picker keeps the same options.
+    assert any(getattr(c, "label", "") == "Choose a System" for c in view.children)
+    picker = directory.NotificationOwnerPicker(42, 987)
     assert {option.value for option in picker.options} == {item.key for item in NOTIFICATION_OWNERS}
     assert len(picker.options) <= 25
     assert all(len(option.description) <= 100 for option in picker.options)

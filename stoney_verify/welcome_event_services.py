@@ -8,6 +8,7 @@ from typing import Any, Mapping, Optional
 import discord
 
 from .lifecycle_template_renderer import render_lifecycle_template
+from .ui.picker import DankPagedPickerView, DankPickerOpenButton, make_choice
 
 JOIN_TITLE = "Welcome, {username}!"
 JOIN_BODY = "{random_welcome_line}\n\nStart here: {rules_channel} • Verify: {verify_channel} • Help: {support_channel}"
@@ -318,7 +319,10 @@ def _channel_options(guild: discord.Guild, *, active_id: int = 0, kind: str) -> 
             continue
 
     rows.sort(key=lambda item: (-item[0], item[1]))
-    options = [option for _score, _pos, option in rows[:25]]
+    # All scored channels are returned; the house picker pages them
+    # with chunk_choices (the old raw select silently kept only the
+    # top 25 by score).
+    options = [option for _score, _pos, option in rows]
     if not options:
         options = [
             discord.SelectOption(
@@ -646,22 +650,53 @@ class WelcomeEventTemplateModal(discord.ui.Modal):
         await _save_template(interaction, kind=self.kind, title=str(self.title_input.value), body=str(self.body_input.value))
 
 
-class WelcomeEventChannelSelect(discord.ui.Select):
+class WelcomeEventChannelSelect(DankPagedPickerView):
+    """House picker for the join/leave announcement channel.
+
+    Was a raw ``discord.ui.Select`` over the top-25 scored channels;
+    the picker pages the full scored channel list. The
+    setup-permission gate stays inside the pick handler, and
+    picking saves exactly the same channel through
+    ``_save_event_channel``. Back/Close restores the events center.
+    """
+
     def __init__(self, *, guild: discord.Guild, cfg: Any, kind: str) -> None:
         self.kind = kind
+        self._guild = guild
+        self._cfg = cfg
         active = _leave_channel(guild, cfg) if kind == "leave" else _join_channel(guild, cfg)
         active_id = int(active.id) if isinstance(active, discord.TextChannel) else 0
         label = _kind_label(kind)
+
+        async def on_pick(interaction: discord.Interaction, value: str) -> None:
+            await self._apply_pick(interaction, value)
+
+        async def on_home(interaction: discord.Interaction) -> None:
+            message = getattr(interaction, "message", None)
+            embeds = getattr(message, "embeds", None) if message is not None else None
+            embed = embeds[0] if embeds else None
+            view = WelcomeEventsCenterView(guild=self._guild, cfg=self._cfg)
+            if interaction.response.is_done():
+                await interaction.edit_original_response(embed=embed, view=view)
+            else:
+                await interaction.response.edit_message(embed=embed, view=view)
+
         super().__init__(
-            placeholder=f"Choose {label} channel...",
-            min_values=1,
-            max_values=1,
-            options=_channel_options(guild, active_id=active_id, kind=kind),
+            author_id=0,
+            choices=[
+                make_choice(option.label, option.value, description=option.description or "")
+                for option in _channel_options(guild, active_id=active_id, kind=kind)
+            ],
+            on_pick=on_pick,
             custom_id=f"dank_setup_welcome_events:{kind}:channel",
-            row=0 if kind == "join" else 1,
+            placeholder=f"Choose {label} channel...",
+            title=f"{label} Channel",
+            timeout=900,
+            on_home=on_home,
+            on_cancel=on_home,
         )
 
-    async def callback(self, interaction: discord.Interaction) -> None:
+    async def _apply_pick(self, interaction: discord.Interaction, picked: str) -> None:
         from stoney_verify.commands_ext.public_setup_group import _require_setup_permission
 
         if not await _require_setup_permission(interaction):
@@ -671,7 +706,7 @@ class WelcomeEventChannelSelect(discord.ui.Select):
         if guild is None:
             return await _send_ephemeral(interaction, "This must be used inside a server.")
 
-        channel_id = int((self.values or ["0"])[0] or 0)
+        channel_id = int(picked or 0)
         channel = guild.get_channel(channel_id)
         if not isinstance(channel, discord.TextChannel):
             try:
@@ -774,26 +809,55 @@ class WelcomePreviewButton(discord.ui.Button):
         )
 
 
-class WelcomePresetSelect(discord.ui.Select):
-    def __init__(self, *, guild: discord.Guild) -> None:
-        super().__init__(
-            placeholder="Choose a safe starter template...",
-            min_values=1,
-            max_values=1,
-            options=_preset_options(guild),
-            custom_id="dank_setup_welcome_events:preset_select",
-            row=0,
-        )
+class WelcomePresetSelect(DankPagedPickerView):
+    """House picker for a safe starter template preset.
 
-    async def callback(self, interaction: discord.Interaction) -> None:
-        value = (self.values or ["community"])[0]
-        await _apply_template_preset(interaction, value)
+    Was a raw ``discord.ui.Select``; picking applies the same
+    preset through ``_apply_template_preset`` (setup-permission
+    gate inside). Back/Close restores the preset picker panel.
+    """
+
+    def __init__(self, *, guild: discord.Guild) -> None:
+        self._guild = guild
+
+        async def on_pick(interaction: discord.Interaction, value: str) -> None:
+            await _apply_template_preset(interaction, value or "community")
+
+        async def on_home(interaction: discord.Interaction) -> None:
+            view = WelcomePresetPickerView(guild=self._guild)
+            if interaction.response.is_done():
+                await interaction.edit_original_response(view=view)
+            else:
+                await interaction.response.edit_message(view=view)
+
+        super().__init__(
+            author_id=0,
+            choices=[
+                make_choice(option.label, option.value, description=option.description or "")
+                for option in _preset_options(guild)
+            ],
+            on_pick=on_pick,
+            custom_id="dank_setup_welcome_events:preset_select",
+            placeholder="Choose a safe starter template...",
+            title="Template Presets",
+            timeout=180,
+            on_home=on_home,
+            on_cancel=on_home,
+        )
 
 
 class WelcomePresetPickerView(discord.ui.View):
     def __init__(self, *, guild: discord.Guild) -> None:
         super().__init__(timeout=180)
-        self.add_item(WelcomePresetSelect(guild=guild))
+        self.add_item(
+            DankPickerOpenButton(
+                label="Choose a Template",
+                emoji="🧩",
+                custom_id="dank_setup_welcome_events:preset_select:open",
+                row=0,
+                build=lambda interaction: WelcomePresetSelect(guild=guild),
+            )
+        )
 
 
 class WelcomeTemplatePresetsButton(discord.ui.Button):
@@ -932,8 +996,24 @@ class WelcomeEventsCenterView(discord.ui.View):
         join_channel = _join_channel(guild, cfg)
         leave_channel = _leave_channel(guild, cfg)
 
-        self.add_item(WelcomeEventChannelSelect(guild=guild, cfg=cfg, kind="join"))
-        self.add_item(WelcomeEventChannelSelect(guild=guild, cfg=cfg, kind="leave"))
+        self.add_item(
+            DankPickerOpenButton(
+                label=f"Choose {_kind_label('join')} Channel",
+                emoji="#️⃣",
+                custom_id="dank_setup_welcome_events:join:channel:open",
+                row=0,
+                build=lambda interaction: WelcomeEventChannelSelect(guild=guild, cfg=cfg, kind="join"),
+            )
+        )
+        self.add_item(
+            DankPickerOpenButton(
+                label=f"Choose {_kind_label('leave')} Channel",
+                emoji="#️⃣",
+                custom_id="dank_setup_welcome_events:leave:channel:open",
+                row=1,
+                build=lambda interaction: WelcomeEventChannelSelect(guild=guild, cfg=cfg, kind="leave"),
+            )
+        )
 
         self.add_item(WelcomeToggleButton(kind="join", enabled=join_enabled, has_channel=isinstance(join_channel, discord.TextChannel)))
         self.add_item(WelcomeToggleButton(kind="leave", enabled=leave_enabled, has_channel=isinstance(leave_channel, discord.TextChannel)))

@@ -274,9 +274,14 @@ def test_discord_ui_has_selectable_25_member_groups_and_two_delivery_modes():
     )
     view = ui.ManualPreviewView(7, preview)
     assert {item.label for item in view.children if isinstance(item, discord.ui.Button)} == {
-        "Confirm Manual Send", "Next Eligible Group", "Cancel",
+        "Confirm Manual Send", "Next Eligible Group", "Cancel", "Choose Recipients",
     }
-    assert isinstance(view.recipient_selector, discord.ui.Select)
+    # Slice 9: the recipient multi-select is a house-framework
+    # DankMultiPickerView behind the "Choose Recipients" opener; the
+    # picker still carries all 25 candidates, all selected by default.
+    from stoney_verify.ui.picker import DankMultiPickerView
+
+    assert isinstance(view.recipient_selector, DankMultiPickerView)
     assert len(view.recipient_selector.options) == 25
     assert all(option.default for option in view.recipient_selector.options)
     assert view.next_page.disabled is False

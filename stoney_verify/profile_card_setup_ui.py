@@ -12,6 +12,7 @@ import discord
 from . import profile_card_setup_ui_core as _core
 from .commands_ext.public_setup_group import _require_setup_permission
 from .ui.current_channel import current_text_channel
+from .ui.picker import DankChannelSelect
 from .guild_config import get_guild_config, upsert_guild_config
 from .profile_card_runtime import (
     LIVE_ALLOWED_FIELDS_KEY,
@@ -106,18 +107,33 @@ async def _save_selected_channels(
     )
 
 
-class LiveProfileChannelSelect(discord.ui.ChannelSelect):
+async def _ignore_live_channel_pick(interaction: discord.Interaction, channel: object) -> None:
+    return None
+
+
+class LiveProfileChannelSelect(DankChannelSelect):
+    """House channel picker for Live Profile channels (framework wrapper).
+
+    Was a raw ``discord.ui.ChannelSelect``. This is a multi-channel
+    pick (up to ``_MAX_LIVE_CHANNELS`` channels, saved immediately),
+    which the framework wrapper's single-pick handler does not cover,
+    so the multi-value callback is retained under the framework
+    wrapper with its host-view check and save flow unchanged.
+    """
+
     def __init__(self) -> None:
         super().__init__(
+            author_id=0,
+            on_pick=_ignore_live_channel_pick,
             placeholder="Choose channels — selection saves immediately…",
             min_values=1,
             max_values=_MAX_LIVE_CHANNELS,
             channel_types=[discord.ChannelType.text],
-            custom_id="dank_setup_profile_cards:channels:v2",
             row=0,
         )
+        self.custom_id = "dank_setup_profile_cards:channels:v2"
 
-    async def callback(self, interaction: discord.Interaction) -> None:
+    async def callback(self, interaction: discord.Interaction) -> None:  # type: ignore[override]
         view = self.view
         if not isinstance(view, ProfileCardSetupView) or not await view.interaction_check(interaction):
             return

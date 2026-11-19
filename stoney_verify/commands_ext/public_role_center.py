@@ -23,7 +23,13 @@ from stoney_verify.community_pings_service import community_member_lock
 from stoney_verify.panel_lifecycle import PRIVATE_MENU_TTL_SECONDS
 from stoney_verify.services import role_mutation_authority
 from stoney_verify.services import search_safe_naming
-from stoney_verify.ui.picker import DankRoleSelect
+from stoney_verify.ui.picker import (
+    DankMultiPickerView,
+    DankPagedPickerView,
+    DankPickerOpenButton,
+    DankRoleSelect,
+    make_choice,
+)
 from .role_center_navigation import CloseRolePanelButton
 
 _ROLE_EDITOR_PREFIX = "dank:roles:v1:"
@@ -586,39 +592,69 @@ _ROLES_PROFILES_SECTIONS = {
 }
 
 
-class RolesProfilesSectionSelect(discord.ui.Select):
+class RolesProfilesSectionSelect(DankPagedPickerView):
+    """House picker for switching Roles & Profiles sections.
+
+    Was a raw ``discord.ui.Select``; the owner gate (exact wording)
+    stays inside the pick handler, and picking renders the same
+    RolesProfilesView for the chosen section. Back/Close restores
+    the panel on the current section.
+    """
+
     def __init__(self, owner_id: int, section: str, *, staff: bool, role_manager: bool, setup_manager: bool) -> None:
         self.owner_id = int(owner_id)
         self.staff = staff
         self.role_manager = role_manager
         self.setup_manager = setup_manager
+        self.section = section
+
+        async def on_pick(interaction: discord.Interaction, value: str) -> None:
+            if int(interaction.user.id) != self.owner_id:
+                return await _reply(interaction, "Open your own Roles & Profiles panel.")
+            await _replace(
+                interaction,
+                embed=_center_embed(
+                    staff=self.staff, role_manager=self.role_manager,
+                    setup_manager=self.setup_manager, section=value,
+                ),
+                view=RolesProfilesView(
+                    self.owner_id, staff=self.staff, role_manager=self.role_manager,
+                    setup_manager=self.setup_manager, section=value,
+                ),
+            )
+
+        async def on_home(interaction: discord.Interaction) -> None:
+            if int(interaction.user.id) != self.owner_id:
+                return await _reply(interaction, "Open your own Roles & Profiles panel.")
+            await _replace(
+                interaction,
+                embed=_center_embed(
+                    staff=self.staff, role_manager=self.role_manager,
+                    setup_manager=self.setup_manager, section=self.section,
+                ),
+                view=RolesProfilesView(
+                    self.owner_id, staff=self.staff, role_manager=self.role_manager,
+                    setup_manager=self.setup_manager, section=self.section,
+                ),
+            )
+
         super().__init__(
-            placeholder="Choose roles or profile settings",
-            options=[
-                discord.SelectOption(label=label, value=key, default=section == key)
+            author_id=0,
+            choices=[
+                make_choice(label, key, default=section == key)
                 for key, label in (
                     ("profile", "My Profile & Choices"),
                     *( [("staff", "Staff Role Tools")] if staff else [] ),
                     *( [("roles", "Server Role Administration")] if role_manager else [] ),
                 )
             ],
-            row=0, custom_id="dank:role:home:section:v2",
-        )
-
-    async def callback(self, interaction: discord.Interaction) -> None:
-        if int(interaction.user.id) != self.owner_id:
-            return await _reply(interaction, "Open your own Roles & Profiles panel.")
-        section = self.values[0]
-        await _replace(
-            interaction,
-            embed=_center_embed(
-                staff=self.staff, role_manager=self.role_manager,
-                setup_manager=self.setup_manager, section=section,
-            ),
-            view=RolesProfilesView(
-                self.owner_id, staff=self.staff, role_manager=self.role_manager,
-                setup_manager=self.setup_manager, section=section,
-            ),
+            on_pick=on_pick,
+            custom_id="dank:role:home:section:v2",
+            placeholder="Choose roles or profile settings",
+            title="Roles & Profiles",
+            timeout=PRIVATE_MENU_TTL_SECONDS,
+            on_home=on_home,
+            on_cancel=on_home,
         )
 
 
@@ -662,11 +698,18 @@ class RolesProfilesView(_OwnedView):
             for item in self.children
         }
         self.clear_items()
-        self.add_item(RolesProfilesSectionSelect(
-            self.owner_id, self.section,
-            staff=self.staff, role_manager=self.role_manager,
-            setup_manager=self.setup_manager,
-        ))
+        self.add_item(
+            DankPickerOpenButton(
+                label="Choose Section",
+                custom_id="dank:role:home:section:open",
+                row=0,
+                build=lambda interaction: RolesProfilesSectionSelect(
+                    self.owner_id, self.section,
+                    staff=self.staff, role_manager=self.role_manager,
+                    setup_manager=self.setup_manager,
+                ),
+            )
+        )
         for index, name in enumerate((*_ROLES_PROFILES_SECTIONS[self.section], "Dank Shield Home", "Close")):
             if name not in eligible:
                 continue
@@ -1304,7 +1347,16 @@ class EditRoleAppearanceModal(discord.ui.Modal):
         )
 
 
-class PermissionGroupSelect(discord.ui.Select):
+class PermissionGroupSelect(DankPagedPickerView):
+    """House picker for choosing a role permission group.
+
+    Was a raw ``discord.ui.Select`` whose options silently truncated
+    the group list with ``groups[:25]``; the picker pages the full
+    list. Picking runs the same role-manager gate and blocker checks
+    and opens the same PermissionToggleView for the picked group.
+    Back/Close restores the group picker panel untouched.
+    """
+
     def __init__(
         self,
         parent: "PermissionGroupPickerView",
@@ -1312,24 +1364,51 @@ class PermissionGroupSelect(discord.ui.Select):
     ) -> None:
         self.parent_view = parent
         self.groups = {key: (label, names) for key, label, names in groups}
+
+        async def on_pick(interaction: discord.Interaction, value: str) -> None:
+            await self._apply_pick(interaction, value)
+
+        async def on_home(interaction: discord.Interaction) -> None:
+            guild, actor = await _require_role_manager(interaction)
+            if guild is None or actor is None:
+                return
+            role = guild.get_role(self.parent_view.role_id)
+            if not isinstance(role, discord.Role):
+                return await _reply(interaction, "❌ That role no longer exists.")
+            view = PermissionGroupPickerView(
+                self.parent_view.owner_id, role.id
+            ).attach_for_role(role)
+            await _replace(
+                interaction,
+                embed=discord.Embed(
+                    title=f"🔐 Permissions · {role.name}",
+                    description="Choose a permission group to edit.",
+                    color=role.colour if role.colour.value else discord.Color.blurple(),
+                ),
+                view=view,
+            )
+
         super().__init__(
-            placeholder="Choose a permission group…",
-            min_values=1,
-            max_values=1,
-            options=[
-                discord.SelectOption(
-                    label=label[:100],
-                    value=key[:100],
+            author_id=0,
+            choices=[
+                make_choice(
+                    label[:100],
+                    key[:100],
                     description=f"{len(names)} permissions",
                     emoji="🔐",
                 )
-                for key, label, names in groups[:25]
+                for key, label, names in groups
             ],
+            on_pick=on_pick,
             custom_id=f"{_ROLE_EDITOR_PREFIX}permission_group",
-            row=0,
+            placeholder="Choose a permission group…",
+            title="Permission Groups",
+            timeout=PRIVATE_MENU_TTL_SECONDS,
+            on_home=on_home,
+            on_cancel=on_home,
         )
 
-    async def callback(self, interaction: discord.Interaction) -> None:
+    async def _apply_pick(self, interaction: discord.Interaction, key: str) -> None:
         guild, actor = await _require_role_manager(interaction)
         if guild is None or actor is None:
             return
@@ -1339,7 +1418,6 @@ class PermissionGroupSelect(discord.ui.Select):
         blockers = _role_mutation_blockers(guild, actor, role)
         if blockers:
             return await _reply(interaction, "❌ " + "\n• ".join(blockers))
-        key = str((self.values or [""])[0])
         group = self.groups.get(key)
         if group is None:
             return await _reply(interaction, "❌ That permission group is no longer available.")
@@ -1374,7 +1452,16 @@ class PermissionGroupPickerView(_OwnedView):
 
     def attach_for_role(self, role: discord.Role) -> "PermissionGroupPickerView":
         if not self._select_added:
-            self.add_item(PermissionGroupSelect(self, _permission_groups(role)))
+            groups = _permission_groups(role)
+            self.add_item(
+                DankPickerOpenButton(
+                    label="Choose Permission Group",
+                    emoji="🔐",
+                    custom_id=f"{_ROLE_EDITOR_PREFIX}permission_group:open",
+                    row=0,
+                    build=lambda interaction: PermissionGroupSelect(self, groups),
+                )
+            )
             self._select_added = True
         return self
 
@@ -1396,39 +1483,88 @@ class PermissionGroupPickerView(_OwnedView):
         )
 
 
-class PermissionToggleSelect(discord.ui.Select):
+class PermissionToggleSelect(DankMultiPickerView):
+    """House multi-picker for toggling one group's permissions.
+
+    Was a raw multi ``discord.ui.Select``; picking applies exactly
+    the picked permission set through the same
+    ``_apply_permission_selection`` flow. Back/Close returns to the
+    permission-group panel without applying anything.
+    """
+
     def __init__(
         self,
         parent: "PermissionToggleView",
         role: discord.Role,
     ) -> None:
         self.parent_view = parent
-        options = [
-            discord.SelectOption(
-                label=_permission_label(name),
-                value=name,
-                default=bool(getattr(role.permissions, name, False)),
+        self._role_id = int(role.id)
+
+        async def on_pick(interaction: discord.Interaction, values: list[str]) -> None:
+            await _apply_permission_selection(
+                interaction,
+                owner_id=self.parent_view.owner_id,
+                role_id=self.parent_view.role_id,
+                group_key=self.parent_view.group_key,
+                selected=set(str(value) for value in values),
+                allow_admin=False,
             )
-            for name in parent.names
-        ]
+
+        async def on_home(interaction: discord.Interaction) -> None:
+            guild, actor = await _require_role_manager(interaction)
+            if guild is None or actor is None:
+                return
+            live_role = guild.get_role(self._role_id)
+            if not isinstance(live_role, discord.Role):
+                return await _reply(interaction, "❌ That role no longer exists.")
+            view = PermissionGroupPickerView(
+                self.parent_view.owner_id, live_role.id
+            ).attach_for_role(live_role)
+            await _replace(
+                interaction,
+                embed=discord.Embed(
+                    title=f"🔐 Permissions · {live_role.name}",
+                    description="Choose a permission group to edit.",
+                    color=live_role.colour if live_role.colour.value else discord.Color.blurple(),
+                ),
+                view=view,
+            )
+
         super().__init__(
-            placeholder="Select permissions to enable…",
-            min_values=0,
-            max_values=max(1, len(options)),
-            options=options,
+            author_id=0,
+            choices=[
+                make_choice(
+                    _permission_label(name),
+                    name,
+                    default=bool(getattr(role.permissions, name, False)),
+                )
+                for name in parent.names
+            ],
+            on_pick=on_pick,
             custom_id=f"{_ROLE_EDITOR_PREFIX}permission_values",
-            row=0,
+            placeholder="Select permissions to enable…",
+            title="Permission Toggle",
+            timeout=PRIVATE_MENU_TTL_SECONDS,
+            on_home=on_home,
+            on_cancel=on_home,
+            min_values=0,
+            max_values=max(1, len(parent.names)),
         )
 
+    @property
+    def options(self) -> list[discord.SelectOption]:
+        return [choice.to_option() for choice in self.choices]
+
+    @property
+    def values(self) -> list[str]:
+        return list(self.__dict__.get("_values") or [])
+
+    @values.setter
+    def values(self, new_values) -> None:
+        self.__dict__["_values"] = [str(value) for value in (new_values or [])]
+
     async def callback(self, interaction: discord.Interaction) -> None:
-        await _apply_permission_selection(
-            interaction,
-            owner_id=self.parent_view.owner_id,
-            role_id=self.parent_view.role_id,
-            group_key=self.parent_view.group_key,
-            selected=set(str(value) for value in self.values),
-            allow_admin=False,
-        )
+        await self.handle_pick(interaction, list(self.values))
 
 
 class PermissionToggleView(_OwnedView):
@@ -1448,7 +1584,15 @@ class PermissionToggleView(_OwnedView):
         self.names = tuple(str(name) for name in names)[:25]
 
     def attach_for_role(self, role: discord.Role) -> "PermissionToggleView":
-        self.add_item(PermissionToggleSelect(self, role))
+        self.add_item(
+            DankPickerOpenButton(
+                label="Select Permissions",
+                emoji="🔐",
+                custom_id=f"{_ROLE_EDITOR_PREFIX}permission_values:open",
+                row=0,
+                build=lambda interaction: PermissionToggleSelect(self, role),
+            )
+        )
         return self
 
     @discord.ui.button(label="Permission Groups", emoji="↩️", style=discord.ButtonStyle.secondary, row=1)

@@ -23,6 +23,12 @@ from .config_history_selective import (
     restore_config_version_selective,
 )
 from .discord_time import discord_timestamp_pair
+from .ui.picker import (
+    DankMultiPickerView,
+    DankPagedPickerView,
+    DankPickerOpenButton,
+    make_choice,
+)
 
 _PICKER_PAGE_SIZE = 20
 
@@ -509,25 +515,86 @@ def _confirmation_embed(
     return embed
 
 
-class ConfigHistorySelect(discord.ui.Select):
-    def __init__(self, versions: list[dict[str, Any]], page: int = 0) -> None:
-        options = [
-            option
-            for row in versions[page * 25:(page + 1) * 25]
-            if (option := _version_option(row)) is not None
-        ]
+async def _restore_picker_host(
+    interaction: discord.Interaction,
+    *,
+    embed: discord.Embed,
+    view: discord.ui.View,
+) -> None:
+    """Put a host panel back on a message a house picker borrowed."""
+    if interaction.response.is_done():
+        await interaction.edit_original_response(embed=embed, view=view)
+    else:
+        await interaction.response.edit_message(embed=embed, view=view)
+
+
+class ConfigHistorySelect(DankPagedPickerView):
+    """House picker for choosing a saved version to inspect.
+
+    Was a raw ``discord.ui.Select`` embedded in ConfigHistoryView,
+    showing one 25-version page slice. The picker pages the full
+    version list with ``chunk_choices`` so every retained version is
+    reachable, and picking a version opens the same version detail
+    the raw select opened (``open_config_version_detail`` with the
+    picked ``version_id``). Back/Close restores the history panel.
+    """
+
+    def __init__(
+        self,
+        versions: list[dict[str, Any]],
+        page: int = 0,
+        *,
+        host_view: Optional[discord.ui.View] = None,
+    ) -> None:
+        self.versions = list(versions)
+        self.host_view = host_view
+        choices = []
+        for row in self.versions:
+            option = _version_option(row)
+            if option is None:
+                continue
+            choices.append(
+                make_choice(
+                    option.label,
+                    option.value,
+                    description=option.description or "",
+                    emoji="💾" if bool(row.get("is_manual")) else "🕘",
+                )
+            )
+
+        async def on_pick(interaction: discord.Interaction, value: str) -> None:
+            version_id = _safe_int(value, 0)
+            if version_id > 0:
+                await open_config_version_detail(interaction, version_id)
+
+        async def on_home(interaction: discord.Interaction) -> None:
+            host = self.host_view or ConfigHistoryView(self.versions, page=self.page)
+            embed = _history_embed(interaction.guild, self.versions)
+            embed.add_field(
+                name="Version picker",
+                value=(
+                    f"Page {self.page + 1} of {(len(self.versions) + 24) // 25} "
+                    f"· {len(self.versions)} retained versions loaded."
+                ),
+                inline=False,
+            )
+            await _restore_picker_host(interaction, embed=embed, view=host)
+
         super().__init__(
+            author_id=0,
+            choices=choices,
+            on_pick=on_pick,
+            custom_id="dank:config_history:version:picker:v1",
             placeholder="Choose a saved version to inspect…",
-            min_values=1,
-            max_values=1,
-            options=options,
-            row=0,
+            title="Backups & Version History",
+            timeout=900,
+            on_home=on_home,
+            on_cancel=on_home,
+            page=page,
         )
 
-    async def callback(self, interaction: discord.Interaction) -> None:
-        version_id = _safe_int(self.values[0] if self.values else 0, 0)
-        if version_id > 0:
-            await open_config_version_detail(interaction, version_id)
+    def _for_page(self, page: int) -> "ConfigHistorySelect":
+        return ConfigHistorySelect(self.versions, page, host_view=self.host_view)
 
 
 class ConfigHistoryView(discord.ui.View):
@@ -536,7 +603,17 @@ class ConfigHistoryView(discord.ui.View):
         self.versions = versions
         self.page = max(0, min(page, (len(versions) - 1) // 25))
         if versions:
-            self.add_item(ConfigHistorySelect(versions, self.page))
+            self.add_item(
+                DankPickerOpenButton(
+                    label="Choose a Version",
+                    emoji="💾",
+                    custom_id="dank:config_history:version:open",
+                    row=0,
+                    build=lambda interaction: ConfigHistorySelect(
+                        self.versions, self.page, host_view=self
+                    ),
+                )
+            )
         self.previous_page.disabled = unavailable or self.page == 0
         self.next_page.disabled = unavailable or (self.page + 1) * 25 >= len(versions)
         self.choose_backup.disabled = bool(unavailable)
@@ -632,42 +709,89 @@ class ConfigHistoryView(discord.ui.View):
         await _close_setup(interaction)
 
 
-class BackupDomainSelect(discord.ui.Select):
-    def __init__(self, selected_domains: Iterable[str]) -> None:
+class BackupDomainSelect(DankMultiPickerView):
+    """House multi-picker for choosing backup areas (one or both).
+
+    Was a raw multi ``discord.ui.Select`` embedded in
+    BackupContentsView. Picking updates the host view's
+    ``selected_domains`` with exactly the picked values and restores
+    the host panel, exactly as the raw select's callback did.
+    Back/Close restores the host panel untouched.
+    """
+
+    def __init__(
+        self,
+        selected_domains: Iterable[str],
+        *,
+        host_view: Optional["BackupContentsView"] = None,
+    ) -> None:
         selected = set(selected_domains)
+        self.host_view = host_view
+
+        async def on_pick(interaction: discord.Interaction, values: list[str]) -> None:
+            host = self.host_view
+            if not isinstance(host, BackupContentsView):
+                return
+            host.selected_domains = set(values)
+            await _restore_picker_host(
+                interaction,
+                embed=_backup_contents_embed(host.selected_domains),
+                view=host,
+            )
+
+        async def on_home(interaction: discord.Interaction) -> None:
+            host = self.host_view
+            if not isinstance(host, BackupContentsView):
+                return
+            await _restore_picker_host(
+                interaction,
+                embed=_backup_contents_embed(host.selected_domains),
+                view=host,
+            )
+
         super().__init__(
-            placeholder="Choose one or both backup areas…",
-            min_values=1,
-            max_values=2,
-            options=[
-                discord.SelectOption(
-                    label="Core Settings",
-                    value=CORE_DOMAIN,
+            author_id=0,
+            choices=[
+                make_choice(
+                    "Core Settings",
+                    CORE_DOMAIN,
                     description="Features, rules, protection, setup, and saved Discord references",
                     emoji="⚙️",
                     default=CORE_DOMAIN in selected,
                 ),
-                discord.SelectOption(
-                    label="Ticket Choices",
-                    value=TICKET_CHOICES_DOMAIN,
+                make_choice(
+                    "Ticket Choices",
+                    TICKET_CHOICES_DOMAIN,
                     description="Ticket menu categories and their saved form configuration",
                     emoji="🎫",
                     default=TICKET_CHOICES_DOMAIN in selected,
                 ),
             ],
-            row=0,
+            on_pick=on_pick,
+            custom_id="dank:config_history:domains:picker:v1",
+            placeholder="Choose one or both backup areas…",
+            title="Choose Backup Contents",
+            timeout=600,
+            on_home=on_home,
+            on_cancel=on_home,
+            min_values=1,
+            max_values=2,
         )
 
+    @property
+    def options(self) -> list[discord.SelectOption]:
+        return [choice.to_option() for choice in self.choices]
+
+    @property
+    def values(self) -> list[str]:
+        return list(self.__dict__.get("_values") or [])
+
+    @values.setter
+    def values(self, new_values: Iterable[str]) -> None:
+        self.__dict__["_values"] = [str(value) for value in (new_values or [])]
+
     async def callback(self, interaction: discord.Interaction) -> None:
-        view = self.view
-        if not isinstance(view, BackupContentsView):
-            return
-        view.selected_domains = set(self.values)
-        view.rebuild_select()
-        await interaction.response.edit_message(
-            embed=_backup_contents_embed(view.selected_domains),
-            view=view,
-        )
+        await self.handle_pick(interaction, list(self.values))
 
 
 class BackupContentsView(discord.ui.View):
@@ -676,13 +800,23 @@ class BackupContentsView(discord.ui.View):
         self.selected_domains = set(
             selected_domains or (CORE_DOMAIN, TICKET_CHOICES_DOMAIN)
         )
-        self.add_item(BackupDomainSelect(self.selected_domains))
+        self.add_item(
+            DankPickerOpenButton(
+                label="Choose Backup Areas",
+                emoji="💾",
+                custom_id="dank:config_history:domains:open",
+                row=0,
+                build=lambda interaction: BackupDomainSelect(
+                    self.selected_domains, host_view=self
+                ),
+            )
+        )
 
     def rebuild_select(self) -> None:
-        for child in list(self.children):
-            if isinstance(child, BackupDomainSelect):
-                self.remove_item(child)
-        self.add_item(BackupDomainSelect(self.selected_domains))
+        # The domain picker is built fresh from ``selected_domains``
+        # each time its opener is pressed, so there is no embedded
+        # select to rebuild anymore; kept for caller compatibility.
+        return None
 
     @discord.ui.button(
         label="Create Selected Backup",
@@ -860,55 +994,105 @@ class ConfigVersionDetailView(discord.ui.View):
         await _close_setup(interaction)
 
 
-class RestoreItemSelect(discord.ui.Select):
+class RestoreItemSelect(DankMultiPickerView):
+    """House multi-picker for choosing exact changes on one page.
+
+    Was a raw multi ``discord.ui.Select`` embedded in
+    SelectiveRestorePickerView (the host view pages the changed items
+    at ``_PICKER_PAGE_SIZE`` per page, and that paging is unchanged).
+    Picking replaces the host's selection for this page's visible
+    items with exactly the picked values — selections on other pages
+    stay selected — and restores the host panel, exactly as the raw
+    select's callback did. Back/Close restores the host untouched.
+    """
+
     def __init__(
         self,
         plan: Mapping[str, Any],
         selected_items: Iterable[str],
         *,
         page: int,
+        host_view: Optional["SelectiveRestorePickerView"] = None,
     ) -> None:
         selected = {_safe_str(item).lower() for item in selected_items if _safe_str(item)}
         safe_page, start, end = _picker_bounds(plan, page)
         visible = _changed_items(plan)[start:end]
-        options = [
-            discord.SelectOption(
-                label=_display_item(plan, item)[:100],
-                value=item,
-                description=(
-                    "Currently missing or blank"
-                    if item in set(_missing_items(plan))
-                    else "Different from the current value"
-                )[:100],
-                emoji="➕" if item in set(_missing_items(plan)) else "🔄",
-                default=item in selected,
-            )
-            for item in visible
-        ]
-        super().__init__(
-            placeholder=f"Choose changes on page {safe_page + 1}…",
-            min_values=0,
-            max_values=max(1, len(options)),
-            options=options,
-            row=0,
-        )
+        missing = set(_missing_items(plan))
         self.visible_items = set(visible)
+        self.host_view = host_view
+        self.page = safe_page
+
+        async def on_pick(interaction: discord.Interaction, values: list[str]) -> None:
+            host = self.host_view
+            if not isinstance(host, SelectiveRestorePickerView):
+                return
+            host.selected_items.difference_update(self.visible_items)
+            host.selected_items.update(_safe_str(value).lower() for value in values)
+            await _restore_picker_host(
+                interaction,
+                embed=_selective_picker_embed(
+                    host.plan,
+                    host.selected_items,
+                    page=host.page,
+                ),
+                view=host,
+            )
+
+        async def on_home(interaction: discord.Interaction) -> None:
+            host = self.host_view
+            if not isinstance(host, SelectiveRestorePickerView):
+                return
+            await _restore_picker_host(
+                interaction,
+                embed=_selective_picker_embed(
+                    host.plan,
+                    host.selected_items,
+                    page=host.page,
+                ),
+                view=host,
+            )
+
+        super().__init__(
+            author_id=0,
+            choices=[
+                make_choice(
+                    _display_item(plan, item)[:100],
+                    item,
+                    description=(
+                        "Currently missing or blank"
+                        if item in missing
+                        else "Different from the current value"
+                    )[:100],
+                    emoji="➕" if item in missing else "🔄",
+                    default=item in selected,
+                )
+                for item in visible
+            ],
+            on_pick=on_pick,
+            custom_id="dank:config_history:restore_items:picker:v1",
+            placeholder=f"Choose changes on page {safe_page + 1}…",
+            title="Choose Exact Changes",
+            timeout=900,
+            on_home=on_home,
+            on_cancel=on_home,
+            min_values=0,
+            max_values=max(1, len(visible)),
+        )
+
+    @property
+    def options(self) -> list[discord.SelectOption]:
+        return [choice.to_option() for choice in self.choices]
+
+    @property
+    def values(self) -> list[str]:
+        return list(self.__dict__.get("_values") or [])
+
+    @values.setter
+    def values(self, new_values: Iterable[str]) -> None:
+        self.__dict__["_values"] = [str(value) for value in (new_values or [])]
 
     async def callback(self, interaction: discord.Interaction) -> None:
-        view = self.view
-        if not isinstance(view, SelectiveRestorePickerView):
-            return
-        view.selected_items.difference_update(self.visible_items)
-        view.selected_items.update(_safe_str(value).lower() for value in self.values)
-        view.rebuild_select()
-        await interaction.response.edit_message(
-            embed=_selective_picker_embed(
-                view.plan,
-                view.selected_items,
-                page=view.page,
-            ),
-            view=view,
-        )
+        await self.handle_pick(interaction, list(self.values))
 
 
 class SelectiveRestorePickerView(discord.ui.View):
@@ -928,26 +1112,27 @@ class SelectiveRestorePickerView(discord.ui.View):
         }
         self.page, _start, _end = _picker_bounds(self.plan, page)
         self.add_item(
-            RestoreItemSelect(
-                self.plan,
-                self.selected_items,
-                page=self.page,
+            DankPickerOpenButton(
+                label="Choose Changes",
+                emoji="🎯",
+                custom_id="dank:config_history:restore_items:open",
+                row=0,
+                build=lambda interaction: RestoreItemSelect(
+                    self.plan,
+                    self.selected_items,
+                    page=self.page,
+                    host_view=self,
+                ),
             )
         )
         self.previous.disabled = self.page <= 0
         self.next_page.disabled = self.page >= _picker_page_count(self.plan) - 1
 
     def rebuild_select(self) -> None:
-        for child in list(self.children):
-            if isinstance(child, RestoreItemSelect):
-                self.remove_item(child)
-        self.add_item(
-            RestoreItemSelect(
-                self.plan,
-                self.selected_items,
-                page=self.page,
-            )
-        )
+        # The restore-item picker is built fresh from the current
+        # page/selection each time its opener is pressed, so there is
+        # no embedded select to rebuild; this keeps the pager state
+        # in sync for callers that still invoke it.
         self.previous.disabled = self.page <= 0
         self.next_page.disabled = self.page >= _picker_page_count(self.plan) - 1
 
