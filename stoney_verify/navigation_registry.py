@@ -367,7 +367,7 @@ FEATURES: tuple[NavigationFeature, ...] = (
         "📣",
         "design",
         "Build private, preview-first server announcements, gaming promos, movie nights and other community event posts with editable artwork, location and RSVP details.",
-        ("embed", "embed builder", "embed studio", "announcement builder", "create announcement", "message designer", "design a message", "embed editor", "custom embed", "json embed", "save embed", "brand themes", "server themes", "branding", "embed color palettes", "media library", "saved images", "image storage", "upload limit", "artwork usage", "smart text", "embed placeholders", "feedback form", "private response inbox", "create form", "questionnaire", "staff review", "private feedback forms", "team review", "scheduled posts", "recurring campaigns", "repeat announcement", "daily announcement", "weekly announcement", "live text", "hourly updates", "dynamic embeds", "auto refresh", "post builder", "sticky post", "make sticky", "sticky message", "keep post visible", "keep post at the bottom", "movie night", "movie event", "watch party", "trivia night", "karaoke night", "community hangout", "giveaway announcement", "creative contest", "ama event", "game server announcement", "minecraft relaunch", "game night announcement", "event details", "discord events", "event templates", "post templates"),
+        ("embed", "embed builder", "embed studio", "announcement builder", "create announcement", "message designer", "design a message", "embed editor", "custom embed", "json embed", "save embed", "brand themes", "server themes", "branding", "embed color palettes", "media library", "saved images", "image storage", "upload limit", "artwork usage", "smart text", "embed placeholders", "feedback form", "private response inbox", "create form", "questionnaire", "staff review", "private feedback forms", "team review", "scheduled posts", "recurring campaigns", "repeat announcement", "daily announcement", "weekly announcement", "live text", "hourly updates", "dynamic embeds", "auto refresh", "post builder", "sticky post", "make sticky", "sticky message", "keep post visible", "keep post at the bottom", "poll", "sticky poll", "create poll", "vote", "server poll", "movie night", "movie event", "watch party", "trivia night", "karaoke night", "community hangout", "giveaway announcement", "creative contest", "ama event", "game server announcement", "minecraft relaunch", "game night announcement", "event details", "discord events", "event templates", "post templates"),
         True,
     ),
     NavigationFeature(
@@ -550,14 +550,18 @@ RECENT_UPDATES: tuple[RecentFeatureUpdate, ...] = (
     # entry below, which tracks the whole migration.
     # Same day: Post Builder posts can be made sticky (one per channel,
     # shared with Community Tools Sticky Messages).
+    # Same day: polls moved into Post Builder — create, vote, pause, and
+    # end them under Edit Posted → Polls; sticky polls keep their votes
+    # when they move.
     RecentFeatureUpdate(
         "embed_studio", "Scheduled and recurring posts are in Post Builder",
         "Announcements in 4 steps: schedule for later, repeat daily or "
         "weekly, run a campaign, add a form or a live-updating post — "
-        "plus JSON backups, all in Post Builder. Any published post can "
+        "plus JSON backups. Any published post can "
         "now be made sticky: it is re-posted at the bottom of its "
-        "channel as people chat, so it stays visible. If a post you are "
-        "editing was deleted, Post Builder now says so, clears the stale "
+        "channel as people chat. Polls live here too — create one, let "
+        "members vote, pause or end it anytime. If a post you are editing "
+        "was deleted, Post Builder now says so, clears the stale "
         "entry, and lets you publish your draft as a new post.", "2026-11-19",
     ),
     RecentFeatureUpdate(

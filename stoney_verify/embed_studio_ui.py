@@ -3084,6 +3084,15 @@ class StudioReviewView(_StudioView):
                 item = lib["published"].get(self.session.post_key)
                 if not item or int(item.get("channel_id", 0)) != channel.id:
                     return await _say(interaction, "Tracked post changed or was removed; no edit made.")
+                if isinstance(item.get("poll"), dict):
+                    # A poll post keeps its poll (and its votes) across any
+                    # republish: the poll view replaces the draft's buttons.
+                    from .embed_studio_polls import poll_view, validate_poll
+                    try:
+                        action_view = poll_view(
+                            validate_poll(item["poll"]), str(item.get("poll_token") or ""))
+                    except StudioValidationError:
+                        action_view = None
                 try:
                     message = await channel.fetch_message(int(item["message_id"]))
                 except discord.NotFound:
@@ -3138,6 +3147,11 @@ class StudioReviewView(_StudioView):
             # would silently un-stick the post.
             if isinstance(previous, dict) and isinstance(previous.get("sticky"), dict):
                 lib["published"][self.session.post_key]["sticky"] = deepcopy(previous["sticky"])
+            # A poll post stays a poll across edits, votes included: the
+            # record is rebuilt here, so carry the poll and its token over.
+            if isinstance(previous, dict) and isinstance(previous.get("poll"), dict):
+                lib["published"][self.session.post_key]["poll"] = deepcopy(previous["poll"])
+                lib["published"][self.session.post_key]["poll_token"] = str(previous.get("poll_token") or "")
             # Store original Smart Text only for safe, normalized records.
             # Enrollment happens separately after explicit moderator approval.
             from .embed_studio_storage_v2 import storage_v2_enabled
@@ -3240,6 +3254,13 @@ def _tracked_post_picker_view(
             item = fresh_lib["published"].get(key)
             if not item:
                 return await _say(interaction, "This tracked message no longer exists.")
+            if isinstance(item.get("poll"), dict):
+                return await _say(
+                    interaction,
+                    "This is a poll post. Polls are managed from Polls in this "
+                    "menu — pause, resume, or end voting there. The question "
+                    "and choices cannot be edited after posting, so the "
+                    "wording editor does not open for polls.")
             channel = interaction.guild.get_channel(int(item["channel_id"]))
             if not isinstance(channel, discord.TextChannel):
                 return await _say(interaction, "That channel is not available.")
@@ -3304,6 +3325,11 @@ class PublishedMenu(_StudioView):
     async def sticky_posts(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
         from .embed_studio_sticky import open_sticky_menu
         await open_sticky_menu(interaction, self.session)
+
+    @discord.ui.button(label="Polls", emoji="📊", style=discord.ButtonStyle.secondary, row=1, custom_id="dank:embed_studio:polls_menu:v1")
+    async def polls(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        from .embed_studio_polls import open_poll_menu
+        await open_poll_menu(interaction, self.session)
 
     @discord.ui.button(label="Back", emoji="◀️", style=discord.ButtonStyle.secondary, row=1)
     async def back(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:

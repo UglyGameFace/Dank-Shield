@@ -224,6 +224,16 @@ except Exception as e:
     raise
 
 
+# Persistent Studio poll buttons follow the same pattern: one listener
+# routes votes by the poll token on the tracked published record.
+try:
+    from .embed_studio_polls import install_embed_studio_poll_runtime as _install_embed_studio_poll_runtime
+    _install_embed_studio_poll_runtime(bot, strict=True)
+except Exception as e:
+    print(f"❌ commands.py Embed Studio poll runtime failed closed: {repr(e)}")
+    raise
+
+
 # Versioned Member Setup owns join/update access reconciliation separately from
 # slash-command registration. Install it strictly so an active gate can never be
 # left without its recovery/grant runtime after a partial command-module failure.
