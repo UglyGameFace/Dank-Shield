@@ -148,8 +148,8 @@ HELP_GUIDES: dict[str, HelpGuide] = {
         "Members manage optional community pings through their own preference screens.",
         "Do not use this to bypass Discord's role hierarchy or ping people who opted out."),
     "community_tools": HelpGuide(
-        "Create a poll, manage a sticky post, or use the server's utility tools.",
-        ("Open Community Tools and select Polls, Stickies or the utility you want.",
+        "Create a quick poll, set a quiet-server notice, or use the server's utility tools.",
+        ("Open Community Tools and select the utility you want. Sticky posts and long-running polls live in Post Builder.",
          "For a posted item, choose the channel and review the content or permissions.",
          "Preview or confirm the action, then check the result in that channel."),
         "Utilities that only answer questions do not change the server; posting tools need an explicit action.",

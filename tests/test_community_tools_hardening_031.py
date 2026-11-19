@@ -17,20 +17,12 @@ from stoney_verify.commands_ext.public_community_tools import (
     _parse_dice_notation,
 )
 from stoney_verify.commands_ext.public_quiet_notice import _quiet_editor_is_stale
-from stoney_verify.commands_ext.public_sticky_preview import _draft_is_stale
 from stoney_verify.community_quiet_notice_service import QuietNoticeConfig
 from stoney_verify.community_tools_runtime import StickyRuntime
 from stoney_verify.community_tools_service import (
     CommunityStorageUnavailable,
     InvalidCommunityToolValue,
-    StickyConfig,
-    StickyPoll,
 )
-
-
-def _sticky(**changes: Any) -> StickyConfig:
-    base = StickyConfig(guild_id=1, channel_id=2, content="hello")
-    return replace(base, **changes)
 
 
 def _quiet(**changes: Any) -> QuietNoticeConfig:
@@ -41,124 +33,6 @@ def _quiet(**changes: Any) -> QuietNoticeConfig:
         last_activity_at=datetime(2026, 9, 5, 10, 0, tzinfo=timezone.utc),
     )
     return replace(base, **changes)
-
-
-def test_failed_sticky_delivery_persistence_rolls_back_new_message_and_keeps_old(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def scenario() -> None:
-        events: list[str] = []
-
-        class FakeNewMessage:
-            id = 222
-
-            async def delete(self) -> None:
-                events.append("delete_new")
-
-        class FakeChannel:
-            id = 2
-
-            async def fetch_message(self, message_id: int) -> Any:
-                events.append(f"fetch_old:{message_id}")
-                return SimpleNamespace(delete=lambda: None)
-
-        monkeypatch.setattr(runtime_module.discord, "TextChannel", FakeChannel)
-        current = _sticky(last_message_id=111, last_sent_at=datetime.now(timezone.utc))
-
-        async def fake_get_sticky(channel_id: int) -> StickyConfig:
-            assert channel_id == 2
-            return current
-
-        async def fake_send(channel: Any, config: StickyConfig) -> FakeNewMessage:
-            assert config == current
-            events.append("send_new")
-            return FakeNewMessage()
-
-        async def fake_update(*args: Any, **kwargs: Any) -> None:
-            events.append("persist_failed")
-            raise CommunityStorageUnavailable("db unavailable")
-
-        monkeypatch.setattr(runtime_module, "get_sticky", fake_get_sticky)
-        monkeypatch.setattr(runtime_module, "update_sticky_delivery", fake_update)
-        runtime = StickyRuntime(SimpleNamespace())
-        runtime._send = fake_send  # type: ignore[method-assign]
-
-        result = await runtime.refresh_channel(FakeChannel(), force=True)
-        assert result is None
-        assert events == ["send_new", "persist_failed", "delete_new"]
-        assert not any(item.startswith("fetch_old") for item in events)
-
-    asyncio.run(scenario())
-
-
-def test_successful_sticky_replacement_persists_before_old_message_delete(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def scenario() -> None:
-        events: list[str] = []
-
-        class FakeOldMessage:
-            async def delete(self) -> None:
-                events.append("delete_old")
-
-        class FakeNewMessage:
-            id = 222
-
-            async def delete(self) -> None:
-                events.append("delete_new")
-
-        class FakeChannel:
-            id = 2
-
-            async def fetch_message(self, message_id: int) -> FakeOldMessage:
-                events.append(f"fetch_old:{message_id}")
-                return FakeOldMessage()
-
-        monkeypatch.setattr(runtime_module.discord, "TextChannel", FakeChannel)
-        current = _sticky(last_message_id=111, last_sent_at=datetime.now(timezone.utc))
-
-        async def fake_get_sticky(channel_id: int) -> StickyConfig:
-            return current
-
-        async def fake_send(channel: Any, config: StickyConfig) -> FakeNewMessage:
-            events.append("send_new")
-            return FakeNewMessage()
-
-        async def fake_update(channel_id: int, *, message_id: int, sent_at: datetime) -> StickyConfig:
-            events.append("persist_new")
-            return replace(current, last_message_id=message_id, last_sent_at=sent_at)
-
-        monkeypatch.setattr(runtime_module, "get_sticky", fake_get_sticky)
-        monkeypatch.setattr(runtime_module, "update_sticky_delivery", fake_update)
-        runtime = StickyRuntime(SimpleNamespace())
-        runtime._send = fake_send  # type: ignore[method-assign]
-
-        result = await runtime.refresh_channel(FakeChannel(), force=True)
-        assert result is not None
-        assert events == ["send_new", "persist_new", "fetch_old:111", "delete_old"]
-
-    asyncio.run(scenario())
-
-
-def test_sticky_draft_conflict_detection_ignores_runtime_state_but_blocks_design_overwrite() -> None:
-    baseline = _sticky(
-        content="hello",
-        mode="embed",
-        title="Rules",
-        color=0x123456,
-        last_message_id=10,
-        last_sent_at=datetime(2026, 9, 5, 10, 0, tzinfo=timezone.utc),
-    )
-    moved = replace(
-        baseline,
-        last_message_id=11,
-        last_sent_at=datetime(2026, 9, 5, 10, 5, tzinfo=timezone.utc),
-        interval_seconds=90,
-        enabled=False,
-    )
-    assert _draft_is_stale(baseline, moved) is False
-    assert _draft_is_stale(baseline, replace(moved, content="newer admin copy")) is True
-
-    poll = StickyPoll(guild_id=1, channel_id=2, question="Pick", options=("A", "B"), votes={"1": 0})
-    voted = replace(poll, votes={"1": 0, "2": 1}, state="paused")
-    assert _draft_is_stale(baseline, moved, poll, voted) is False
-    assert _draft_is_stale(baseline, moved, poll, replace(voted, question="Changed question")) is True
 
 
 def test_quiet_editor_conflict_detection_ignores_runtime_activity_but_blocks_admin_overwrite() -> None:
@@ -532,26 +406,6 @@ class _PagedSupabase:
         return _PagedQuery(self.rows, self.ranges)
 
 
-def test_sticky_list_explicitly_pages_past_postgrest_default_limit(monkeypatch: pytest.MonkeyPatch) -> None:
-    rows = [
-        {
-            "guild_id": 1,
-            "channel_id": index + 1,
-            "enabled": True,
-            "content": f"sticky {index}",
-            "mode": "plain",
-            "interval_seconds": 15,
-            "message_threshold": 5,
-        }
-        for index in range(service.POSTGREST_PAGE_SIZE + 1)
-    ]
-    fake = _PagedSupabase(rows)
-    monkeypatch.setattr(service, "_require_supabase", lambda: fake)
-    result = service._list_stickies_sync(enabled_only=True)
-    assert len(result) == service.POSTGREST_PAGE_SIZE + 1
-    assert fake.ranges == [(0, 499), (500, 999)]
-
-
 def test_quiet_list_explicitly_pages_past_postgrest_default_limit(monkeypatch: pytest.MonkeyPatch) -> None:
     rows = [
         {
@@ -592,50 +446,6 @@ class _RpcSupabase:
     def rpc(self, name: str, params: dict[str, Any]) -> _RpcCall:
         self.calls.append((name, params))
         return _RpcCall(self.response)
-
-
-def test_atomic_sticky_bundle_uses_single_rpc_and_returns_both_states(monkeypatch: pytest.MonkeyPatch) -> None:
-    poll = StickyPoll(guild_id=1, channel_id=2, question="Pick", options=("A", "B"), votes={})
-    sticky = _sticky(mode="poll", content="Pick")
-    response = _RpcResponse(
-        {
-            "sticky": {
-                "guild_id": 1,
-                "channel_id": 2,
-                "enabled": True,
-                "content": "Pick",
-                "mode": "poll",
-                "interval_seconds": 15,
-                "message_threshold": 5,
-            },
-            "poll": {
-                "guild_id": 1,
-                "channel_id": 2,
-                "question": "Pick",
-                "options": ["A", "B"],
-                "votes": {},
-                "state": "active",
-            },
-        }
-    )
-    fake = _RpcSupabase(response)
-    monkeypatch.setattr(service, "_require_supabase", lambda: fake)
-    saved_sticky, saved_poll = service._save_sticky_bundle_sync(sticky, poll)
-    assert saved_sticky.mode == "poll"
-    assert saved_poll is not None and saved_poll.options == ("A", "B")
-    assert len(fake.calls) == 1
-    assert fake.calls[0][0] == service.STICKY_BUNDLE_RPC
-    assert fake.calls[0][1]["p_sticky"]["channel_id"] == 2
-    assert fake.calls[0][1]["p_poll"]["question"] == "Pick"
-
-
-def test_atomic_bundle_rejects_mismatched_poll_identity_before_database(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(service, "_require_supabase", lambda: pytest.fail("database should not be called"))
-    with pytest.raises(InvalidCommunityToolValue):
-        service._save_sticky_bundle_sync(
-            _sticky(mode="poll", content="Pick"),
-            StickyPoll(guild_id=1, channel_id=999, question="Pick", options=("A", "B"), votes={}),
-        )
 
 
 def test_native_poll_dedupes_after_visible_truncation() -> None:

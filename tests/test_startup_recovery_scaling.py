@@ -163,7 +163,10 @@ def test_invite_live_raw_edits_use_route_guard_without_startup_rest_pacing() -> 
 
 def test_single_message_startup_recovery_uses_shared_api_safety_owner() -> None:
     assert "fetch_message_with_api_safety(" in COMMUNITY_TOOLS
-    assert COMMUNITY_TOOLS.count("recovery=True") >= 2
+    # Was >= 2 when the runtime reconciled both stickies and quiet
+    # notices at startup; the sticky engine was removed, so the quiet
+    # reconcile is the one remaining recovery fetch in this module.
+    assert COMMUNITY_TOOLS.count("recovery=True") >= 1
     assert "STARTUP_RECONCILE_CONCURRENCY = 10" in COMMUNITY_TOOLS
 
     ticket_identity = _block(

@@ -368,7 +368,7 @@ def install_embed_studio_poll_runtime(bot: Any, *, strict: bool = False) -> bool
 # ---------------------------------------------------------------------------
 
 def studio_poll_from_legacy(poll: Mapping[str, Any]) -> dict[str, Any]:
-    """Convert one legacy StickyPoll-shaped dict to a Studio poll dict."""
+    """Convert one legacy poll-shaped dict to a Studio poll dict."""
     return validate_poll({
         "question": poll.get("question"),
         "options": list(poll.get("options") or []),
