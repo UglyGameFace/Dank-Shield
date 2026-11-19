@@ -136,7 +136,13 @@ def test_mobile_atlas_panel_and_outbound_link_are_bounded():
     view = ui.AtlasGroupsView(111, [], game="Minecraft", ready=True)
     assert len(view.children) <= 25
     assert {getattr(item, "row", 0) for item in view.children} <= {0, 1, 2, 3}
-    type_menu = next(x for x in view.children if isinstance(x, discord.ui.Select))
+    # Picker migration slice 8: the group-type select is a house picker
+    # opened from this button; the picker keeps the legacy custom_id.
+    opener = next(
+        x for x in view.children
+        if getattr(x, "custom_id", "") == "dank:hub:atlas:type:open:v1"
+    )
+    type_menu = opener._factory(view)
     assert len(type_menu.options) == 6
     assert type_menu.custom_id == "dank:hub:atlas:type:v1"
     assert next(x for x in view.children if isinstance(x, discord.ui.Button) and x.style == discord.ButtonStyle.link).url == atlas.SITE
@@ -186,5 +192,9 @@ def test_public_atlas_group_type_choice_is_included_in_subsequent_reads(monkeypa
     )
     view = edit.await_args.kwargs["view"]
     assert view.group_type == "clan"
-    menu = next(x for x in view.children if isinstance(x, discord.ui.Select))
+    opener = next(
+        x for x in view.children
+        if getattr(x, "custom_id", "") == "dank:hub:atlas:type:open:v1"
+    )
+    menu = opener._factory(view)
     assert any(opt.value == "clan" and opt.default for opt in menu.options)

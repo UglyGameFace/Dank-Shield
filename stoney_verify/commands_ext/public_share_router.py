@@ -62,6 +62,7 @@ from stoney_verify.share_router_runtime import (
     source_privacy_blocker,
 )
 from stoney_verify.ui import DankGuildResourceBrowserView
+from stoney_verify.ui.picker import DankPickerView, make_choice
 
 _ALLOWED_MENTIONS = discord.AllowedMentions.none()
 
@@ -505,6 +506,74 @@ def _target_options_embed(
     return embed
 
 
+class ShareRouterContentFilterPickerView(DankPickerView):
+    """House picker for the Share Router destination content filter.
+
+    Picking performs exactly what the old decorator select on
+    ShareRouterTargetLandingView did: re-check Manage permission and
+    guild, validate the filter, then reopen the target browser with
+    the chosen filter. Back/Close returns to the landing view with
+    the filter unchanged.
+    """
+
+    _FILTER_CHOICES = (
+        ("Videos Only", "videos", "🎬", "Video uploads, video embeds & recognized video links"),
+        ("Images Only", "images", "🖼️", "Image uploads, GIFs & direct image links"),
+        ("Links Only", "links", "🔗", "Messages containing URLs (including video links)"),
+        ("Everything", "everything", "📋", "All qualifying messages, including conversations"),
+    )
+
+    def __init__(self, landing: "ShareRouterTargetLandingView") -> None:
+        self.landing = landing
+
+        async def on_pick(interaction: discord.Interaction, value: str) -> None:
+            if not await _require_manage(interaction) or interaction.guild_id != landing.source.guild.id:
+                return
+            try:
+                chosen = validate_route_content_filter(value)
+            except (IndexError, ValueError):
+                return await _private(interaction, "❌ Select one supported content filter.")
+            await _open_target_browser(
+                interaction, landing.source,
+                delete_source=landing.delete_source,
+                content_filter=chosen,
+            )
+
+        async def on_home(interaction: discord.Interaction) -> None:
+            await _replace(
+                interaction,
+                embed=_target_options_embed(
+                    landing.source,
+                    delete_source=landing.delete_source,
+                    content_filter=landing.content_filter,
+                ),
+                view=ShareRouterTargetLandingView(
+                    landing.owner_id,
+                    source=landing.source,
+                    browser=landing.browser,
+                    delete_source=landing.delete_source,
+                    content_filter=landing.content_filter,
+                ),
+            )
+
+        super().__init__(
+            author_id=landing.owner_id,
+            choices=[
+                make_choice(label, value, description=description, emoji=emoji,
+                            default=landing.content_filter == value)
+                for label, value, emoji, description in self._FILTER_CHOICES
+            ],
+            on_pick=on_pick,
+            custom_id="dank:share_router:content_filter:v1",
+            placeholder="Content filter • choose what gets forwarded",
+            title="Share Router",
+            timeout=PRIVATE_MENU_TTL_SECONDS,
+            on_home=on_home,
+            on_cancel=on_home,
+            home_label="Back",
+        )
+
+
 class ShareRouterTargetLandingView(_OwnedView):
     def __init__(
         self,
@@ -520,38 +589,20 @@ class ShareRouterTargetLandingView(_OwnedView):
         self.browser = browser
         self.delete_source = delete_source
         self.content_filter = validate_route_content_filter(content_filter)
-        for option in self.content_choice.options:
-            option.default = option.value == self.content_filter
         if not delete_source:
             self.back.label = "Back to Existing Channels"
 
-    @discord.ui.select(
-        placeholder="Content filter • choose what gets forwarded",
-        row=2,
-        min_values=1,
-        max_values=1,
-        options=[
-            discord.SelectOption(label="Videos Only", value="videos", emoji="🎬",
-                                 description="Video uploads, video embeds & recognized video links"),
-            discord.SelectOption(label="Images Only", value="images", emoji="🖼️",
-                                 description="Image uploads, GIFs & direct image links"),
-            discord.SelectOption(label="Links Only", value="links", emoji="🔗",
-                                 description="Messages containing URLs (including video links)"),
-            discord.SelectOption(label="Everything", value="everything", emoji="📋",
-                                 description="All qualifying messages, including conversations"),
-        ],
-    )
-    async def content_choice(self, interaction: discord.Interaction, select: discord.ui.Select) -> None:
-        if not await _require_manage(interaction) or interaction.guild_id != self.source.guild.id:
-            return
-        try:
-            chosen = validate_route_content_filter(select.values[0])
-        except (IndexError, ValueError):
-            return await _private(interaction, "❌ Select one supported content filter.")
-        await _open_target_browser(
-            interaction, self.source,
-            delete_source=self.delete_source,
-            content_filter=chosen,
+    @discord.ui.button(label="Content Filter", emoji="🎛️", style=discord.ButtonStyle.secondary, row=2)
+    async def content_filter_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _replace(
+            interaction,
+            embed=_target_options_embed(
+                self.source,
+                delete_source=self.delete_source,
+                content_filter=self.content_filter,
+            ),
+            view=ShareRouterContentFilterPickerView(self),
         )
 
     @discord.ui.button(label="Search Destination", emoji="🔎", style=discord.ButtonStyle.primary, row=0)
@@ -1023,40 +1074,67 @@ class ShareRouterPruneConfirmView(_OwnedView):
         await open_share_router(interaction, replace_message=True)
 
 
-class DownloadExpirySelect(discord.ui.Select):
-    def __init__(self, current: int) -> None:
-        options = [
-            discord.SelectOption(label="1 hour", value="3600", description="Temporary private delivery"),
-            discord.SelectOption(label="24 hours", value="86400", description="Short-term download"),
-            discord.SelectOption(label="7 days (recommended)", value="604800", description="Default expiration"),
-            discord.SelectOption(label="30 days (maximum)", value="2592000", description="Maximum configurable access"),
-        ]
-        for option in options:
-            option.default = option.value == str(current)
-        super().__init__(
-            placeholder="Choose automatic link expiration",
-            options=options,
-            min_values=1,
-            max_values=1,
-            row=0,
-        )
+class DownloadExpirySelect(DankPickerView):
+    """House picker for the private-download link expiration.
 
-    async def callback(self, interaction: discord.Interaction) -> None:
-        if not await _require_manage(interaction):
-            return
-        if not interaction.response.is_done():
-            await interaction.response.defer()
-        try:
-            await save_guild_download_expiry_seconds(
-                int(interaction.guild.id), int(self.values[0]),
-            )
+    Was a raw ``discord.ui.Select`` inside
+    ShareRouterDownloadSettingsView; the settings view now opens this
+    picker with a button (opener idiom). Picking saves exactly the
+    same expiry seconds the raw select saved and redraws the same
+    settings view. Back/Close returns to settings without saving.
+    """
+
+    _EXPIRY_CHOICES = (
+        ("1 hour", "3600", "Temporary private delivery"),
+        ("24 hours", "86400", "Short-term download"),
+        ("7 days (recommended)", "604800", "Default expiration"),
+        ("30 days (maximum)", "2592000", "Maximum configurable access"),
+    )
+
+    def __init__(self, current: int, *, owner_id: int = 0) -> None:
+        self.current = int(current)
+
+        async def on_pick(interaction: discord.Interaction, value: str) -> None:
+            if not await _require_manage(interaction):
+                return
+            if not interaction.response.is_done():
+                await interaction.response.defer()
+            try:
+                await save_guild_download_expiry_seconds(
+                    int(interaction.guild.id), int(value),
+                )
+                await _replace(
+                    interaction,
+                    embed=await _download_settings_embed(interaction.guild),
+                    view=ShareRouterDownloadSettingsView(int(interaction.user.id), int(value)),
+                )
+            except Exception as exc:
+                await _private(interaction, f"❌ Could not save expiration ({type(exc).__name__}).")
+
+        async def on_home(interaction: discord.Interaction) -> None:
+            if interaction.guild is None:
+                return await _private(interaction, "❌ Use Share Router inside a server.")
             await _replace(
                 interaction,
                 embed=await _download_settings_embed(interaction.guild),
-                view=ShareRouterDownloadSettingsView(int(interaction.user.id), int(self.values[0])),
+                view=ShareRouterDownloadSettingsView(int(interaction.user.id), self.current),
             )
-        except Exception as exc:
-            await _private(interaction, f"❌ Could not save expiration ({type(exc).__name__}).")
+
+        super().__init__(
+            author_id=int(owner_id),
+            choices=[
+                make_choice(label, value, description=description, default=str(current) == value)
+                for label, value, description in self._EXPIRY_CHOICES
+            ],
+            on_pick=on_pick,
+            custom_id="dank:share_router:download_expiry:v1",
+            placeholder="Choose automatic link expiration",
+            title="Private Video Downloads",
+            timeout=PRIVATE_MENU_TTL_SECONDS,
+            on_home=on_home,
+            on_cancel=on_home,
+            home_label="Back",
+        )
 
 
 async def _download_settings_embed(guild: discord.Guild) -> discord.Embed:
@@ -1131,7 +1209,20 @@ async def _download_settings_embed(guild: discord.Guild) -> discord.Embed:
 class ShareRouterDownloadSettingsView(_OwnedView):
     def __init__(self, owner_id: int, current: int) -> None:
         super().__init__(owner_id)
-        self.add_item(DownloadExpirySelect(current))
+        self.current = int(current)
+
+    @discord.ui.button(label="Link Expiration", emoji="⏱️", style=discord.ButtonStyle.secondary, row=0)
+    async def expiry(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        if not await _require_manage(interaction):
+            return
+        if interaction.guild is None:
+            return await _private(interaction, "❌ Use Share Router inside a server.")
+        await _replace(
+            interaction,
+            embed=await _download_settings_embed(interaction.guild),
+            view=DownloadExpirySelect(self.current, owner_id=self.owner_id),
+        )
 
     @discord.ui.button(label="Test HTTPS Hosting", emoji="🩺", style=discord.ButtonStyle.primary, row=1)
     async def test_hosting(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:

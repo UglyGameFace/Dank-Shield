@@ -143,7 +143,9 @@ def test_community_hub_every_home_control_is_kept_in_one_section():
             item.label for item in view.children
             if isinstance(item, __import__("discord").ui.Button)
         ]
-        assert set(buttons) == set(names) | {"Back to Dank Home", "Close"}
+        # Picker migration slice 8: the section select is a house picker
+        # opened by the "Switch Area" button, which is kept on every section.
+        assert set(buttons) == set(names) | {"Back to Dank Home", "Close", "Switch Area"}
         assert len(view.children) <= 9
         embed = hub._hub_embed(section=section)
         assert len(embed.fields) == 0
@@ -161,7 +163,13 @@ def test_community_hub_settings_are_short_and_complete():
             item.label for item in view.children
             if isinstance(item, __import__("discord").ui.Button)
         ]
-        assert set(buttons) == set(names) | {"Staff Dashboard"}
+        # Picker migration slice 8: section/mode selects are house
+        # pickers opened by "Choose Settings Area" (every section) and
+        # "Change Mode" (general section, as the mode select was).
+        expected = set(names) | {"Staff Dashboard", "Choose Settings Area"}
+        if section == "general":
+            expected.add("Change Mode")
+        assert set(buttons) == expected
         assert len(view.children) <= 9
         embed = hub._settings_embed({}, fake_bot, section=section)
         assert len(embed.fields) <= 2
@@ -179,7 +187,10 @@ def test_community_pings_manager_keeps_every_control_without_wall_of_buttons():
             item.label for item in view.children
             if isinstance(item, __import__("discord").ui.Button)
         ]
-        assert set(buttons) == set(names) | {"Refresh", "Home", "Close"}
+        # Picker migration slice 8: the section select is a house picker
+        # opened by the "Switch Section" button (same update slices 2/6/7
+        # applied to the other section pickers in this file).
+        assert set(buttons) == set(names) | {"Refresh", "Home", "Close", "Switch Section"}
         assert len(view.children) <= 9
         assert max((item.row or 0) for item in view.children) < 5
 
@@ -353,7 +364,9 @@ def test_setup_and_trusted_advert_buttons_are_partitioned_not_deleted():
     guild = SimpleNamespace(get_channel=lambda _id: None, me=None, default_role=None)
     for section, names in ads._TRUSTED_ADS_SECTIONS.items():
         panel = ads.TrustedAdsView(10, guild, 123, rules=[], section=section)
-        assert _buttons(panel) == set(names) | {"Refresh", "Back to Invite Shield"}
+        # Picker migration slice 8: the section select is a house picker
+        # opened by the "Switch Section" button.
+        assert _buttons(panel) == set(names) | {"Refresh", "Back to Invite Shield", "Switch Section"}
         _assert_compact(panel)
         embed = ads._embed(guild, 123, [], section=section)
         assert len(embed.fields) <= 3

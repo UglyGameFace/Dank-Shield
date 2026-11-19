@@ -12,6 +12,7 @@ from typing import Any
 import discord
 
 from stoney_verify.panel_lifecycle import PRIVATE_MENU_TTL_SECONDS
+from stoney_verify.ui.picker import DankPickerView, make_choice
 from stoney_verify.soundboard_audio import (
     MAX_BATCH, PreparedSound, SoundboardInputError, prepare_attachment,
     validate_sound_name, validate_upload,
@@ -292,28 +293,88 @@ async def stage_soundboard_upload(
     view.message = message
 
 
-class _SoundSelect(discord.ui.Select):
-    def __init__(self, sounds: list[discord.SoundboardSound]) -> None:
+class _SoundSelect(DankPickerView):
+    """House picker for inspecting one sound on the current browse page.
+
+    Was a raw ``discord.ui.Select`` inside SoundboardBrowseView. The
+    host keeps its 20-per-page subset pager, so this picker is opened
+    for the current subset only (never more than Discord's 25-option
+    limit) and picking fetches and shows the same sound detail view
+    the raw select showed. Back/Close returns to the browse page the
+    picker was opened from.
+    """
+
+    def __init__(
+        self,
+        sounds: list[discord.SoundboardSound],
+        *,
+        owner_id: int = 0,
+        guild_id: int = 0,
+        all_sounds: list[discord.SoundboardSound] | None = None,
+        page: int = 0,
+    ) -> None:
         self.sound_ids = {str(s.id) for s in sounds}
+        self.owner_id = int(owner_id)
+        self.guild_id = int(guild_id)
+        self._all_sounds = list(all_sounds) if all_sounds is not None else list(sounds)
+        self._page = int(page)
+
+        async def on_pick(interaction: discord.Interaction, value: str) -> None:
+            if value not in self.sound_ids:
+                return await _notice(interaction, "That sound is no longer on this page.")
+            sound = await interaction.guild.fetch_soundboard_sound(int(value))
+            view = SoundDetailView(interaction.user.id, interaction.guild.id, int(value))
+            await interaction.response.send_message(
+                embed=_detail_embed(sound), view=view, ephemeral=True,
+                allowed_mentions=_ALLOWED_MENTIONS,
+            )
+
+        async def on_home(interaction: discord.Interaction) -> None:
+            view = SoundboardBrowseView(self.owner_id, self.guild_id, self._all_sounds, self._page)
+            if interaction.response.is_done():
+                await interaction.edit_original_response(
+                    embed=view.embed(), view=view, allowed_mentions=_ALLOWED_MENTIONS,
+                )
+            else:
+                await interaction.response.edit_message(
+                    embed=view.embed(), view=view, allowed_mentions=_ALLOWED_MENTIONS,
+                )
+
         super().__init__(
+            author_id=self.owner_id,
+            choices=[make_choice(s.name[:100], str(s.id)) for s in sounds],
+            on_pick=on_pick,
+            custom_id="dank:soundboard:browse_select:v1",
             placeholder="Choose a sound to inspect",
-            options=[
-                discord.SelectOption(label=s.name[:100], value=str(s.id))
-                for s in sounds
-            ],
-            row=0,
+            title="Soundboard Studio",
+            timeout=min(600, PRIVATE_MENU_TTL_SECONDS),
+            on_home=on_home,
+            on_cancel=on_home,
+            home_label="Back",
         )
 
-    async def callback(self, interaction: discord.Interaction) -> None:
-        value = str(self.values[0])
-        if value not in self.sound_ids:
-            return await _notice(interaction, "That sound is no longer on this page.")
-        sound = await interaction.guild.fetch_soundboard_sound(int(value))
-        view = SoundDetailView(interaction.user.id, interaction.guild.id, int(value))
-        await interaction.response.send_message(
-            embed=_detail_embed(sound), view=view, ephemeral=True,
-            allowed_mentions=_ALLOWED_MENTIONS,
+
+class _SoundInspectOpenButton(discord.ui.Button):
+    """Swaps the browse panel for the sound picker on the same message."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            label="Inspect a Sound", emoji="🔎",
+            style=discord.ButtonStyle.primary,
+            custom_id="dank:soundboard:inspect_open:v1", row=0,
         )
+
+    async def callback(self, interaction: discord.Interaction) -> None:  # type: ignore[override]
+        view = self.view
+        if not isinstance(view, SoundboardBrowseView) or not await view.interaction_check(interaction):
+            return
+        subset = view.sounds[view.page * 20 : view.page * 20 + 20]
+        picker = _SoundSelect(
+            subset,
+            owner_id=view.owner_id, guild_id=view.guild_id,
+            all_sounds=view.sounds, page=view.page,
+        )
+        await interaction.response.edit_message(embed=view.embed(), view=picker)
 
 
 def _detail_embed(sound: discord.SoundboardSound) -> discord.Embed:
@@ -336,7 +397,9 @@ class SoundboardBrowseView(_PrivateView):
         self.page = max(0, min(page, max(0, (len(self.sounds) - 1) // 20)))
         subset = self.sounds[self.page * 20 : self.page * 20 + 20]
         if subset:
-            self.add_item(_SoundSelect(subset))
+            # The sound select is a house picker view now; the browse
+            # panel carries an opener button that swaps to it.
+            self.add_item(_SoundInspectOpenButton())
 
     def embed(self) -> discord.Embed:
         e = discord.Embed(

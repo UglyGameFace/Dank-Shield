@@ -598,20 +598,25 @@ RECENT_UPDATES: tuple[RecentFeatureUpdate, ...] = (
         "Save categories, channels, roles and permissions, then restore from a reviewed plan.",
         "2026-11-18",
     ),
-    # Picker migration slices 2 + 6 + 7 (2026-11-19): the /dank home and
-    # Help pickers, the section pickers in Protection Center, Member
-    # Setup and the Action Center (slice 2), the remaining Protection
-    # Center, SpamGuard, Safety Network and Dead Server Clapbacks
-    # pickers (slice 6), and the Design Studio pickers (slice 7) moved
-    # to the house picker framework, like the studios did in slice 1.
+    # Picker migration slices 2 + 6 + 7 + 8 (2026-11-19): the /dank
+    # home and Help pickers, the section pickers in Protection Center,
+    # Member Setup and the Action Center (slice 2), the remaining
+    # Protection Center, SpamGuard, Safety Network and Dead Server
+    # Clapbacks pickers (slice 6), the Design Studio pickers
+    # (slice 7), and the Community Hub, Community Pings/Tools,
+    # profile, Share Router, Soundboard, Server Stats, Toke and
+    # Trusted Ads pickers (slice 8) moved to the house picker
+    # framework, like the studios did in slice 1.
     RecentFeatureUpdate(
         "help", "Home, Help and panel pickers use the standard picker",
-        "Pickers across Dank Shield — /dank home, Help, Design "
-        "Studio, Protection Center, SpamGuard, the Safety Network, "
-        "Member Setup, the Action Center and Dead Server Clapbacks "
-        "— now use the standard Dank Shield picker, the same one "
-        "Post Builder uses, with fixed IDs that keep working after "
-        "a restart, and paging when a list outgrows one screen.",
+        "Every picker in Dank Shield now uses the standard picker "
+        "— the one Post Builder uses — including /dank home, Help, "
+        "the studios, Design, Protection, SpamGuard, Safety "
+        "Network, Member Setup, Action Center, Clapbacks, the "
+        "Community Hub, Community Pings and Tools, profiles, Share "
+        "Router, Soundboard, Server Stats, Toke and Trusted Ads, "
+        "with fixed IDs that survive restarts and paging for long "
+        "lists.",
         "2026-11-19",
     ),
 )

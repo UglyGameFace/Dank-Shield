@@ -41,6 +41,7 @@ from ..security_stats import (
     validate_security_stat_format,
 )
 from .public_setup_group import _require_setup_permission
+from ..ui.picker import DankMultiPickerView, DankPickerView, make_choice
 
 
 
@@ -365,30 +366,58 @@ class StatLabelModal(discord.ui.Modal):
         await _render_center(interaction, content=note)
 
 
-class VisibleStatsSelect(discord.ui.Select):
+class VisibleStatsSelect(DankMultiPickerView):
+    """House multi-picker for which Server Stats counters are visible.
+
+    Was a raw ``discord.ui.Select`` inside ServerStatsView; the host
+    panel now opens this picker with a button (opener idiom) and the
+    picker keeps the select's legacy custom_id. Picking saves exactly
+    the same visible-keys preference the raw select saved, behind the
+    same owner + setup-permission gates and denial wording.
+    """
+
     def __init__(self, *, owner_id: int, cfg: Any) -> None:
         self.owner_id = int(owner_id)
         prefs = security_stats_preferences(cfg)
         current = set(prefs["visible_keys"])
-        options = [
-            discord.SelectOption(
-                label=_METRIC_TITLES[key],
-                value=key,
-                default=key in current,
+        choices = [
+            make_choice(
+                _METRIC_TITLES[key],
+                key,
                 description=security_stat_metric_description(key),
+                default=key in current,
             )
             for key in DEFAULT_SECURITY_STATS_VISIBLE_KEYS
         ]
+
+        async def on_pick(interaction: discord.Interaction, values: list[str]) -> None:
+            await self._apply_pick(interaction, values)
+
+        async def on_home(interaction: discord.Interaction) -> None:
+            await _render_center(interaction)
+
         super().__init__(
-            placeholder="Choose Visible Counters",
-            min_values=1,
-            max_values=len(options),
-            options=options,
-            row=1,
+            author_id=self.owner_id,
+            choices=choices,
+            on_pick=on_pick,
             custom_id="dank_server_stats:visible",
+            placeholder="Choose Visible Counters",
+            title="Server Stats",
+            timeout=PRIVATE_MENU_TTL_SECONDS,
+            on_home=on_home,
+            on_cancel=on_home,
+            home_label="Back",
+            min_values=1,
+            max_values=len(choices),
         )
 
-    async def callback(self, interaction: discord.Interaction) -> None:
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if int(interaction.user.id) != self.owner_id:
+            await interaction.response.send_message("❌ Open your own Server Stats panel.", ephemeral=True)
+            return False
+        return True
+
+    async def _apply_pick(self, interaction: discord.Interaction, values: list[str]) -> None:
         if int(interaction.user.id) != self.owner_id:
             await interaction.response.send_message("❌ Open your own Server Stats panel.", ephemeral=True)
             return
@@ -399,7 +428,7 @@ class VisibleStatsSelect(discord.ui.Select):
             await interaction.response.send_message("❌ Use this inside a server.", ephemeral=True)
             return
 
-        chosen = [key for key in DEFAULT_SECURITY_STATS_VISIBLE_KEYS if key in set(self.values)]
+        chosen = [key for key in DEFAULT_SECURITY_STATS_VISIBLE_KEYS if key in set(values)]
         unavailable: list[str] = []
         for key in chosen:
             capability = security_stat_metric_capability(key, guild=guild)
@@ -430,28 +459,54 @@ class VisibleStatsSelect(discord.ui.Select):
         await _render_center(interaction, content=note)
 
 
-class StatLabelSelect(discord.ui.Select):
+class StatLabelSelect(DankPickerView):
+    """House picker for which counter's format to customize.
+
+    Was a raw ``discord.ui.Select`` inside ServerStatsView; the host
+    panel now opens this picker with a button (opener idiom) and the
+    picker keeps the select's legacy custom_id. Picking opens the
+    same StatLabelModal the raw select opened, behind the same owner
+    + setup-permission gates and denial wording.
+    """
+
     def __init__(self, *, owner_id: int, cfg: Any) -> None:
         self.owner_id = int(owner_id)
         prefs = security_stats_preferences(cfg)
-        options = [
-            discord.SelectOption(
-                label=_METRIC_TITLES[key],
-                value=key,
+        choices = [
+            make_choice(
+                _METRIC_TITLES[key],
+                key,
                 description=security_stat_format_preview(prefs, key)[:100],
             )
             for key in DEFAULT_SECURITY_STATS_VISIBLE_KEYS
         ]
+
+        async def on_pick(interaction: discord.Interaction, value: str) -> None:
+            await self._apply_pick(interaction, value)
+
+        async def on_home(interaction: discord.Interaction) -> None:
+            await _render_center(interaction)
+
         super().__init__(
-            placeholder="Customize Counter Format",
-            min_values=1,
-            max_values=1,
-            options=options,
-            row=2,
+            author_id=self.owner_id,
+            choices=choices,
+            on_pick=on_pick,
             custom_id="dank_server_stats:label",
+            placeholder="Customize Counter Format",
+            title="Server Stats",
+            timeout=PRIVATE_MENU_TTL_SECONDS,
+            on_home=on_home,
+            on_cancel=on_home,
+            home_label="Back",
         )
 
-    async def callback(self, interaction: discord.Interaction) -> None:
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if int(interaction.user.id) != self.owner_id:
+            await interaction.response.send_message("❌ Open your own Server Stats panel.", ephemeral=True)
+            return False
+        return True
+
+    async def _apply_pick(self, interaction: discord.Interaction, value: str) -> None:
         if int(interaction.user.id) != self.owner_id:
             await interaction.response.send_message("❌ Open your own Server Stats panel.", ephemeral=True)
             return
@@ -463,7 +518,7 @@ class StatLabelSelect(discord.ui.Select):
             return
         cfg = await get_guild_config(int(guild.id), refresh=True)
         prefs = security_stats_preferences(cfg)
-        key = str(self.values[0])
+        key = str(value)
         current = str(dict(prefs["labels"]).get(key) or DEFAULT_SECURITY_STATS_LABELS[key])
         await interaction.response.send_modal(
             StatLabelModal(
@@ -475,6 +530,36 @@ class StatLabelSelect(discord.ui.Select):
         )
 
 
+class _StatsPickerOpenButton(discord.ui.Button):
+    """Swaps the Server Stats panel for one of its house pickers."""
+
+    def __init__(self, *, kind: str, row: int) -> None:
+        super().__init__(
+            label="Choose Visible Counters" if kind == "visible" else "Customize Counter Format",
+            emoji="📊" if kind == "visible" else "✏️",
+            style=discord.ButtonStyle.secondary,
+            custom_id="dank_server_stats:visible_open" if kind == "visible" else "dank_server_stats:label_open",
+            row=row,
+        )
+        self.kind = kind
+
+    async def callback(self, interaction: discord.Interaction) -> None:  # type: ignore[override]
+        view = self.view
+        if not isinstance(view, ServerStatsView) or not await view.interaction_check(interaction):
+            return
+        picker: discord.ui.View = (
+            VisibleStatsSelect(owner_id=view.owner_id, cfg=view.cfg)
+            if self.kind == "visible"
+            else StatLabelSelect(owner_id=view.owner_id, cfg=view.cfg)
+        )
+        message = getattr(interaction, "message", None)
+        embeds = getattr(message, "embeds", None) if message is not None else None
+        await interaction.response.edit_message(
+            embed=embeds[0] if embeds else None,
+            view=picker,
+        )
+
+
 class ServerStatsView(discord.ui.View):
     def __init__(self, *, owner_id: int, cfg: Any) -> None:
         super().__init__(timeout=PRIVATE_MENU_TTL_SECONDS)
@@ -482,8 +567,10 @@ class ServerStatsView(discord.ui.View):
         self.cfg = cfg
         self.prefs = security_stats_preferences(cfg)
         self.enabled = _cfg_bool(cfg, SECURITY_STATS_ENABLED_KEY, False)
-        self.add_item(VisibleStatsSelect(owner_id=self.owner_id, cfg=cfg))
-        self.add_item(StatLabelSelect(owner_id=self.owner_id, cfg=cfg))
+        # The two selects are house picker views now; the panel
+        # carries opener buttons that swap to them (opener idiom).
+        self.add_item(_StatsPickerOpenButton(kind="visible", row=1))
+        self.add_item(_StatsPickerOpenButton(kind="label", row=2))
 
         for child in self.children:
             custom_id = str(getattr(child, "custom_id", "") or "")

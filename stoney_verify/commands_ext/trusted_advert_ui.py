@@ -11,6 +11,7 @@ from ..invite_trusted_advertisers import (
     clean_rules, load_rules, save_rule, parse_retention_hours,
 )
 from ..ui import DankGuildResourceBrowserView
+from ..ui.picker import DankPickerView, make_choice
 
 
 async def _notice(interaction: discord.Interaction, message: str) -> None:
@@ -131,24 +132,87 @@ def _embed(
     return embed
 
 
-class _TrustedAdsSectionSelect(discord.ui.Select):
+class _TrustedAdsSectionSelect(DankPickerView):
+    """House picker for switching Trusted Ads sections.
+
+    Was a raw ``discord.ui.Select`` inside TrustedAdsView; the host
+    view now carries an opener button (Protection Center idiom) and
+    this picker keeps the select's legacy custom_id. Routing is
+    unchanged: the staff check stays inside the pick handler and a
+    pick reopens Trusted Ads at the chosen section. Back/Close
+    reopens it at the current section.
+    """
+
     def __init__(self, owner_id: int, channel_id: int, section: str) -> None:
         self.owner_id = int(owner_id)
         self.channel_id = int(channel_id)
+        self.section = section if section in _TRUSTED_ADS_SECTIONS else "approval"
+        self._values: list[str] = []
+
+        async def on_pick(interaction: discord.Interaction, value: str) -> None:
+            if not _staff(interaction, self.owner_id):
+                return await _notice(interaction, "Manage Server permission required.")
+            await show_trusted_ads(
+                interaction, self.owner_id, channel_id=self.channel_id, section=value,
+            )
+
+        async def on_home(interaction: discord.Interaction) -> None:
+            await show_trusted_ads(
+                interaction, self.owner_id, channel_id=self.channel_id, section=self.section,
+            )
+
         super().__init__(
-            placeholder="Choose trusted ads settings",
-            options=[
-                discord.SelectOption(label="Bot Approvals", value="approval", default=section == "approval"),
-                discord.SelectOption(label="Cleanup & Previews", value="retention", default=section == "retention"),
+            author_id=self.owner_id,
+            choices=[
+                make_choice("Bot Approvals", "approval", default=self.section == "approval"),
+                make_choice("Cleanup & Previews", "retention", default=self.section == "retention"),
             ],
-            row=0, custom_id="dank_protection:trusted_ads:section:v2",
+            on_pick=on_pick,
+            custom_id="dank_protection:trusted_ads:section:v2",
+            placeholder="Choose trusted ads settings",
+            title="Trusted Ad Bots",
+            timeout=900,
+            on_home=on_home,
+            on_cancel=on_home,
+            home_label="Back",
         )
 
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if _staff(interaction, self.owner_id):
+            return True
+        await _notice(interaction, "Manage Server permission required.")
+        return False
+
     async def callback(self, interaction: discord.Interaction) -> None:
-        if not _staff(interaction, self.owner_id):
-            return await _notice(interaction, "Manage Server permission required.")
-        await show_trusted_ads(
-            interaction, self.owner_id, channel_id=self.channel_id, section=self.values[0],
+        """Compatibility entry point for the old raw-select callback shape."""
+        values = [str(value) for value in (self._values or [])]
+        if not values:
+            values = [choice.value for choice in self.choices if choice.default] or ["approval"]
+        await self.handle_pick(interaction, values[0])
+
+
+class _TrustedAdsSectionOpenButton(discord.ui.Button):
+    """Swaps the Trusted Ads panel for the section picker on the same message."""
+
+    def __init__(self, *, owner_id: int, channel_id: int, section: str) -> None:
+        super().__init__(
+            label="Switch Section", emoji="🧭",
+            style=discord.ButtonStyle.secondary,
+            custom_id="dank_protection:trusted_ads:section:open:v1", row=0,
+        )
+        self.owner_id = int(owner_id)
+        self.channel_id = int(channel_id)
+        self.section = section
+
+    async def callback(self, interaction: discord.Interaction) -> None:  # type: ignore[override]
+        view = self.view
+        if not isinstance(view, TrustedAdsView) or not await view.interaction_check(interaction):
+            return
+        message = getattr(interaction, "message", None)
+        embeds = getattr(message, "embeds", None) if message is not None else None
+        await interaction.response.edit_message(
+            embed=embeds[0] if embeds else None,
+            view=_TrustedAdsSectionSelect(self.owner_id, self.channel_id, self.section),
         )
 
 
@@ -404,7 +468,11 @@ class TrustedAdsView(discord.ui.View):
         self.rule_options = list(rules or [])
         original = {str(getattr(item, "label", "")): item for item in self.children}
         self.clear_items()
-        self.add_item(_TrustedAdsSectionSelect(self.owner_id, self.channel_id, self.section))
+        # The section select is a house picker view now; the panel
+        # carries an opener button that swaps to it (opener idiom).
+        self.add_item(_TrustedAdsSectionOpenButton(
+            owner_id=self.owner_id, channel_id=self.channel_id, section=self.section,
+        ))
         names = (*_TRUSTED_ADS_SECTIONS[self.section], "Refresh", "Back to Invite Shield")
         for index, name in enumerate(names):
             item = original[name]

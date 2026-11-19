@@ -12,6 +12,7 @@ from typing import Any, Optional, Sequence
 import discord
 
 from ..panel_lifecycle import PRIVATE_MENU_TTL_SECONDS
+from stoney_verify.ui.picker import DankUserSelect
 
 from stoney_verify.community_lookup_service import (
     CommunityLookupError,
@@ -1115,9 +1116,33 @@ class NativePollPreviewView(_OwnedView):
 # Community Tools editor was removed rather than kept as a parallel writer.
 
 
-class InfoMemberSelect(discord.ui.UserSelect):
+async def _ignore_user_pick(interaction: discord.Interaction, user: object) -> None:
+    """No-op on_pick for DankUserSelect subclasses that override callback."""
+    return None
+
+
+class InfoMemberSelect(DankUserSelect):
+    """House user picker for member info.
+
+    Uses the framework's DankUserSelect wrapper. The original select
+    had no owner binding of its own — the host InfoView's owner check
+    gates the pick — so the wrapper is opened with ``author_id=0``
+    (no extra owner lock), and the callback keeps the exact original
+    flow (host check, then the member-info embed), as with
+    SubjectUserSelect in Network Safety. The wrapper's own callback
+    only forwards the picked user, so it is overridden here.
+    """
+
     def __init__(self) -> None:
-        super().__init__(placeholder="Choose a member", min_values=1, max_values=1, custom_id="dank:community:info:user:v2", row=0)
+        super().__init__(
+            author_id=0,
+            on_pick=_ignore_user_pick,
+            placeholder="Choose a member",
+            min_values=1,
+            max_values=1,
+            row=0,
+        )
+        self.custom_id = "dank:community:info:user:v2"
 
     async def callback(self, interaction: discord.Interaction) -> None:
         view = self.view

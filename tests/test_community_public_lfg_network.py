@@ -19,10 +19,16 @@ def _row(name="Minecraft", link="https://discord.gg/the420lobby"):
 def test_network_surface_is_mobile_friendly_and_not_a_native_join():
     groups = [{"game": "Minecraft", "community": "The 420 Lobby", "capacity": 6, "join_url": "https://discord.gg/the420lobby"}]
     view = ui.PublicNetworkView(123, groups, game_query="mc")
-    menu = next(x for x in view.children if isinstance(x, discord.ui.Select))
+    # Picker migration slice 8: the group select is a house picker opened
+    # from this button; the picker carries the same options.
+    opener = next(
+        x for x in view.children
+        if getattr(x, "custom_id", "") == "dank:hub:publicnetwork:select:open:v1"
+    )
+    assert opener.row == 0
+    menu = opener._factory(view)
     assert len(menu.options) == 1
     assert menu.options[0].label == "Minecraft"
-    assert menu.row == 0
     assert not any(getattr(x, "label", "") == "Quick Match" for x in view.children)
     assert all(getattr(x, "row", 0) <= 4 for x in view.children)
     details = ui.PublicNetworkDetailView(123, groups[0], game_query="mc")
@@ -45,7 +51,11 @@ def test_public_network_source_reads_only_consent_projection(monkeypatch):
     assert "Minecraft" in edited.await_args.kwargs["embed"].fields[1].name or (
         "Minecraft" in edited.await_args.kwargs["embed"].fields[0].name
     )
-    assert len(next(x for x in view.children if isinstance(x, discord.ui.Select)).options) == 1
+    opener = next(
+        x for x in view.children
+        if getattr(x, "custom_id", "") == "dank:hub:publicnetwork:select:open:v1"
+    )
+    assert len(opener._factory(view).options) == 1
 
 
 def test_public_network_denies_stale_or_revoked_invite(monkeypatch):
@@ -88,7 +98,11 @@ def test_public_network_paging_reaches_all_approved_groups(monkeypatch):
     monkeypatch.setattr(ui, "_edit_private_original", edited)
     asyncio.run(ui._open_public_lfg_network(SimpleNamespace(), 123, page=1))
     view = edited.await_args.kwargs["view"]
-    select = next(x for x in view.children if isinstance(x, discord.ui.Select))
+    opener = next(
+        x for x in view.children
+        if getattr(x, "custom_id", "") == "dank:hub:publicnetwork:select:open:v1"
+    )
+    select = opener._factory(view)
     assert view.page == 1 and not view.has_next
     assert len(select.options) == 15
     assert select.options[0].label == "Game 20"

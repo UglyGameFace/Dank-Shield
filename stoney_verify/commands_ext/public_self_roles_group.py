@@ -13,7 +13,7 @@ from discord import app_commands
 from .public_setup_group import _require_setup_permission, dank_group
 from stoney_verify.panel_lifecycle import public_panel_lifecycle_text
 from stoney_verify.ui import cards
-from stoney_verify.ui.picker import DankChoice, DankMultiPickerView
+from stoney_verify.ui.picker import DankChoice, DankMultiPickerView, DankPickerView, chunk_choices, make_choice
 
 
 SELF_ROLE_PREFIX = "dank:selfrole:v1:"
@@ -1316,44 +1316,156 @@ def _profile_member_page_embed(guild: discord.Guild, *, page: int, per_page: int
     return embed
 
 
-class ProfileMemberListSelect(discord.ui.Select):
-    def __init__(self, members: list[discord.Member]) -> None:
-        options = [
-            discord.SelectOption(
-                label=_profile_member_label(member),
-                description=_profile_member_description(member),
-                value=str(member.id),
-            )
-            for member in members[:25]
-            if not member.bot
-        ]
+async def _apply_profile_member_pick(interaction: discord.Interaction, value: str) -> None:
+    """Destination of the old ProfileMemberListSelect callback, unchanged."""
+    guild = interaction.guild
+    if guild is None:
+        return await _reply(interaction, "This only works inside the server.", ok=False)
 
-        if not options:
-            options = [discord.SelectOption(label="No human members found", value="0", description="Check bot member intent/cache.")]
+    raw = str(value or "0")
+    member = guild.get_member(int(raw)) if raw.isdigit() else None
+
+    if not isinstance(member, discord.Member) or member.bot:
+        return await _reply(interaction, "That human member is no longer available.", ok=False)
+
+    from .public_profile_cards import send_privacy_aware_profile
+
+    await send_privacy_aware_profile(interaction, member)
+
+
+class ProfileMemberListSelect(DankPickerView):
+    """House picker for choosing a member whose profile to view.
+
+    Was a raw ``discord.ui.Select`` that silently truncated the list
+    it was handed to 25 members. It now pages EVERY member passed in
+    with chunk_choices (Prev/Next buttons; the legacy custom_id stays
+    verbatim for the single-page case, and pages suffix ``:{page}``
+    when there is more than one), so nobody is unreachable. Picking a member sends the
+    same privacy-aware profile card the raw select sent, through
+    :func:`_apply_profile_member_pick`. The raw select had no owner
+    lock, so the picker is ``allow_anyone`` with no author binding.
+    """
+
+    def __init__(
+        self,
+        members: list[discord.Member],
+        *,
+        page: int = 0,
+        guild: Optional[discord.Guild] = None,
+    ) -> None:
+        self._guild = guild
+        self._all_members = [member for member in members if not getattr(member, "bot", False)]
+        all_choices = [
+            make_choice(
+                _profile_member_label(member),
+                str(member.id),
+                description=_profile_member_description(member),
+            )
+            for member in self._all_members
+        ]
+        pages = chunk_choices(all_choices) or [[]]
+        page = max(0, min(int(page), len(pages) - 1))
+        self.page = page
+        self.pages = len(pages)
+        self._all_choices = all_choices
+
+        async def on_pick(interaction: discord.Interaction, value: str) -> None:
+            await _apply_profile_member_pick(interaction, value)
+
+        async def on_home(interaction: discord.Interaction) -> None:
+            if self._guild is None:
+                return
+            await interaction.response.edit_message(
+                embed=_profile_member_page_embed(self._guild, page=self.page),
+                view=ProfileMemberListView(self._guild, page=self.page),
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
 
         super().__init__(
-            placeholder="Pick a member from this page…",
-            min_values=1,
-            max_values=1,
-            options=options,
-            custom_id="dank:profile:v1:member_list_select",
-            disabled=options[0].value == "0",
+            author_id=0,
+            choices=pages[page],
+            on_pick=on_pick,
+            custom_id=(
+                f"dank:profile:v1:member_list_select:{page}"
+                if len(pages) > 1 else "dank:profile:v1:member_list_select"
+            ),
+            placeholder=(
+                f"Pick a member from this page… • Page {page + 1}/{len(pages)}"
+                if len(pages) > 1 else "Pick a member from this page…"
+            ),
+            title="View Member Profile",
+            timeout=300,
+            allow_anyone=True,
+            include_cancel=False,
+            on_home=on_home if guild is not None else None,
+            on_cancel=on_home if guild is not None else None,
+            home_label="Back",
+        )
+        if len(pages) > 1:
+            self.add_item(_ProfileMemberListPageButton(delta=-1, disabled=page <= 0))
+            self.add_item(_ProfileMemberListPageButton(delta=1, disabled=page >= len(pages) - 1))
+
+    def _for_page(self, page: int) -> "ProfileMemberListSelect":
+        return ProfileMemberListSelect(self._all_members, page=page, guild=self._guild)
+
+
+class _ProfileMemberListPageButton(discord.ui.Button):
+    """Prev/Next for the member picker; keeps the page embed in sync."""
+
+    def __init__(self, *, delta: int, disabled: bool) -> None:
+        super().__init__(
+            label="Previous" if delta < 0 else "Next",
+            emoji="⬅️" if delta < 0 else "➡️",
+            style=discord.ButtonStyle.secondary,
+            custom_id=(
+                "dank:profile:v1:member_list_picker:prev" if delta < 0
+                else "dank:profile:v1:member_list_picker:next"
+            ),
+            row=2,
+            disabled=bool(disabled),
+        )
+        self.delta = int(delta)
+
+    async def callback(self, interaction: discord.Interaction) -> None:  # type: ignore[override]
+        view = self.view
+        if not isinstance(view, ProfileMemberListSelect):
+            return
+        page = max(0, min(view.page + self.delta, view.pages - 1))
+        if view._guild is not None:
+            await interaction.response.edit_message(
+                embed=_profile_member_page_embed(view._guild, page=page),
+                view=view._for_page(page),
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+        else:
+            await interaction.response.edit_message(view=view._for_page(page))
+
+
+class _ProfileMemberListOpenButton(discord.ui.Button):
+    """Swaps the member list panel for the house member picker."""
+
+    def __init__(self, *, disabled: bool = False) -> None:
+        super().__init__(
+            label="Pick a Member",
+            emoji="👥",
+            style=discord.ButtonStyle.primary,
+            custom_id="dank:profile:v1:member_list_open",
+            row=0,
+            disabled=bool(disabled),
         )
 
-    async def callback(self, interaction: discord.Interaction) -> None:
+    async def callback(self, interaction: discord.Interaction) -> None:  # type: ignore[override]
+        view = self.view
+        if not isinstance(view, ProfileMemberListView):
+            return
         guild = interaction.guild
         if guild is None:
             return await _reply(interaction, "This only works inside the server.", ok=False)
-
-        raw = self.values[0] if self.values else "0"
-        member = guild.get_member(int(raw)) if str(raw).isdigit() else None
-
-        if not isinstance(member, discord.Member) or member.bot:
-            return await _reply(interaction, "That human member is no longer available.", ok=False)
-
-        from .public_profile_cards import send_privacy_aware_profile
-
-        await send_privacy_aware_profile(interaction, member)
+        await interaction.response.edit_message(
+            embed=_profile_member_page_embed(guild, page=view.page, per_page=view.per_page),
+            view=ProfileMemberListSelect(view.members, page=view.page, guild=guild),
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
 
 
 class ProfileMemberListView(discord.ui.View):
@@ -1363,6 +1475,7 @@ class ProfileMemberListView(discord.ui.View):
         self.per_page = int(per_page or 25)
 
         members = _profile_human_members(guild)
+        self.members = members
         self.total = len(members)
         self.max_page = max(0, (self.total - 1) // self.per_page) if self.total else 0
         self.page = min(self.page, self.max_page)
@@ -1370,7 +1483,9 @@ class ProfileMemberListView(discord.ui.View):
         start = self.page * self.per_page
         shown = members[start:start + self.per_page]
 
-        self.add_item(ProfileMemberListSelect(shown))
+        # The member select is a house picker view now; the panel
+        # carries an opener button that swaps to it for this page.
+        self.add_item(_ProfileMemberListOpenButton(disabled=not shown))
 
     async def _flip(self, interaction: discord.Interaction, delta: int) -> None:
         guild = interaction.guild
@@ -1725,32 +1840,92 @@ def profile_interaction_runtime_status() -> dict[str, Any]:
     }
 
 
-class ProfileCategorySelectView(discord.ui.View):
-    def __init__(self, guild: discord.Guild, member: discord.Member, category_key: str) -> None:
-        super().__init__(timeout=300)
+class ProfileCategorySelectView(DankMultiPickerView):
+    """House multi-picker for one self-role profile category.
 
-        options: list[discord.SelectOption] = []
-        for role in _category_roles(guild, category_key)[:25]:
-            options.append(
-                discord.SelectOption(
-                    label=_short_role_label(role.name),
-                    value=str(role.id),
-                    default=role in member.roles,
-                )
-            )
+    Class C fit: this is a member-facing picker in the Profile Panel
+    flow — any member may press it (``allow_anyone``), and the member
+    whose roles change is always the presser, validated inside the
+    canonical handler. The raw view's select had NO callback of its
+    own: presses are applied by ``_handle_profile_interaction`` (the
+    ``select:`` branch), which is also the stale-press recovery path
+    for a press whose temporary view was lost. This picker's
+    ``on_pick`` therefore deliberately does not duplicate that apply —
+    the listener owns it exactly as before, so a live press and a
+    recovered press can never double-apply roles.
 
-        if not options:
-            options.append(discord.SelectOption(label="No roles available", value="0"))
+    The legacy custom_id ``dank:profile:v1:select:{category_key}`` is
+    load-bearing and kept verbatim for page 0 / the single-page case;
+    extra pages suffix ``:p{page}``, which the handler parses back out
+    (its ``select:`` prefix match still fires) and scopes the
+    add/remove diff to that page's roles. The old silent ``[:25]``
+    truncation is gone: every role in the category stays reachable
+    through chunk_choices paging.
+    """
 
-        self.add_item(
-            discord.ui.Select(
-                placeholder="Pick your choices…",
-                min_values=0,
-                max_values=max(1, len(options)),
-                options=options,
-                custom_id=f"{PROFILE_PREFIX}select:{category_key}",
-            )
+    def __init__(self, guild: discord.Guild, member: discord.Member, category_key: str, *, page: int = 0) -> None:
+        self._guild = guild
+        self._member = member
+        self.category_key = str(category_key)
+        self.member_id = int(member.id)
+        roles = _category_roles(guild, category_key)
+        all_choices = [
+            make_choice(_short_role_label(role.name), str(role.id), default=role in member.roles)
+            for role in roles
+        ]
+        pages = chunk_choices(all_choices) or [[]]
+        page = max(0, min(int(page), len(pages) - 1))
+        self.page = page
+        self.pages = len(pages)
+        self._all_choices = all_choices
+        legacy_id = f"{PROFILE_PREFIX}select:{category_key}"
+
+        async def on_pick(interaction: discord.Interaction, values: list[str]) -> None:
+            # Applied by _handle_profile_interaction's ``select:``
+            # branch (see the class docstring); nothing to duplicate.
+            return None
+
+        super().__init__(
+            author_id=self.member_id,
+            choices=pages[page],
+            on_pick=on_pick,
+            custom_id=legacy_id if page == 0 or len(pages) == 1 else f"{legacy_id}:p{page}",
+            placeholder="Pick your choices…",
+            title="Profile Roles",
+            timeout=300,
+            allow_anyone=True,
+            include_cancel=False,
+            min_values=0,
+            max_values=max(1, len(pages[page])),
         )
+        if len(pages) > 1:
+            self.add_item(_ProfileCategoryPageButton(category_key=self.category_key, delta=-1, disabled=page <= 0))
+            self.add_item(_ProfileCategoryPageButton(category_key=self.category_key, delta=1, disabled=page >= len(pages) - 1))
+
+    def _for_page(self, page: int) -> "ProfileCategorySelectView":
+        return ProfileCategorySelectView(self._guild, self._member, self.category_key, page=page)
+
+
+class _ProfileCategoryPageButton(discord.ui.Button):
+    """Prev/Next for the profile category picker's own pages."""
+
+    def __init__(self, *, category_key: str, delta: int, disabled: bool) -> None:
+        super().__init__(
+            label="Previous" if delta < 0 else "Next",
+            emoji="⬅️" if delta < 0 else "➡️",
+            style=discord.ButtonStyle.secondary,
+            custom_id=f"{PROFILE_PREFIX}select_page:{category_key}:{'prev' if delta < 0 else 'next'}",
+            row=1,
+            disabled=bool(disabled),
+        )
+        self.delta = int(delta)
+
+    async def callback(self, interaction: discord.Interaction) -> None:  # type: ignore[override]
+        view = self.view
+        if not isinstance(view, ProfileCategorySelectView):
+            return
+        page = max(0, min(view.page + self.delta, view.pages - 1))
+        await interaction.response.edit_message(view=view._for_page(page))
 
 
 class MissingIdentityModal(discord.ui.Modal, title="Missing Identity?"):
@@ -2394,9 +2569,22 @@ async def _handle_profile_interaction(interaction: discord.Interaction) -> bool:
     if suffix.startswith("select:"):
         await _ack_profile_action(interaction)
         category = suffix.split(":", 1)[1]
+        # Paged category pickers suffix extra pages as ``:p{page}`` on
+        # the legacy id; the ``select:`` prefix match above is what
+        # lets a stale press on an already-posted panel recover here.
+        # A paged press diffs only that page's roles (an unselected
+        # role on another page is not a removal); a legacy unpaged
+        # press keeps the original whole-category diff.
+        page: Optional[int] = None
+        _head, _sep, _tail = category.rpartition(":p")
+        if _sep and _tail.isdigit():
+            category, page = _head, int(_tail)
         raw_values = data.get("values") if isinstance(data.get("values"), list) else []
         selected = {int(value) for value in raw_values if str(value).isdigit() and int(value) > 0}
         category_roles = _category_roles(guild, category)
+        if page is not None:
+            _start = page * 25
+            category_roles = category_roles[_start:_start + 25]
 
         to_add = [role for role in category_roles if int(role.id) in selected and role not in member.roles and _can_manage(role, guild)[0]]
         to_remove = [role for role in category_roles if int(role.id) not in selected and role in member.roles and _can_manage(role, guild)[0]]

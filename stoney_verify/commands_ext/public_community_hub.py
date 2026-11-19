@@ -32,6 +32,7 @@ from ..interaction_guard import safe_defer_interaction
 from ..operation_queue import run_exclusive
 from ..panel_lifecycle import PRIVATE_MENU_TTL_SECONDS, private_menu_lifecycle_text
 from ..permission_repair_core import community_hub_oauth_url
+from ..ui.picker import DankChannelSelect, DankPickerView, DankUserSelect, chunk_choices, make_choice
 from ..ui.resource_browser import DankGuildResourceBrowserView
 from .public_owner_authority import (
     interaction_has_administrator_authority,
@@ -1249,20 +1250,165 @@ def _match_safety_embed(blocked_ids: list[str]) -> discord.Embed:
     return embed
 
 
-class MatchSafetyUserSelect(discord.ui.UserSelect):
+async def _picker_restore_msg(
+    interaction: discord.Interaction,
+    *,
+    embed: Optional[discord.Embed],
+    view: Optional[discord.ui.View],
+) -> None:
+    if not interaction.response.is_done():
+        await interaction.response.edit_message(
+            embed=embed, view=view, allowed_mentions=discord.AllowedMentions.none(),
+        )
+    else:
+        await interaction.edit_original_response(
+            embed=embed, view=view, allowed_mentions=discord.AllowedMentions.none(),
+        )
+
+
+class _PickerCompat:
+    """Select-style accessors + host restore for house option pickers.
+
+    The migrated Community Hub pickers are :class:`DankPickerView`
+    subclasses (views, not select items). These accessors keep the
+    legacy select-shaped surface (``options`` / ``values`` / ``callback``)
+    working for callers and tests that drove the old raw selects, and
+    ``_restore_host`` implements the house Back/Close contract: return
+    to the host view untouched (same embed, same host view instance
+    when one was supplied).
+    """
+
+    host_view: Any = None
+    owner_id: int = 0
+
+    @property
+    def options(self) -> list[discord.SelectOption]:
+        for child in getattr(self, "children", []):
+            if isinstance(child, discord.ui.Select):
+                return list(child.options)
+        return []
+
+    @property
+    def values(self) -> list[str]:
+        return list(self.__dict__.get("_values") or [])
+
+    @values.setter
+    def values(self, new_values: Any) -> None:
+        self.__dict__["_values"] = [str(value) for value in (new_values or [])]
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        vals = self.values
+        if vals:
+            await self.handle_pick(interaction, str(vals[0]))  # type: ignore[attr-defined]
+
+    def _fallback_host(self) -> Optional[tuple[Any, Optional[discord.Embed]]]:
+        return None
+
+    async def _restore_host(self, interaction: discord.Interaction) -> None:
+        host = getattr(self, "host_view", None)
+        embed: Optional[discord.Embed] = None
+        message = getattr(interaction, "message", None)
+        embeds = getattr(message, "embeds", None) if message is not None else None
+        if embeds:
+            embed = embeds[0]
+        if host is None:
+            built = self._fallback_host()
+            if built is not None:
+                host, built_embed = built
+                if built_embed is not None:
+                    embed = built_embed
+        if host is None:
+            owner = int(getattr(self, "owner_id", 0) or 0)
+            if owner <= 0:
+                return
+            host = CommunityHubView(owner)
+            if embed is None:
+                embed = _hub_embed()
+        await _picker_restore_msg(interaction, embed=embed, view=host)
+
+
+class _HubPickerOpenButton(discord.ui.Button):
+    """Opener that swaps a host panel for its house picker view.
+
+    Replaces the old embedded raw select 1-for-1 on the host view; the
+    host view's own interaction check still gates the press, and the
+    picker is built from the live host view so Back restores it
+    untouched.
+    """
+
+    def __init__(
+        self,
+        *,
+        label: str,
+        emoji: Optional[str],
+        custom_id: str,
+        row: int,
+        factory: Callable[[Any], DankPickerView],
+    ) -> None:
+        super().__init__(
+            label=label, emoji=emoji, style=discord.ButtonStyle.secondary,
+            custom_id=custom_id, row=row,
+        )
+        self._factory = factory
+
+    async def callback(self, interaction: discord.Interaction) -> None:  # type: ignore[override]
+        picker = self._factory(self.view)
+        message = getattr(interaction, "message", None)
+        embeds = getattr(message, "embeds", None) if message is not None else None
+        await interaction.response.edit_message(
+            embed=embeds[0] if embeds else None,
+            view=picker,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+
+
+class _HubPageButton(discord.ui.Button):
+    """Prev/Next for a paged house picker (chunk_choices pages)."""
+
+    def __init__(self, owner: Any, *, delta: int, disabled: bool) -> None:
+        target = int(getattr(owner, "_page_index", owner.page)) + int(delta)
+        super().__init__(
+            label="Previous" if delta < 0 else "Next",
+            emoji="⬅️" if delta < 0 else "➡️",
+            style=discord.ButtonStyle.secondary,
+            custom_id=f"{owner.custom_id}:page:{target}",
+            row=1,
+            disabled=bool(disabled),
+        )
+        self._owner = owner
+        self._target = target
+
+    async def callback(self, interaction: discord.Interaction) -> None:  # type: ignore[override]
+        message = getattr(interaction, "message", None)
+        embeds = getattr(message, "embeds", None) if message is not None else None
+        await interaction.response.edit_message(
+            embed=embeds[0] if embeds else None,
+            view=self._owner._for_page(self._target),
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+
+
+def _add_page_buttons(picker: Any, *, page: int, pages: int) -> None:
+    if pages > 1:
+        picker.add_item(_HubPageButton(picker, delta=-1, disabled=page <= 0))
+        picker.add_item(_HubPageButton(picker, delta=1, disabled=page >= pages - 1))
+
+
+class MatchSafetyUserSelect(DankUserSelect):
     def __init__(self, owner_id: int, blocked_ids: list[str]) -> None:
         self.owner_id = int(owner_id)
         self.blocked_ids = set(blocked_ids)
         super().__init__(
+            author_id=int(owner_id),
+            on_pick=self._on_pick,
             placeholder="Choose a member to block/unblock from matching",
             min_values=1,
             max_values=1,
-            custom_id="dank:hub:safety:user:v1",
             row=0,
         )
+        self.custom_id = "dank:hub:safety:user:v1"
 
-    async def callback(self, interaction: discord.Interaction) -> None:
-        target = self.values[0]
+    async def _on_pick(self, interaction: discord.Interaction, target: Any) -> None:
         if int(target.id) == int(interaction.user.id):
             return await _private(interaction, "You cannot add yourself to your own match exclusions.")
 
@@ -1339,13 +1485,28 @@ _COMMUNITY_HOME_SECTIONS = {
 }
 
 
-class CommunityHubSectionSelect(discord.ui.Select):
-    def __init__(self, owner_id: int, current: str) -> None:
-        self.owner_id = owner_id
+class CommunityHubSectionSelect(_PickerCompat, DankPickerView):
+    """House picker for switching Community Hub home areas."""
+
+    def __init__(self, owner_id: int, current: str, *, host_view: Any = None) -> None:
+        self.owner_id = int(owner_id)
+        self.current = current
+        self.host_view = host_view
+
+        async def on_pick(interaction: discord.Interaction, value: str) -> None:
+            if int(interaction.user.id) != self.owner_id:
+                return await _private(interaction, "Open your own Community Hub panel.")
+            await _defer_update(interaction)
+            await _edit_private_original(
+                interaction, content=None,
+                embed=_hub_embed(section=value),
+                view=CommunityHubView(self.owner_id, section=value),
+            )
+
         super().__init__(
-            placeholder="Choose a Community Hub area",
-            options=[
-                discord.SelectOption(label=label, value=key, default=current == key)
+            author_id=self.owner_id,
+            choices=[
+                make_choice(label, key, default=current == key)
                 for key, label in (
                     ("play", "Play & Groups"),
                     ("explore", "Events & Discovery"),
@@ -1353,18 +1514,27 @@ class CommunityHubSectionSelect(discord.ui.Select):
                     ("staff", "Staff Tools"),
                 )
             ],
-            row=0, custom_id="dank:hub:home:section:v2",
+            on_pick=on_pick,
+            custom_id="dank:hub:home:section:v2",
+            placeholder="Choose a Community Hub area",
+            title="Community Hub",
+            timeout=PRIVATE_MENU_TTL_SECONDS,
+            on_home=self._restore_host,
+            on_cancel=self._restore_host,
+            home_label="Back",
         )
 
-    async def callback(self, interaction: discord.Interaction) -> None:
-        if int(interaction.user.id) != self.owner_id:
-            return await _private(interaction, "Open your own Community Hub panel.")
-        await _defer_update(interaction)
-        await _edit_private_original(
-            interaction, content=None,
-            embed=_hub_embed(section=self.values[0]),
-            view=CommunityHubView(self.owner_id, section=self.values[0]),
+    def _fallback_host(self) -> Optional[tuple[Any, Optional[discord.Embed]]]:
+        return (
+            CommunityHubView(self.owner_id, section=self.current),
+            _hub_embed(section=self.current),
         )
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if int(getattr(interaction.user, "id", 0) or 0) != self.owner_id:
+            await _private(interaction, "Open your own Community Hub panel.")
+            return False
+        return True
 
 
 class CommunityHubView(_OwnedView):
@@ -1373,7 +1543,11 @@ class CommunityHubView(_OwnedView):
         self.section = section if section in _COMMUNITY_HOME_SECTIONS else "play"
         existing = {str(getattr(item, "label", "")): item for item in self.children}
         self.clear_items()
-        self.add_item(CommunityHubSectionSelect(self.owner_id, self.section))
+        self.add_item(_HubPickerOpenButton(
+            label="Switch Area", emoji="🧭",
+            custom_id="dank:hub:home:section:open:v1", row=0,
+            factory=lambda host: CommunityHubSectionSelect(self.owner_id, self.section, host_view=host),
+        ))
         names = (*_COMMUNITY_HOME_SECTIONS[self.section], "Back to Dank Home", "Close")
         for index, label in enumerate(names):
             item = existing[label]
@@ -1758,20 +1932,31 @@ def _available_players_embed(game: str, rows: list[dict[str, Any]]) -> discord.E
     return embed
 
 
-class AvailableGameSelect(discord.ui.Select):
+class AvailableGameSelect(_PickerCompat, DankPickerView):
+    """Paged house picker for browsing Open to Play by game.
+
+    The raw select silently truncated the game list to the first 25;
+    this picker pages EVERY game through chunk_choices.
+    """
+
     def __init__(
         self,
         owner_id: int,
         availability_summary: dict[str, Any],
         *,
         selected_game: str = "",
+        host_view: Any = None,
+        page: int = 0,
     ) -> None:
         self.owner_id = int(owner_id)
-        games = list(availability_summary.get("top_games") or [])
-        options = [
-            discord.SelectOption(
-                label=_safe_str(row.get("name"), "Game")[:100],
-                value=_safe_str(row.get("name"), "Game")[:100],
+        self.availability_summary = dict(availability_summary or {})
+        self.selected_game = selected_game
+        self.host_view = host_view
+        games = list(self.availability_summary.get("top_games") or [])
+        all_choices = [
+            make_choice(
+                _safe_str(row.get("name"), "Game"),
+                _safe_str(row.get("name"), "Game"),
                 description=(
                     f"{_safe_int(row.get('count'))} available"
                     + (
@@ -1779,28 +1964,49 @@ class AvailableGameSelect(discord.ui.Select):
                         if _safe_int(row.get("auto_match_count")) > 0
                         else ""
                     )
-                )[:100],
+                ),
                 emoji="🟢",
                 default=bool(
                     selected_game
                     and _safe_str(row.get("name")).casefold() == selected_game.casefold()
                 ),
             )
-            for row in games[:25]
+            for row in games
             if _safe_str(row.get("name"))
         ]
+        if not all_choices:
+            pages = [[make_choice("Nobody is Open to Play", "none")]]
+        else:
+            pages = chunk_choices(all_choices)
+        page = max(0, min(int(page), len(pages) - 1))
+        self.page = page
+        self.pages = len(pages)
+        base_id = "dank:hub:find:availablegame:v1"
+
+        async def on_pick(interaction: discord.Interaction, value: str) -> None:
+            await self._handle_game_pick(interaction, value)
+
         super().__init__(
+            author_id=self.owner_id,
+            choices=pages[page],
+            on_pick=on_pick,
+            custom_id=f"{base_id}:{page}" if len(pages) > 1 else base_id,
             placeholder="Browse Open to Play by game",
-            min_values=1,
-            max_values=1,
-            options=options or [discord.SelectOption(label="Nobody is Open to Play", value="none")],
-            disabled=not bool(options),
-            custom_id="dank:hub:find:availablegame:v1",
-            row=2,
+            title="Community Hub",
+            timeout=PRIVATE_MENU_TTL_SECONDS,
+            on_home=self._restore_host,
+            on_cancel=self._restore_host,
+            home_label="Back",
+        )
+        _add_page_buttons(self, page=page, pages=len(pages))
+
+    def _for_page(self, page: int) -> "AvailableGameSelect":
+        return AvailableGameSelect(
+            self.owner_id, self.availability_summary,
+            selected_game=self.selected_game, host_view=self.host_view, page=page,
         )
 
-    async def callback(self, interaction: discord.Interaction) -> None:
-        game = self.values[0]
+    async def _handle_game_pick(self, interaction: discord.Interaction, game: str) -> None:
         if game == "none":
             return
         await _defer_update(interaction)
@@ -1836,32 +2042,73 @@ class AvailableGameSelect(discord.ui.Select):
         )
 
 
-class SessionSelect(discord.ui.Select):
-    def __init__(self, owner_id: int, sessions: list[dict[str, Any]], *, partner: bool) -> None:
+class SessionSelect(_PickerCompat, DankPickerView):
+    """House picker for member-facing gaming-group lists.
+
+    Class C fit: these panels are pressed by many members, so the
+    picker itself is ``allow_anyone`` and the per-pick authority stays
+    exactly where the raw select kept it — inside the handler, which
+    re-reads the live session / re-evaluates partner discovery consent
+    on every pick. Session lists longer than Discord's 25-option
+    limit page with chunk_choices instead of the old ``[:25]``
+    truncation.
+    """
+
+    _BASE_CUSTOM_ID = "dank:hub:find:select:v1"
+    _ALLOW_ANYONE = True
+
+    def __init__(
+        self, owner_id: int, sessions: list[dict[str, Any]], *, partner: bool,
+        host_view: Any = None, page: int = 0,
+    ) -> None:
         self.owner_id = int(owner_id)
         self.sessions = {_safe_str(row.get("id")): row for row in sessions if row.get("id")}
         self.partner = bool(partner)
-        options: list[discord.SelectOption] = []
-        for row in sessions[:25]:
+        self.host_view = host_view
+        self._sessions_list = list(sessions)
+        all_choices = []
+        for row in sessions:
             sid = _safe_str(row.get("id"))
-            game = _safe_str(row.get("game_name"), "Game")[:100]
+            game = _safe_str(row.get("game_name"), "Game")
             state = _STATE_LABELS.get(_safe_str(row.get("state")), "Open")
             desc = f"{state} • capacity {_safe_int(row.get('capacity'), 6)}"
             if partner:
                 desc += f" • server {_safe_str(row.get('guild_id'))}"
-            options.append(discord.SelectOption(label=game, value=sid, description=desc[:100], emoji="🎮"))
+            all_choices.append(make_choice(game, sid, description=desc, emoji="🎮"))
+        if not all_choices:
+            pages = [[make_choice("No active groups", "none")]]
+        else:
+            pages = chunk_choices(all_choices)
+        page = max(0, min(int(page), len(pages) - 1))
+        self.page = page
+        self.pages = len(pages)
+        base_id = self._BASE_CUSTOM_ID
+
+        async def on_pick(interaction: discord.Interaction, value: str) -> None:
+            await self._handle_session_pick(interaction, value)
+
         super().__init__(
+            author_id=self.owner_id,
+            choices=pages[page],
+            on_pick=on_pick,
+            custom_id=f"{base_id}:{page}" if len(pages) > 1 else base_id,
             placeholder="Choose a gaming group",
-            min_values=1,
-            max_values=1,
-            options=options or [discord.SelectOption(label="No active groups", value="none")],
-            disabled=not bool(options),
-            custom_id="dank:hub:find:select:v1",
-            row=0,
+            title="Community Hub",
+            timeout=PRIVATE_MENU_TTL_SECONDS,
+            allow_anyone=bool(self._ALLOW_ANYONE),
+            on_home=self._restore_host,
+            on_cancel=self._restore_host,
+            home_label="Back",
+        )
+        _add_page_buttons(self, page=page, pages=len(pages))
+
+    def _for_page(self, page: int) -> "SessionSelect":
+        return SessionSelect(
+            self.owner_id, self._sessions_list, partner=self.partner,
+            host_view=self.host_view, page=page,
         )
 
-    async def callback(self, interaction: discord.Interaction) -> None:
-        sid = self.values[0]
+    async def _handle_session_pick(self, interaction: discord.Interaction, sid: str) -> None:
         if sid == "none":
             return
         await _defer_update(interaction)
@@ -1923,13 +2170,14 @@ class SessionSelect(discord.ui.Select):
         )
 
 
-class SessionPreferenceSelect(discord.ui.Select):
-    """One native mobile select for both durable session preference fields."""
+class SessionPreferenceSelect(_PickerCompat, DankPickerView):
+    """House picker for both durable session preference fields."""
 
     def __init__(
         self, owner_id: int, *, partner: bool, game_query: str = "",
         play_style: str = "", mic_preference: str = "",
         page: int = 0, has_next: bool = False,
+        host_view: Any = None,
     ) -> None:
         self.owner_id = int(owner_id)
         self.partner = bool(partner)
@@ -1938,6 +2186,7 @@ class SessionPreferenceSelect(discord.ui.Select):
         self.mic_preference = mic_preference
         self.page = max(0, min(int(page), 3))
         self.has_next = bool(has_next)
+        self.host_view = host_view
         items = [
             ("Reset session preferences", "clear", "🧹"),
             ("Any play style", "style:off", "🎮"),
@@ -1955,25 +2204,33 @@ class SessionPreferenceSelect(discord.ui.Select):
             items.insert(0, ("Previous groups", "page:prev", "⬅️"))
         if self.has_next:
             items.insert(0, ("More groups", "page:next", "➡️"))
-        options = [
-            discord.SelectOption(label=label, value=value, emoji=emoji)
-            for label, value, emoji in items
-        ]
         description = (
             " • ".join(filter(None, (
                 f"Style: {play_style.replace('_', ' ')}" if play_style else "",
                 f"Mic: {mic_preference.replace('_', ' ')}" if mic_preference else "",
             ))) or "All styles and mic policies"
         )
+
+        async def on_pick(interaction: discord.Interaction, value: str) -> None:
+            await self._handle_preference_pick(interaction, value)
+
         super().__init__(
-            placeholder=f"🎚️ Filters / Page {self.page + 1} • {description}"[:150],
-            options=options, min_values=1, max_values=1,
+            author_id=self.owner_id,
+            choices=[
+                make_choice(label, value, emoji=emoji)
+                for label, value, emoji in items
+            ],
+            on_pick=on_pick,
             custom_id="dank:hub:find:preferences:v1",
-            row=4,
+            placeholder=f"🎚️ Filters / Page {self.page + 1} • {description}"[:150],
+            title="Community Hub",
+            timeout=PRIVATE_MENU_TTL_SECONDS,
+            on_home=self._restore_host,
+            on_cancel=self._restore_host,
+            home_label="Back",
         )
 
-    async def callback(self, interaction: discord.Interaction) -> None:
-        choice = self.values[0]
+    async def _handle_preference_pick(self, interaction: discord.Interaction, choice: str) -> None:
         style = self.play_style
         mic = self.mic_preference
         if choice in {"page:prev", "page:next"}:
@@ -2029,23 +2286,34 @@ class FindPlayersView(_OwnedView):
         self.has_next = bool(has_next)
         self.availability_summary = dict(availability_summary or {})
         self.selected_game = _safe_str(selected_game)
-        self.add_item(SessionSelect(owner_id, sessions, partner=partner))
+        self.add_item(_HubPickerOpenButton(
+            label="Choose a Gaming Group", emoji="🎮",
+            custom_id="dank:hub:find:select:open:v1", row=0,
+            factory=lambda host: SessionSelect(owner_id, sessions, partner=partner, host_view=host),
+        ))
         self.local_source.disabled = not self.partner
         self.partner_source.disabled = self.partner
         self.clear_game.disabled = not bool(self.game_query or self.play_style or self.mic_preference)
-        self.add_item(SessionPreferenceSelect(
-            owner_id, partner=self.partner, game_query=self.game_query,
-            play_style=self.play_style, mic_preference=self.mic_preference,
-            page=self.page, has_next=self.has_next,
+        self.add_item(_HubPickerOpenButton(
+            label="Filters & Pages", emoji="🎚️",
+            custom_id="dank:hub:find:preferences:open:v1", row=4,
+            factory=lambda host: SessionPreferenceSelect(
+                owner_id, partner=self.partner, game_query=self.game_query,
+                play_style=self.play_style, mic_preference=self.mic_preference,
+                page=self.page, has_next=self.has_next, host_view=host,
+            ),
         ))
         if not self.partner:
-            self.add_item(
-                AvailableGameSelect(
+            self.add_item(_HubPickerOpenButton(
+                label="Browse Open to Play", emoji="🟢",
+                custom_id="dank:hub:find:availablegame:open:v1", row=2,
+                factory=lambda host: AvailableGameSelect(
                     owner_id,
                     self.availability_summary,
                     selected_game=self.selected_game,
-                )
-            )
+                    host_view=host,
+                ),
+            ))
 
     @discord.ui.button(label="Refresh", emoji="🔄", style=discord.ButtonStyle.secondary, custom_id="dank:hub:find:refresh:v1", row=1)
     async def refresh(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -2492,10 +2760,18 @@ class UnifiedPlayerDiscoveryView(_OwnedView):
         self.game = game[:55]
         self.region = region[:40]
         # Reuse the existing click-time server/host consent validation.
-        self.add_item(PublicNetworkSelect(
-            owner_id, network_rows[:20], self.game, page=0,
-            return_to_unified=True, region=self.region,
-        ))
+        # The raw select was disabled when no groups were listed; the
+        # opener keeps that exact affordance.
+        _network_opener = _HubPickerOpenButton(
+            label="Choose an Outside Group", emoji="🎮",
+            custom_id="dank:hub:unified:networkselect:open:v1", row=0,
+            factory=lambda host: PublicNetworkSelect(
+                owner_id, network_rows[:20], self.game, page=0,
+                return_to_unified=True, region=self.region, host_view=host,
+            ),
+        )
+        _network_opener.disabled = not bool(network_rows)
+        self.add_item(_network_opener)
 
     @discord.ui.button(label="Search Any Game", emoji="🔎", style=discord.ButtonStyle.primary, custom_id="dank:hub:unified:search:v1", row=1)
     async def search(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -2671,13 +2947,16 @@ def _atlas_groups_embed(
     return embed
 
 
-class AtlasTypeSelect(discord.ui.Select):
-    def __init__(self, owner_id: int, *, game: str, region: str, ready: bool, group_type: str) -> None:
-        self.owner_id = owner_id
+class AtlasTypeSelect(_PickerCompat, DankPickerView):
+    """House picker for the Atlas group-type filter."""
+
+    def __init__(self, owner_id: int, *, game: str, region: str, ready: bool, group_type: str, host_view: Any = None) -> None:
+        self.owner_id = int(owner_id)
         self.game = game
         self.region = region
         self.ready = ready
         self.group_type = group_type
+        self.host_view = host_view
         options = [
             ("Any group", "all"),
             ("Looking for a group", atlas.ATLAS_TYPE_VALUES[0]),
@@ -2686,16 +2965,28 @@ class AtlasTypeSelect(discord.ui.Select):
             ("Clan", "clan"),
             ("Squad", "squad"),
         ]
+
+        async def on_pick(interaction: discord.Interaction, value: str) -> None:
+            await self._handle_type_pick(interaction, value)
+
         super().__init__(
+            author_id=self.owner_id,
+            choices=[
+                make_choice(label, value, default=(group_type or "all") == value)
+                for label, value in options
+            ],
+            on_pick=on_pick,
+            custom_id="dank:hub:atlas:type:v1",
             placeholder="What kind of group?",
-            custom_id="dank:hub:atlas:type:v1", row=3,
-            options=[discord.SelectOption(label=label, value=value, default=(group_type or "all") == value)
-                     for label, value in options],
+            title="Community Hub",
+            timeout=PRIVATE_MENU_TTL_SECONDS,
+            on_home=self._restore_host,
+            on_cancel=self._restore_host,
+            home_label="Back",
         )
 
-    async def callback(self, interaction: discord.Interaction) -> None:
+    async def _handle_type_pick(self, interaction: discord.Interaction, choice: str) -> None:
         await _defer_update(interaction)
-        choice = self.values[0]
         await _open_atlas_groups(
             interaction, self.owner_id, game=self.game, region=self.region,
             ready=self.ready, group_type="" if choice == "all" else choice,
@@ -2716,9 +3007,13 @@ class AtlasGroupsView(_OwnedView):
         self.previous.disabled = self.page == 0
         self.next_page.disabled = self.page + 1 >= self.pages
         self.toggle_ready.label = "Show All" if self.ready else "Ready Now"
-        self.add_item(AtlasTypeSelect(
-            owner_id, game=self.game, region=self.region, ready=self.ready,
-            group_type=self.group_type,
+        self.add_item(_HubPickerOpenButton(
+            label="Choose Group Type", emoji="🏷️",
+            custom_id="dank:hub:atlas:type:open:v1", row=3,
+            factory=lambda host: AtlasTypeSelect(
+                owner_id, game=self.game, region=self.region, ready=self.ready,
+                group_type=self.group_type, host_view=host,
+            ),
         ))
         self.add_item(discord.ui.Button(
             label="Browse Atlas Gaming", emoji="🌐",
@@ -2797,28 +3092,44 @@ async def _open_atlas_groups(
     )
 
 
-class MinecraftEditionSelect(discord.ui.Select):
-    def __init__(self, owner_id: int, edition: str) -> None:
+class MinecraftEditionSelect(_PickerCompat, DankPickerView):
+    """House picker for the Minecraft edition filter."""
+
+    def __init__(self, owner_id: int, edition: str, *, host_view: Any = None) -> None:
         self.owner_id = int(owner_id)
+        self.edition = edition
+        self.host_view = host_view
         choices = [
             ("All editions", "", "🎮"),
             ("Java", "JAVA", "💻"),
             ("Bedrock", "BEDROCK", "📱"),
             ("Cross-play", "CROSSPLAY", "🔀"),
         ]
+
+        async def on_pick(interaction: discord.Interaction, value: str) -> None:
+            await self._handle_edition_pick(interaction, value)
+
         super().__init__(
-            placeholder="Minecraft edition: " + (edition or "All"),
-            options=[
-                discord.SelectOption(label=label, value=value or "ALL", emoji=emoji, default=edition == value)
+            author_id=self.owner_id,
+            choices=[
+                make_choice(label, value or "ALL", emoji=emoji, default=edition == value)
                 for label, value, emoji in choices
             ],
-            min_values=1, max_values=1,
-            row=0, custom_id="dank:hub:outside:minecraft:edition:v1",
+            on_pick=on_pick,
+            custom_id="dank:hub:outside:minecraft:edition:v1",
+            placeholder="Minecraft edition: " + (edition or "All"),
+            title="Community Hub",
+            timeout=PRIVATE_MENU_TTL_SECONDS,
+            on_home=self._restore_host,
+            on_cancel=self._restore_host,
+            home_label="Back",
         )
 
-    async def callback(self, interaction: discord.Interaction) -> None:
+    def _fallback_host(self) -> Optional[tuple[Any, Optional[discord.Embed]]]:
+        return (MinecraftPlayersView(self.owner_id, edition=self.edition), None)
+
+    async def _handle_edition_pick(self, interaction: discord.Interaction, selected: str) -> None:
         await _defer_update(interaction)
-        selected = self.values[0]
         await _open_minecraft_players(
             interaction, self.owner_id, edition="" if selected == "ALL" else selected,
         )
@@ -2867,7 +3178,11 @@ class MinecraftPlayersView(_OwnedView):
         self.page = max(1, min(int(page), 5))
         self.pages = max(1, min(int(pages), 5))
         self.edition = edition
-        self.add_item(MinecraftEditionSelect(owner_id, edition))
+        self.add_item(_HubPickerOpenButton(
+            label="Choose Edition", emoji="⛏️",
+            custom_id="dank:hub:outside:minecraft:edition:open:v1", row=0,
+            factory=lambda host: MinecraftEditionSelect(owner_id, edition, host_view=host),
+        ))
         self.previous.disabled = self.page <= 1
         self.next_page.disabled = self.page >= self.pages
         self.add_item(discord.ui.Button(
@@ -3072,12 +3387,27 @@ def _my_groups_embed(sessions: list[dict[str, Any]]) -> discord.Embed:
 
 
 class MyGroupSelect(SessionSelect):
-    def __init__(self, owner_id: int, sessions: list[dict[str, Any]]) -> None:
-        super().__init__(owner_id, sessions, partner=False)
-        self.custom_id = "dank:hub:mine:select:v1"
+    """Class C house picker for a member's own groups (allow_anyone,
+    per-pick session re-read stays inside the handler)."""
 
-    async def callback(self, interaction: discord.Interaction) -> None:
-        sid = self.values[0]
+    _BASE_CUSTOM_ID = "dank:hub:mine:select:v1"
+
+    def __init__(
+        self, owner_id: int, sessions: list[dict[str, Any]], *,
+        host_view: Any = None, page: int = 0,
+    ) -> None:
+        super().__init__(owner_id, sessions, partner=False, host_view=host_view, page=page)
+
+    def _for_page(self, page: int) -> "MyGroupSelect":
+        return MyGroupSelect(
+            self.owner_id, self._sessions_list, host_view=self.host_view, page=page,
+        )
+
+    def _fallback_host(self) -> Optional[tuple[Any, Optional[discord.Embed]]]:
+        sessions = list(self.sessions.values())
+        return (MyGroupsView(self.owner_id, sessions), _my_groups_embed(sessions))
+
+    async def _handle_session_pick(self, interaction: discord.Interaction, sid: str) -> None:
         if sid == "none":
             return
         await _defer_update(interaction)
@@ -3097,7 +3427,11 @@ class MyGroupSelect(SessionSelect):
 class MyGroupsView(_OwnedView):
     def __init__(self, owner_id: int, sessions: list[dict[str, Any]]) -> None:
         super().__init__(owner_id)
-        self.add_item(MyGroupSelect(owner_id, sessions))
+        self.add_item(_HubPickerOpenButton(
+            label="Choose Your Group", emoji="👥",
+            custom_id="dank:hub:mine:select:open:v1", row=0,
+            factory=lambda host: MyGroupSelect(owner_id, sessions, host_view=host),
+        ))
 
     @discord.ui.button(label="Community Hub", emoji="↩️", style=discord.ButtonStyle.secondary, custom_id="dank:hub:mine:back:v1", row=1)
     async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -3310,21 +3644,22 @@ class SessionDetailView(_OwnedView):
         )
 
 
-class RoleTargetSelect(discord.ui.UserSelect):
+class RoleTargetSelect(DankUserSelect):
     def __init__(self, owner_id: int, session_id: str, role: str) -> None:
-        super().__init__(
-            placeholder="Choose a current session participant",
-            min_values=1,
-            max_values=1,
-            custom_id=f"dank:hub:role:{role}:v1",
-            row=0,
-        )
         self.owner_id = int(owner_id)
         self.session_id = session_id
         self.role = role
+        super().__init__(
+            author_id=int(owner_id),
+            on_pick=self._on_pick,
+            placeholder="Choose a current session participant",
+            min_values=1,
+            max_values=1,
+            row=0,
+        )
+        self.custom_id = f"dank:hub:role:{role}:v1"
 
-    async def callback(self, interaction: discord.Interaction) -> None:
-        target = self.values[0]
+    async def _on_pick(self, interaction: discord.Interaction, target: Any) -> None:
         await _defer_update(interaction)
         members = await hub.list_session_members(self.session_id)
         if not any(_safe_int(row.get("user_id")) == int(target.id) for row in members):
@@ -3480,29 +3815,46 @@ _SESSION_CONTROL_SECTIONS = {
 }
 
 
-class SessionControlSectionSelect(discord.ui.Select):
-    def __init__(self, owner_id: int, session_id: str, section: str) -> None:
+class SessionControlSectionSelect(_PickerCompat, DankPickerView):
+    """House picker for switching session-control sections."""
+
+    def __init__(self, owner_id: int, session_id: str, section: str, *, host_view: Any = None) -> None:
         self.owner_id = int(owner_id)
         self.session_id = session_id
+        self.section = section
+        self.host_view = host_view
+
+        async def on_pick(interaction: discord.Interaction, value: str) -> None:
+            view = SessionControlView(
+                self.owner_id, session_id=self.session_id, section=value,
+            )
+            await view._switch_section(interaction, value)
+
         super().__init__(
-            placeholder="Choose session controls",
-            options=[
-                discord.SelectOption(label=label, value=key, default=section == key)
+            author_id=self.owner_id,
+            choices=[
+                make_choice(label, key, default=section == key)
                 for key, label in (
                     ("session", "Session Controls"),
                     ("people", "People & Captions"),
                     ("outside", "Outside Recruiting"),
                 )
             ],
-            row=4,
+            on_pick=on_pick,
             custom_id="dank:hub:manage:section:v1",
+            placeholder="Choose session controls",
+            title="Community Hub",
+            timeout=PRIVATE_MENU_TTL_SECONDS,
+            on_home=self._restore_host,
+            on_cancel=self._restore_host,
+            home_label="Back",
         )
 
-    async def callback(self, interaction: discord.Interaction) -> None:
-        view = SessionControlView(
-            self.owner_id, session_id=self.session_id, section=self.values[0],
+    def _fallback_host(self) -> Optional[tuple[Any, Optional[discord.Embed]]]:
+        return (
+            SessionControlView(self.owner_id, session_id=self.session_id, section=self.section),
+            None,
         )
-        await view._switch_section(interaction, self.values[0])
 
 
 class SessionControlView(_OwnedView):
@@ -3514,7 +3866,11 @@ class SessionControlView(_OwnedView):
         for item in tuple(self.children):
             if getattr(item, "label", "") not in allowed:
                 self.remove_item(item)
-        self.add_item(SessionControlSectionSelect(self.owner_id, self.session_id, self.section))
+        self.add_item(_HubPickerOpenButton(
+            label="Switch Controls", emoji="🎛️",
+            custom_id="dank:hub:manage:section:open:v1", row=4,
+            factory=lambda host: SessionControlSectionSelect(self.owner_id, self.session_id, self.section, host_view=host),
+        ))
 
     async def _transition(self, interaction: discord.Interaction, action: str, success: str) -> None:
         await _defer_update(interaction)
@@ -4166,28 +4522,57 @@ def _events_embed(events: list[dict[str, Any]]) -> discord.Embed:
     return embed
 
 
-class EventSelect(discord.ui.Select):
-    def __init__(self, owner_id: int, events: list[dict[str, Any]]) -> None:
+class EventSelect(_PickerCompat, DankPickerView):
+    """Paged house picker for Community Hub events (was ``[:25]``)."""
+
+    def __init__(self, owner_id: int, events: list[dict[str, Any]], *, host_view: Any = None, page: int = 0) -> None:
         self.owner_id = int(owner_id)
         self.events = {_safe_str(row.get("id")): row for row in events if row.get("id")}
-        options = [
-            discord.SelectOption(
-                label=_safe_str(row.get("title"), "Event")[:100],
-                value=_safe_str(row.get("id")),
-                description=_safe_str(row.get("game_name"), "Community event")[:100],
+        self.host_view = host_view
+        self._events_list = list(events)
+        all_choices = [
+            make_choice(
+                _safe_str(row.get("title"), "Event"),
+                _safe_str(row.get("id")),
+                description=_safe_str(row.get("game_name"), "Community event"),
                 emoji="📅",
             )
-            for row in events[:25]
+            for row in events
         ]
-        super().__init__(
-            placeholder="Choose an event",
-            options=options or [discord.SelectOption(label="No events", value="none")],
-            disabled=not bool(options),
-            custom_id="dank:hub:event:select:v1",
-        )
+        if not all_choices:
+            pages = [[make_choice("No events", "none")]]
+        else:
+            pages = chunk_choices(all_choices)
+        page = max(0, min(int(page), len(pages) - 1))
+        self.page = page
+        self.pages = len(pages)
+        base_id = "dank:hub:event:select:v1"
 
-    async def callback(self, interaction: discord.Interaction) -> None:
-        eid = self.values[0]
+        async def on_pick(interaction: discord.Interaction, value: str) -> None:
+            await self._handle_event_pick(interaction, value)
+
+        super().__init__(
+            author_id=self.owner_id,
+            choices=pages[page],
+            on_pick=on_pick,
+            custom_id=f"{base_id}:{page}" if len(pages) > 1 else base_id,
+            placeholder="Choose an event",
+            title="Community Hub",
+            timeout=PRIVATE_MENU_TTL_SECONDS,
+            on_home=self._restore_host,
+            on_cancel=self._restore_host,
+            home_label="Back",
+        )
+        _add_page_buttons(self, page=page, pages=len(pages))
+
+    def _for_page(self, page: int) -> "EventSelect":
+        return EventSelect(self.owner_id, self._events_list, host_view=self.host_view, page=page)
+
+    def _fallback_host(self) -> Optional[tuple[Any, Optional[discord.Embed]]]:
+        events = list(self.events.values())
+        return (EventsView(self.owner_id, events), _events_embed(events))
+
+    async def _handle_event_pick(self, interaction: discord.Interaction, eid: str) -> None:
         if eid == "none":
             return
         event = self.events.get(eid)
@@ -4213,7 +4598,11 @@ class EventSelect(discord.ui.Select):
 class EventsView(_OwnedView):
     def __init__(self, owner_id: int, events: list[dict[str, Any]]) -> None:
         super().__init__(owner_id)
-        self.add_item(EventSelect(owner_id, events))
+        self.add_item(_HubPickerOpenButton(
+            label="Choose an Event", emoji="📅",
+            custom_id="dank:hub:event:select:open:v1", row=0,
+            factory=lambda host: EventSelect(owner_id, events, host_view=host),
+        ))
 
     @discord.ui.button(label="Community Hub", emoji="↩️", style=discord.ButtonStyle.secondary, custom_id="dank:hub:event:back:v1", row=1)
     async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -4323,33 +4712,59 @@ def _safety_reports_embed(reports: list[dict[str, Any]]) -> discord.Embed:
     return embed
 
 
-class SafetyReportSelect(discord.ui.Select):
-    def __init__(self, owner_id: int, reports: list[dict[str, Any]]) -> None:
+class SafetyReportSelect(_PickerCompat, DankPickerView):
+    """Paged house picker for the staff safety queue (was ``[:25]``)."""
+
+    def __init__(self, owner_id: int, reports: list[dict[str, Any]], *, host_view: Any = None, page: int = 0) -> None:
         self.owner_id = int(owner_id)
         self.reports = {_safe_str(row.get("id")): row for row in reports if row.get("id")}
-        options = [
-            discord.SelectOption(
-                label=_safe_str(row.get("reason"), "Community Hub report")[:100],
-                value=_safe_str(row.get("id")),
-                description=f"{_safe_str(row.get('state'), 'open').title()} • case {_safe_str(row.get('id'))[:8]}"[:100],
+        self.host_view = host_view
+        self._reports_list = list(reports)
+        all_choices = [
+            make_choice(
+                _safe_str(row.get("reason"), "Community Hub report"),
+                _safe_str(row.get("id")),
+                description=f"{_safe_str(row.get('state'), 'open').title()} • case {_safe_str(row.get('id'))[:8]}",
                 emoji="🚩",
             )
-            for row in reports[:25]
+            for row in reports
         ]
-        super().__init__(
-            placeholder="Choose a safety report",
-            min_values=1,
-            max_values=1,
-            options=options or [discord.SelectOption(label="No open reports", value="none")],
-            disabled=not bool(options),
-            custom_id="dank:hub:staff:safetyselect:v1",
-            row=0,
-        )
+        if not all_choices:
+            pages = [[make_choice("No open reports", "none")]]
+        else:
+            pages = chunk_choices(all_choices)
+        page = max(0, min(int(page), len(pages) - 1))
+        self.page = page
+        self.pages = len(pages)
+        base_id = "dank:hub:staff:safetyselect:v1"
 
-    async def callback(self, interaction: discord.Interaction) -> None:
+        async def on_pick(interaction: discord.Interaction, value: str) -> None:
+            await self._handle_report_pick(interaction, value)
+
+        super().__init__(
+            author_id=self.owner_id,
+            choices=pages[page],
+            on_pick=on_pick,
+            custom_id=f"{base_id}:{page}" if len(pages) > 1 else base_id,
+            placeholder="Choose a safety report",
+            title="Community Hub",
+            timeout=PRIVATE_MENU_TTL_SECONDS,
+            on_home=self._restore_host,
+            on_cancel=self._restore_host,
+            home_label="Back",
+        )
+        _add_page_buttons(self, page=page, pages=len(pages))
+
+    def _for_page(self, page: int) -> "SafetyReportSelect":
+        return SafetyReportSelect(self.owner_id, self._reports_list, host_view=self.host_view, page=page)
+
+    def _fallback_host(self) -> Optional[tuple[Any, Optional[discord.Embed]]]:
+        reports = list(self.reports.values())
+        return (SafetyReportsView(self.owner_id, reports), _safety_reports_embed(reports))
+
+    async def _handle_report_pick(self, interaction: discord.Interaction, report_id: str) -> None:
         if not _staff_authorized(interaction):
             return await _private(interaction, "Community Hub safety review requires server management authority.")
-        report_id = self.values[0]
         if report_id == "none":
             return
         await _defer_update(interaction)
@@ -4378,7 +4793,11 @@ class SafetyReportSelect(discord.ui.Select):
 class SafetyReportsView(_OwnedView):
     def __init__(self, owner_id: int, reports: list[dict[str, Any]]) -> None:
         super().__init__(owner_id)
-        self.add_item(SafetyReportSelect(owner_id, reports))
+        self.add_item(_HubPickerOpenButton(
+            label="Choose a Safety Report", emoji="🚩",
+            custom_id="dank:hub:staff:safetyselect:open:v1", row=0,
+            factory=lambda host: SafetyReportSelect(owner_id, reports, host_view=host),
+        ))
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if not await super().interaction_check(interaction):
@@ -4770,28 +5189,50 @@ def _analytics_embed(summary: dict[str, Any]) -> discord.Embed:
     return embed
 
 
-class AnalyticsRangeSelect(discord.ui.Select):
-    def __init__(self, owner_id: int, current_days: int) -> None:
-        self.owner_id = int(owner_id)
-        options = [
-            discord.SelectOption(label="24 hours", value="1", default=current_days == 1),
-            discord.SelectOption(label="7 days", value="7", default=current_days == 7),
-            discord.SelectOption(label="30 days", value="30", default=current_days == 30),
-            discord.SelectOption(label="90 days", value="90", default=current_days == 90),
-        ]
-        super().__init__(placeholder="Analytics range", options=options, custom_id="dank:hub:analytics:range:v1")
+class AnalyticsRangeSelect(_PickerCompat, DankPickerView):
+    """House picker for the staff analytics range."""
 
-    async def callback(self, interaction: discord.Interaction) -> None:
-        await _defer_update(interaction)
-        days = _safe_int(self.values[0], 7)
-        summary = await hub.analytics_summary(int(interaction.guild_id or 0), days=days)
-        await _edit_private_original(interaction, content=None, embed=_analytics_embed(summary), view=AnalyticsView(self.owner_id, days=days))
+    def __init__(self, owner_id: int, current_days: int, *, host_view: Any = None) -> None:
+        self.owner_id = int(owner_id)
+        self.current_days = int(current_days)
+        self.host_view = host_view
+
+        async def on_pick(interaction: discord.Interaction, value: str) -> None:
+            await _defer_update(interaction)
+            days = _safe_int(value, 7)
+            summary = await hub.analytics_summary(int(interaction.guild_id or 0), days=days)
+            await _edit_private_original(interaction, content=None, embed=_analytics_embed(summary), view=AnalyticsView(self.owner_id, days=days))
+
+        super().__init__(
+            author_id=self.owner_id,
+            choices=[
+                make_choice("24 hours", "1", default=current_days == 1),
+                make_choice("7 days", "7", default=current_days == 7),
+                make_choice("30 days", "30", default=current_days == 30),
+                make_choice("90 days", "90", default=current_days == 90),
+            ],
+            on_pick=on_pick,
+            custom_id="dank:hub:analytics:range:v1",
+            placeholder="Analytics range",
+            title="Community Hub",
+            timeout=PRIVATE_MENU_TTL_SECONDS,
+            on_home=self._restore_host,
+            on_cancel=self._restore_host,
+            home_label="Back",
+        )
+
+    def _fallback_host(self) -> Optional[tuple[Any, Optional[discord.Embed]]]:
+        return (AnalyticsView(self.owner_id, days=self.current_days), None)
 
 
 class AnalyticsView(_OwnedView):
     def __init__(self, owner_id: int, *, days: int) -> None:
         super().__init__(owner_id)
-        self.add_item(AnalyticsRangeSelect(owner_id, days))
+        self.add_item(_HubPickerOpenButton(
+            label="Change Range", emoji="📊",
+            custom_id="dank:hub:analytics:range:open:v1", row=0,
+            factory=lambda host: AnalyticsRangeSelect(owner_id, days, host_view=host),
+        ))
 
     @discord.ui.button(label="Staff Dashboard", emoji="↩️", style=discord.ButtonStyle.secondary, custom_id="dank:hub:analytics:back:v1", row=1)
     async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -4888,27 +5329,51 @@ def _settings_embed(
     return embed
 
 
-class ModeSelect(discord.ui.Select):
-    def __init__(self, owner_id: int, current: str, *, section: str = "general") -> None:
+class ModeSelect(_PickerCompat, DankPickerView):
+    """House picker for the Community Hub mode setting."""
+
+    def __init__(self, owner_id: int, current: str, *, section: str = "general", host_view: Any = None) -> None:
         self.owner_id = int(owner_id)
         self.section = section
-        options = [
-            discord.SelectOption(label="Minimal", value="minimal", description="Session cards and member controls only", default=current == "minimal"),
-            discord.SelectOption(label="Smart", value="smart", description="Temporary discussion and voice when permissions allow", default=current == "smart"),
-            discord.SelectOption(label="Managed", value="managed", description="Full managed Community Hub infrastructure", default=current == "managed"),
-        ]
-        super().__init__(placeholder="Community Hub mode", options=options, custom_id="dank:hub:settings:mode:v1", row=1)
+        self.host_view = host_view
 
-    async def callback(self, interaction: discord.Interaction) -> None:
-        await _defer_update(interaction)
-        runtime = ensure_community_hub_runtime(interaction.client)
-        settings = await hub.update_settings(
-            int(interaction.guild_id or 0),
-            {"mode": self.values[0]},
-            actor_id=int(interaction.user.id),
+        async def on_pick(interaction: discord.Interaction, value: str) -> None:
+            await _defer_update(interaction)
+            runtime = ensure_community_hub_runtime(interaction.client)
+            settings = await hub.update_settings(
+                int(interaction.guild_id or 0),
+                {"mode": value},
+                actor_id=int(interaction.user.id),
+            )
+            runtime.invalidate_settings(int(interaction.guild_id or 0))
+            await _edit_private_original(interaction, content=None, embed=_settings_embed(settings, interaction.client, section=self.section), view=HubSettingsView(self.owner_id, settings, section=self.section))
+
+        async def on_home(interaction: discord.Interaction) -> None:
+            if self.host_view is not None:
+                return await self._restore_host(interaction)
+            settings = await hub.get_settings(int(interaction.guild_id or 0))
+            await _picker_restore_msg(
+                interaction,
+                embed=_settings_embed(settings, interaction.client, section=self.section),
+                view=HubSettingsView(self.owner_id, settings, section=self.section),
+            )
+
+        super().__init__(
+            author_id=self.owner_id,
+            choices=[
+                make_choice("Minimal", "minimal", description="Session cards and member controls only", default=current == "minimal"),
+                make_choice("Smart", "smart", description="Temporary discussion and voice when permissions allow", default=current == "smart"),
+                make_choice("Managed", "managed", description="Full managed Community Hub infrastructure", default=current == "managed"),
+            ],
+            on_pick=on_pick,
+            custom_id="dank:hub:settings:mode:v1",
+            placeholder="Community Hub mode",
+            title="Community Hub",
+            timeout=PRIVATE_MENU_TTL_SECONDS,
+            on_home=on_home,
+            on_cancel=on_home,
+            home_label="Back",
         )
-        runtime.invalidate_settings(int(interaction.guild_id or 0))
-        await _edit_private_original(interaction, content=None, embed=_settings_embed(settings, interaction.client, section=self.section), view=HubSettingsView(self.owner_id, settings, section=self.section))
 
 
 class LimitsModal(discord.ui.Modal, title="Community Hub Limits"):
@@ -5021,21 +5486,22 @@ class NotificationLimitsModal(discord.ui.Modal, title="Community Hub Notificatio
         _ = settings
 
 
-class CategorySelect(discord.ui.ChannelSelect):
+class CategorySelect(DankChannelSelect):
     def __init__(self, owner_id: int) -> None:
         self.owner_id = int(owner_id)
         super().__init__(
+            author_id=int(owner_id),
+            on_pick=self._on_pick,
             placeholder="Choose parent category for temporary voice rooms",
+            channel_types=[discord.ChannelType.category],
             min_values=1,
             max_values=1,
-            channel_types=[discord.ChannelType.category],
-            custom_id="dank:hub:settings:categoryselect:v1",
             row=0,
         )
+        self.custom_id = "dank:hub:settings:categoryselect:v1"
 
-    async def callback(self, interaction: discord.Interaction) -> None:
+    async def _on_pick(self, interaction: discord.Interaction, channel: Any) -> None:
         await _defer_update(interaction)
-        channel = self.values[0]
         settings = await hub.update_settings(
             int(interaction.guild_id or 0),
             {"parent_category_id": str(channel.id)},
@@ -5111,34 +5577,69 @@ def _public_network_embed(
     return embed
 
 
-class PublicNetworkSelect(discord.ui.Select):
+class PublicNetworkSelect(_PickerCompat, DankPickerView):
+    """Paged house picker for the public gaming network.
+
+    The raw select silently truncated the directory to the first 25
+    groups; this picker pages EVERY group through chunk_choices. The
+    pick handler still re-reads the live directory and requires the
+    exact listed invite/game to still be approved before opening it.
+    """
+
     def __init__(self, owner_id: int, groups: list[dict[str, Any]], game_query: str, *,
-                 page: int = 0, return_to_unified: bool = False, region: str = "") -> None:
+                 page: int = 0, return_to_unified: bool = False, region: str = "",
+                 host_view: Any = None, picker_page: int = 0) -> None:
         self.owner_id = int(owner_id)
         self.return_to_unified = bool(return_to_unified)
         self.region = str(region or "")[:40]
-        self.groups = list(groups[:25])
+        self.groups = list(groups)
         self.game_query = game_query
         self.page = max(0, int(page))
-        options = [
-            discord.SelectOption(
-                label=str(row["game"])[:100],
+        self.host_view = host_view
+        all_choices = [
+            make_choice(
+                str(row["game"]),
+                str(i),
                 description=f"{row['community'][:50]} • up to {row['capacity']} players",
-                value=str(i),
                 emoji="🎮",
             )
             for i, row in enumerate(self.groups)
         ]
+        if not all_choices:
+            pages = [[make_choice("No public groups right now", "none")]]
+        else:
+            pages = chunk_choices(all_choices)
+        picker_page = max(0, min(int(picker_page), len(pages) - 1))
+        self.picker_page = picker_page
+        self._page_index = picker_page
+        self.pages = len(pages)
+        base_id = "dank:hub:publicnetwork:select:v1"
+
+        async def on_pick(interaction: discord.Interaction, value: str) -> None:
+            await self._handle_network_pick(interaction, value)
+
         super().__init__(
+            author_id=self.owner_id,
+            choices=pages[picker_page],
+            on_pick=on_pick,
+            custom_id=f"{base_id}:{picker_page}" if len(pages) > 1 else base_id,
             placeholder="Choose an outside gaming group",
-            custom_id="dank:hub:publicnetwork:select:v1", row=0,
-            min_values=1, max_values=1,
-            options=options or [discord.SelectOption(label="No public groups right now", value="none")],
-            disabled=not bool(options),
+            title="Community Hub",
+            timeout=PRIVATE_MENU_TTL_SECONDS,
+            on_home=self._restore_host,
+            on_cancel=self._restore_host,
+            home_label="Back",
+        )
+        _add_page_buttons(self, page=picker_page, pages=len(pages))
+
+    def _for_page(self, page: int) -> "PublicNetworkSelect":
+        return PublicNetworkSelect(
+            self.owner_id, self.groups, self.game_query, page=self.page,
+            return_to_unified=self.return_to_unified, region=self.region,
+            host_view=self.host_view, picker_page=page,
         )
 
-    async def callback(self, interaction: discord.Interaction) -> None:
-        choice = self.values[0]
+    async def _handle_network_pick(self, interaction: discord.Interaction, choice: str) -> None:
         if choice == "none":
             return
         await _defer_update(interaction)
@@ -5208,7 +5709,15 @@ class PublicNetworkView(_OwnedView):
         self.game_query = game_query
         self.page = max(0, min(int(page), 1))
         self.has_next = bool(has_next)
-        self.add_item(PublicNetworkSelect(owner_id, groups, game_query, page=self.page))
+        # The raw select was disabled when no groups were listed; the
+        # opener keeps that exact affordance.
+        _network_opener = _HubPickerOpenButton(
+            label="Choose an Outside Group", emoji="🎮",
+            custom_id="dank:hub:publicnetwork:select:open:v1", row=0,
+            factory=lambda host: PublicNetworkSelect(owner_id, groups, game_query, page=self.page, host_view=host),
+        )
+        _network_opener.disabled = not bool(groups)
+        self.add_item(_network_opener)
         for child in self.children:
             if getattr(child, "custom_id", None) == "dank:hub:publicnetwork:prev:v1":
                 child.disabled = self.page == 0
@@ -5423,13 +5932,40 @@ _HUB_SETTINGS_GROUPS = {
 }
 
 
-class HubSettingsSectionSelect(discord.ui.Select):
-    def __init__(self, owner_id: int, current: str) -> None:
+class HubSettingsSectionSelect(_PickerCompat, DankPickerView):
+    """House picker for switching Community Hub settings areas."""
+
+    def __init__(self, owner_id: int, current: str, *, host_view: Any = None) -> None:
         self.owner_id = int(owner_id)
+        self.current = current
+        self.host_view = host_view
+
+        async def on_pick(interaction: discord.Interaction, value: str) -> None:
+            if int(interaction.user.id) != self.owner_id:
+                return await _private(interaction, "Open your own Community Hub settings.")
+            await _defer_update(interaction)
+            settings = await hub.get_settings(int(interaction.guild_id or 0))
+            await _edit_private_original(
+                interaction,
+                content=None,
+                embed=_settings_embed(settings, interaction.client, section=value),
+                view=HubSettingsView(self.owner_id, settings, section=value),
+            )
+
+        async def on_home(interaction: discord.Interaction) -> None:
+            if self.host_view is not None:
+                return await self._restore_host(interaction)
+            settings = await hub.get_settings(int(interaction.guild_id or 0))
+            await _picker_restore_msg(
+                interaction,
+                embed=_settings_embed(settings, interaction.client, section=self.current),
+                view=HubSettingsView(self.owner_id, settings, section=self.current),
+            )
+
         super().__init__(
-            placeholder="Choose Community Hub settings",
-            options=[
-                discord.SelectOption(label=label, value=key, default=(key == current))
+            author_id=self.owner_id,
+            choices=[
+                make_choice(label, key, default=(key == current))
                 for key, label in (
                     ("general", "General"),
                     ("rooms", "Rooms & Threads"),
@@ -5437,21 +5973,21 @@ class HubSettingsSectionSelect(discord.ui.Select):
                     ("notifications", "Notifications & Analytics"),
                 )
             ],
+            on_pick=on_pick,
             custom_id="dank:hub:settings:section:v2",
-            row=0,
+            placeholder="Choose Community Hub settings",
+            title="Community Hub",
+            timeout=PRIVATE_MENU_TTL_SECONDS,
+            on_home=on_home,
+            on_cancel=on_home,
+            home_label="Back",
         )
 
-    async def callback(self, interaction: discord.Interaction) -> None:
-        if int(interaction.user.id) != self.owner_id:
-            return await _private(interaction, "Open your own Community Hub settings.")
-        await _defer_update(interaction)
-        settings = await hub.get_settings(int(interaction.guild_id or 0))
-        await _edit_private_original(
-            interaction,
-            content=None,
-            embed=_settings_embed(settings, interaction.client, section=self.values[0]),
-            view=HubSettingsView(self.owner_id, settings, section=self.values[0]),
-        )
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if int(getattr(interaction.user, "id", 0) or 0) != self.owner_id:
+            await _private(interaction, "Open your own Community Hub settings.")
+            return False
+        return True
 
 
 class HubSettingsView(_OwnedView):
@@ -5461,9 +5997,17 @@ class HubSettingsView(_OwnedView):
         self.section = section if section in _HUB_SETTINGS_GROUPS else "general"
         existing = {str(getattr(item, "label", "")): item for item in self.children}
         self.clear_items()
-        self.add_item(HubSettingsSectionSelect(self.owner_id, self.section))
+        self.add_item(_HubPickerOpenButton(
+            label="Choose Settings Area", emoji="⚙️",
+            custom_id="dank:hub:settings:section:open:v1", row=0,
+            factory=lambda host: HubSettingsSectionSelect(self.owner_id, self.section, host_view=host),
+        ))
         if self.section == "general":
-            self.add_item(ModeSelect(owner_id, _safe_str(settings.get("mode"), "minimal"), section=self.section))
+            self.add_item(_HubPickerOpenButton(
+                label="Change Mode", emoji="🔀",
+                custom_id="dank:hub:settings:mode:open:v1", row=1,
+                factory=lambda host: ModeSelect(owner_id, _safe_str(settings.get("mode"), "minimal"), section=self.section, host_view=host),
+            ))
         labels = (*_HUB_SETTINGS_GROUPS[self.section], "Staff Dashboard")
         for index, label in enumerate(labels):
             item = existing[label]
@@ -5670,12 +6214,35 @@ class HubSettingsView(_OwnedView):
 
 
 class StaffSessionSelect(SessionSelect):
-    def __init__(self, owner_id: int, sessions: list[dict[str, Any]]) -> None:
-        super().__init__(owner_id, sessions, partner=False)
-        self.custom_id = "dank:hub:staff:sessionselect:v1"
+    """Staff-only house picker over active sessions.
 
-    async def callback(self, interaction: discord.Interaction) -> None:
-        sid = self.values[0]
+    Reworked from the old SessionSelect subclassing: it still builds
+    on the session picker, but as an owner-ephemeral picker (the
+    Class C allow_anyone fit does not apply to staff tooling).
+    """
+
+    _BASE_CUSTOM_ID = "dank:hub:staff:sessionselect:v1"
+    _ALLOW_ANYONE = False
+
+    def __init__(
+        self, owner_id: int, sessions: list[dict[str, Any]], *,
+        host_view: Any = None, page: int = 0,
+    ) -> None:
+        super().__init__(owner_id, sessions, partner=False, host_view=host_view, page=page)
+
+    def _for_page(self, page: int) -> "StaffSessionSelect":
+        return StaffSessionSelect(
+            self.owner_id, self._sessions_list, host_view=self.host_view, page=page,
+        )
+
+    def _fallback_host(self) -> Optional[tuple[Any, Optional[discord.Embed]]]:
+        sessions = list(self.sessions.values())
+        return (
+            StaffSessionsView(self.owner_id, sessions),
+            _find_players_embed(sessions, partner=False),
+        )
+
+    async def _handle_session_pick(self, interaction: discord.Interaction, sid: str) -> None:
         if sid == "none":
             return
         await _defer_update(interaction)
@@ -5687,7 +6254,11 @@ class StaffSessionSelect(SessionSelect):
 class StaffSessionsView(_OwnedView):
     def __init__(self, owner_id: int, sessions: list[dict[str, Any]]) -> None:
         super().__init__(owner_id)
-        self.add_item(StaffSessionSelect(owner_id, sessions))
+        self.add_item(_HubPickerOpenButton(
+            label="Choose a Session", emoji="🎮",
+            custom_id="dank:hub:staff:sessionselect:open:v1", row=0,
+            factory=lambda host: StaffSessionSelect(owner_id, sessions, host_view=host),
+        ))
 
     @discord.ui.button(label="Staff Dashboard", emoji="↩️", style=discord.ButtonStyle.secondary, custom_id="dank:hub:staff:sessionsback:v1", row=1)
     async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -6138,36 +6709,70 @@ class HubLinkReadinessView(_OwnedView):
         )
 
 
-class PendingPartnerSelect(discord.ui.Select):
-    def __init__(self, owner_id: int, guild_id: int, links: list[dict[str, Any]], bot: Any) -> None:
+class PendingPartnerSelect(_PickerCompat, DankPickerView):
+    """Paged house picker for incoming partner requests (was ``[:25]``)."""
+
+    def __init__(self, owner_id: int, guild_id: int, links: list[dict[str, Any]], bot: Any, *, host_view: Any = None, page: int = 0) -> None:
         self.owner_id = int(owner_id)
         self.guild_id = int(guild_id)
+        self.bot = bot
+        self._links_list = list(links)
+        self.host_view = host_view
         pending = [
             row for row in links
             if row.get("state") == "pending" and _safe_str(row.get("requested_by_guild_id")) != str(guild_id)
         ]
         self.links = {_safe_str(row.get("id")): row for row in pending if row.get("id")}
-        options = []
-        for row in pending[:25]:
+        all_choices = []
+        for row in pending:
             other_id = _safe_str(row.get("guild_b_id")) if _safe_str(row.get("guild_a_id")) == str(guild_id) else _safe_str(row.get("guild_a_id"))
             guild = bot.get_guild(_safe_int(other_id))
-            options.append(
-                discord.SelectOption(
-                    label=(getattr(guild, "name", None) or "Unavailable partner server")[:100],
-                    value=_safe_str(row.get("id")),
+            all_choices.append(
+                make_choice(
+                    (getattr(guild, "name", None) or "Unavailable partner server"),
+                    _safe_str(row.get("id")),
                     description="Review this incoming partner request",
                 )
             )
+        if not all_choices:
+            pages = [[make_choice("No incoming requests", "none")]]
+        else:
+            pages = chunk_choices(all_choices)
+        page = max(0, min(int(page), len(pages) - 1))
+        self.page = page
+        self.pages = len(pages)
+        base_id = "dank:hub:partner:pendingselect:v1"
+
+        async def on_pick(interaction: discord.Interaction, value: str) -> None:
+            await self._handle_pending_pick(interaction, value)
+
         super().__init__(
+            author_id=self.owner_id,
+            choices=pages[page],
+            on_pick=on_pick,
+            custom_id=f"{base_id}:{page}" if len(pages) > 1 else base_id,
             placeholder="Review incoming partner request",
-            options=options or [discord.SelectOption(label="No incoming requests", value="none")],
-            disabled=not bool(options),
-            custom_id="dank:hub:partner:pendingselect:v1",
-            row=0,
+            title="Community Hub",
+            timeout=PRIVATE_MENU_TTL_SECONDS,
+            on_home=self._restore_host,
+            on_cancel=self._restore_host,
+            home_label="Back",
+        )
+        _add_page_buttons(self, page=page, pages=len(pages))
+
+    def _for_page(self, page: int) -> "PendingPartnerSelect":
+        return PendingPartnerSelect(
+            self.owner_id, self.guild_id, self._links_list, self.bot,
+            host_view=self.host_view, page=page,
         )
 
-    async def callback(self, interaction: discord.Interaction) -> None:
-        link_id = self.values[0]
+    def _fallback_host(self) -> Optional[tuple[Any, Optional[discord.Embed]]]:
+        return (
+            PartnerApprovalView(self.owner_id, self.guild_id, self._links_list, self.bot),
+            _partner_embed(self._links_list, self.guild_id, self.bot),
+        )
+
+    async def _handle_pending_pick(self, interaction: discord.Interaction, link_id: str) -> None:
         if link_id == "none":
             return
         await _defer_update(interaction)
@@ -6264,34 +6869,68 @@ class PendingPartnerDecisionView(_OwnedView):
         )
 
 
-class ActivePartnerSelect(discord.ui.Select):
-    def __init__(self, owner_id: int, guild_id: int, links: list[dict[str, Any]], bot: Any) -> None:
+class ActivePartnerSelect(_PickerCompat, DankPickerView):
+    """Paged house picker for active partner links (was ``[:25]``)."""
+
+    def __init__(self, owner_id: int, guild_id: int, links: list[dict[str, Any]], bot: Any, *, host_view: Any = None, page: int = 0) -> None:
         self.owner_id = int(owner_id)
         self.guild_id = int(guild_id)
+        self.bot = bot
+        self._links_list = list(links)
+        self.host_view = host_view
         active = [row for row in links if row.get("state") == "active"]
         self.links = {_safe_str(row.get("id")): row for row in active if row.get("id")}
-        options = []
-        for row in active[:25]:
+        all_choices = []
+        for row in active:
             other_id = _safe_str(row.get("guild_b_id")) if _safe_str(row.get("guild_a_id")) == str(guild_id) else _safe_str(row.get("guild_a_id"))
             guild = bot.get_guild(_safe_int(other_id))
-            options.append(
-                discord.SelectOption(
-                    label=(getattr(guild, "name", None) or "Unavailable partner server")[:100],
-                    value=_safe_str(row.get("id")),
+            all_choices.append(
+                make_choice(
+                    (getattr(guild, "name", None) or "Unavailable partner server"),
+                    _safe_str(row.get("id")),
                     description="Manage this active partner link",
                     emoji="🌐",
                 )
             )
+        if not all_choices:
+            pages = [[make_choice("No active partners", "none")]]
+        else:
+            pages = chunk_choices(all_choices)
+        page = max(0, min(int(page), len(pages) - 1))
+        self.page = page
+        self.pages = len(pages)
+        base_id = "dank:hub:partner:activeselect:v1"
+
+        async def on_pick(interaction: discord.Interaction, value: str) -> None:
+            await self._handle_active_pick(interaction, value)
+
         super().__init__(
+            author_id=self.owner_id,
+            choices=pages[page],
+            on_pick=on_pick,
+            custom_id=f"{base_id}:{page}" if len(pages) > 1 else base_id,
             placeholder="Manage active partner link",
-            options=options or [discord.SelectOption(label="No active partners", value="none")],
-            disabled=not bool(options),
-            custom_id="dank:hub:partner:activeselect:v1",
-            row=1,
+            title="Community Hub",
+            timeout=PRIVATE_MENU_TTL_SECONDS,
+            on_home=self._restore_host,
+            on_cancel=self._restore_host,
+            home_label="Back",
+        )
+        _add_page_buttons(self, page=page, pages=len(pages))
+
+    def _for_page(self, page: int) -> "ActivePartnerSelect":
+        return ActivePartnerSelect(
+            self.owner_id, self.guild_id, self._links_list, self.bot,
+            host_view=self.host_view, page=page,
         )
 
-    async def callback(self, interaction: discord.Interaction) -> None:
-        link_id = self.values[0]
+    def _fallback_host(self) -> Optional[tuple[Any, Optional[discord.Embed]]]:
+        return (
+            PartnerApprovalView(self.owner_id, self.guild_id, self._links_list, self.bot),
+            _partner_embed(self._links_list, self.guild_id, self.bot),
+        )
+
+    async def _handle_active_pick(self, interaction: discord.Interaction, link_id: str) -> None:
         if link_id == "none":
             return
         await _defer_update(interaction)
@@ -6462,8 +7101,16 @@ class PartnerAdminView(_OwnedView):
 class PartnerApprovalView(_OwnedView):
     def __init__(self, owner_id: int, guild_id: int, links: list[dict[str, Any]], bot: Any) -> None:
         super().__init__(owner_id)
-        self.add_item(PendingPartnerSelect(owner_id, guild_id, links, bot))
-        self.add_item(ActivePartnerSelect(owner_id, guild_id, links, bot))
+        self.add_item(_HubPickerOpenButton(
+            label="Review Incoming Request", emoji="🌐",
+            custom_id="dank:hub:partner:pendingselect:open:v1", row=0,
+            factory=lambda host: PendingPartnerSelect(owner_id, guild_id, links, bot, host_view=host),
+        ))
+        self.add_item(_HubPickerOpenButton(
+            label="Manage Active Partner", emoji="🌐",
+            custom_id="dank:hub:partner:activeselect:open:v1", row=1,
+            factory=lambda host: ActivePartnerSelect(owner_id, guild_id, links, bot, host_view=host),
+        ))
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if not await super().interaction_check(interaction):
