@@ -23,6 +23,7 @@ import discord
 
 from ..globals import now_utc
 from ..guild_config import invalidate_guild_config
+from ..ui.picker import DankPickerView, chunk_choices, make_choice
 from . import public_setup_recovery as recovery
 from . import public_setup_solid as solid
 
@@ -743,80 +744,161 @@ class RepairNavigationView(discord.ui.View):
         await recommend._close_setup(interaction)
 
 
-class RemoveOneSelect(discord.ui.Select):
-    def __init__(self, candidates: list[CleanupCandidate]) -> None:
-        options: list[discord.SelectOption] = []
-        for item in candidates[:25]:
-            label = f"{item.kind.replace('_', ' ').title()}: {item.name}"
-            options.append(
-                discord.SelectOption(
-                    label=_short(label, 95),
-                    description=_short(item.reason, 100),
-                    value=item.value,
-                )
-            )
-        if not options:
-            options.append(
-                discord.SelectOption(
-                    label="No removable setup items found",
-                    value="__none__",
-                    description="Go back or refresh.",
-                )
-            )
-        super().__init__(
-            placeholder="Choose exactly one setup item to remove",
-            min_values=1,
-            max_values=1,
-            options=options,
-            row=0,
+async def _apply_remove_one_pick(interaction: discord.Interaction, value: str) -> None:
+    """The old RemoveOneSelect callback body, driven by the house picker."""
+    if not await solid._require_setup_permission(interaction):
+        return
+    guild = interaction.guild
+    if guild is None:
+        return await interaction.response.send_message(
+            "❌ This must be used inside a server.",
+            ephemeral=True,
         )
+    if value == "__none__":
+        return await interaction.response.send_message(
+            "No removable setup items were found.",
+            ephemeral=True,
+        )
+    item = _candidate_by_value(guild, value)
+    if item is None:
+        return await interaction.response.send_message(
+            "That item is no longer removable. Refresh and try again.",
+            ephemeral=True,
+        )
+
+    embed = discord.Embed(
+        title="Confirm Remove One Thing",
+        description=(
+            f"Selected: **{item.kind.replace('_', ' ').title()}** "
+            f"{item.mention}\n\n{item.reason}"
+        ),
+        color=discord.Color.orange(),
+        timestamp=now_utc(),
+    )
+    embed.add_field(
+        name="Confirmation",
+        value="Press the button, then type `REMOVE`.",
+        inline=False,
+    )
+    await interaction.response.edit_message(
+        embed=embed,
+        view=ConfirmOneView(item.value),
+    )
+
+
+class _RemoveOnePickerView(DankPickerView):
+    """House picker for the cleanup Remove One screen.
+
+    Pages every candidate with chunk_choices — the old raw select
+    silently cut the list at 25 candidates.
+    """
+
+    def __init__(self, candidates: list[CleanupCandidate], *, page: int = 0) -> None:
+        self.candidates = list(candidates)
+        all_choices = [
+            make_choice(
+                _short(f"{item.kind.replace('_', ' ').title()}: {item.name}", 95),
+                item.value,
+                description=_short(item.reason, 100),
+            )
+            for item in self.candidates
+        ]
+        if not all_choices:
+            all_choices = [make_choice(
+                "No removable setup items found", "__none__",
+                description="Go back or refresh.",
+            )]
+        pages = chunk_choices(all_choices) or [[]]
+        page = max(0, min(int(page), len(pages) - 1))
+        placeholder = "Choose exactly one setup item to remove"
+
+        async def on_pick(interaction: discord.Interaction, value: str) -> None:
+            await _apply_remove_one_pick(interaction, value)
+
+        async def on_home(interaction: discord.Interaction) -> None:
+            message = getattr(interaction, "message", None)
+            embeds = getattr(message, "embeds", None) if message is not None else None
+            await interaction.response.edit_message(
+                embed=embeds[0] if embeds else None,
+                view=RemoveOneView(self.candidates),
+            )
+
+        super().__init__(
+            author_id=0,
+            choices=pages[page],
+            on_pick=on_pick,
+            custom_id=(
+                f"dank:setup_cleanup:remove_one:v1:{page}" if len(pages) > 1
+                else "dank:setup_cleanup:remove_one:v1"
+            ),
+            placeholder=(
+                f"{placeholder} • Page {page + 1}/{len(pages)}"
+                if len(pages) > 1 else placeholder
+            ),
+            title="Remove One Thing",
+            timeout=900,
+            on_home=on_home,
+            home_label="Back",
+        )
+        self.page = page
+        self.pages = len(pages)
+        if len(pages) > 1:
+            self.add_item(_RemoveOnePageButton(delta=-1, disabled=page <= 0))
+            self.add_item(_RemoveOnePageButton(delta=1, disabled=page >= len(pages) - 1))
+
+    def _for_page(self, page: int) -> "_RemoveOnePickerView":
+        return _RemoveOnePickerView(self.candidates, page=page)
+
+
+class _RemoveOnePageButton(discord.ui.Button):
+    def __init__(self, *, delta: int, disabled: bool) -> None:
+        super().__init__(
+            label="Previous" if delta < 0 else "Next",
+            emoji="◀️" if delta < 0 else "▶️",
+            style=discord.ButtonStyle.secondary,
+            custom_id=(
+                "dank:setup_cleanup:remove_one:prev" if delta < 0
+                else "dank:setup_cleanup:remove_one:next"
+            ),
+            row=2,
+            disabled=bool(disabled),
+        )
+        self.delta = int(delta)
 
     async def callback(self, interaction: discord.Interaction) -> None:
-        if not await solid._require_setup_permission(interaction):
+        view = self.view
+        if not isinstance(view, _RemoveOnePickerView):
             return
-        guild = interaction.guild
-        if guild is None:
-            return await interaction.response.send_message(
-                "❌ This must be used inside a server.",
-                ephemeral=True,
-            )
-        value = str(self.values[0])
-        if value == "__none__":
-            return await interaction.response.send_message(
-                "No removable setup items were found.",
-                ephemeral=True,
-            )
-        item = _candidate_by_value(guild, value)
-        if item is None:
-            return await interaction.response.send_message(
-                "That item is no longer removable. Refresh and try again.",
-                ephemeral=True,
-            )
+        page = max(0, min(view.page + self.delta, view.pages - 1))
+        await interaction.response.edit_message(view=view._for_page(page))
 
-        embed = discord.Embed(
-            title="Confirm Remove One Thing",
-            description=(
-                f"Selected: **{item.kind.replace('_', ' ').title()}** "
-                f"{item.mention}\n\n{item.reason}"
-            ),
-            color=discord.Color.orange(),
-            timestamp=now_utc(),
+
+class _RemoveOneOpenButton(discord.ui.Button):
+    """Swaps the Remove One panel for the house picker on the same message."""
+
+    def __init__(self, candidates: list[CleanupCandidate]) -> None:
+        super().__init__(
+            label="Choose exactly one setup item to remove",
+            emoji="🧭",
+            style=discord.ButtonStyle.primary,
+            custom_id="dank:setup_cleanup:remove_one:open:v1",
+            row=0,
         )
-        embed.add_field(
-            name="Confirmation",
-            value="Press the button, then type `REMOVE`.",
-            inline=False,
-        )
+        self.candidates = list(candidates)
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        message = getattr(interaction, "message", None)
+        embeds = getattr(message, "embeds", None) if message is not None else None
         await interaction.response.edit_message(
-            embed=embed,
-            view=ConfirmOneView(item.value),
+            embed=embeds[0] if embeds else None,
+            view=_RemoveOnePickerView(self.candidates),
         )
 
 
 class RemoveOneView(RepairNavigationView):
     def __init__(self, candidates: list[CleanupCandidate]) -> None:
         super().__init__(parent="cleanup")
-        self.add_item(RemoveOneSelect(candidates))
+        self.add_item(_RemoveOneOpenButton(candidates))
 
 
 class ConfirmOneView(RepairNavigationView):

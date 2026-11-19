@@ -44,6 +44,28 @@ def select_labels(view: discord.ui.View) -> list[str]:
     return result
 
 
+class _FakePickerResponse:
+    def __init__(self) -> None:
+        self.edits: list[dict[str, Any]] = []
+
+    async def edit_message(self, **kwargs: Any) -> None:
+        self.edits.append(kwargs)
+
+
+class _FakePickerInteraction:
+    def __init__(self) -> None:
+        self.response = _FakePickerResponse()
+        self.message = SimpleNamespace(embeds=[])
+
+
+def picker_choice_labels(view: Any) -> list[str]:
+    """Labels of the house-picker choices behind the view's jump opener."""
+    interaction = _FakePickerInteraction()
+    run(view._jump(interaction))
+    picker = interaction.response.edits[-1]["view"]
+    return [str(choice.label) for choice in picker._all_choices]
+
+
 def test_guided_checklist_hides_features_that_are_off_and_starts_next() -> None:
     view = compact.CompactTestView(
         {
@@ -58,11 +80,12 @@ def test_guided_checklist_hides_features_that_are_off_and_starts_next() -> None:
         }
     )
     assert labels(view) == [
+        "Jump to a Specific Test",
         "Start Next Test",
         "Setup Home",
         "Close",
     ]
-    assert select_labels(view) == ["Simple Verify"]
+    assert picker_choice_labels(view) == ["Simple Verify"]
     assert "Finish Setup" not in labels(view)
 
 
@@ -96,7 +119,7 @@ def test_finished_checklist_does_not_offer_finish_again() -> None:
         }
     )
     assert "Finish Setup" not in labels(view)
-    assert select_labels(view) == ["Tickets"]
+    assert picker_choice_labels(view) == ["Tickets"]
 
 
 def test_launch_summary_lists_only_enabled_features() -> None:

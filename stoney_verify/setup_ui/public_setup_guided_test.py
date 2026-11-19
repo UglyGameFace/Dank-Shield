@@ -101,9 +101,15 @@ class GuidedTestView(discord.ui.View):
         pending = next_pending_test_key(self.state, self.confirmed)
 
         if required:
-            jump = compact.TestAreaSelect(self.state, self.confirmed)
-            jump.placeholder = "Jump to a specific test…"
-            self.add_item(jump)
+            compact._add(
+                self,
+                "Jump to a Specific Test",
+                "🧪",
+                discord.ButtonStyle.secondary,
+                "dank_setup_guided_test:jump:open:v1",
+                self._jump,
+                0,
+            )
 
         if pending is not None:
             compact._add(
@@ -144,6 +150,17 @@ class GuidedTestView(discord.ui.View):
             "dank_setup_test:close",
             self._close,
             2,
+        )
+
+    async def _jump(self, interaction: discord.Interaction) -> None:
+        await compact._open_test_area_picker(
+            interaction,
+            self.state,
+            self.confirmed,
+            placeholder="Jump to a specific test…",
+            home_factory=lambda state, confirmed: GuidedTestView(
+                state, confirmed=confirmed
+            ),
         )
 
     async def _next(self, interaction: discord.Interaction) -> None:

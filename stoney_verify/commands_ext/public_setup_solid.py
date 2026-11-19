@@ -36,6 +36,13 @@ from .public_setup_group import (
 )
 from ..globals import get_supabase, now_utc
 from ..guild_config import get_guild_config, invalidate_guild_config
+from ..ui import DankGuildResourceBrowserView
+from ..ui.picker import DankPickerView, chunk_choices, make_choice
+from ..setup_resource_picker_binding import (
+    _custom_id as _picker_custom_id,
+    _message_embed as _picker_parent_embed,
+    _resource_kinds as _picker_resource_kinds,
+)
 from ..setup_service_state import service_state_from_config
 from ..tickets_new.panel import _DEFAULT_BOOTSTRAP_CATEGORIES
 from .ticket_category_admin import _ALLOWED_INTAKE_TYPES
@@ -1754,139 +1761,304 @@ async def _show_saved_section_screen(
     await _send_ephemeral(interaction, embed=embed, view=PostSaveSetupView(section))
 
 
-class SaveRoleSelect(discord.ui.RoleSelect):
+class _SolidPickerView(DankPickerView):
+    """House picker for solid setup panels.
+
+    Pages long channel/role lists with chunk_choices so every entry
+    stays reachable past Discord's 25-option select limit.
+    """
+
     def __init__(
         self,
         *,
+        choices: Any,
+        on_pick: Any,
+        custom_id: str,
         placeholder: str,
-        columns: tuple[str, ...],
-        require_manage: bool,
-        also_same: tuple[str, ...] = (),
-        row: int = 0,
+        title: str,
+        on_home: Any = None,
+        page: int = 0,
     ) -> None:
-        super().__init__(placeholder=placeholder, min_values=1, max_values=1, row=row)
-        self.columns = columns
-        self.also_same = also_same
-        self.require_manage = require_manage
+        all_choices = list(choices or [])
+        pages = chunk_choices(all_choices) or [[]]
+        page = max(0, min(int(page), len(pages) - 1))
+        super().__init__(
+            author_id=0,
+            choices=pages[page],
+            on_pick=on_pick,
+            custom_id=f"{custom_id}:{page}" if len(pages) > 1 else custom_id,
+            placeholder=(
+                f"{placeholder} • Page {page + 1}/{len(pages)}"
+                if len(pages) > 1 else placeholder
+            ),
+            title=title,
+            timeout=900,
+            on_home=on_home,
+            home_label="Back",
+        )
+        self._all_choices = all_choices
+        self._picker_on_pick = on_pick
+        self._base_custom_id = custom_id
+        self._base_placeholder = placeholder
+        self._picker_title = title
+        self._picker_on_home = on_home
+        self.page = page
+        self.pages = len(pages)
+        if len(pages) > 1:
+            self.add_item(_SolidPageButton(delta=-1, disabled=page <= 0))
+            self.add_item(_SolidPageButton(delta=1, disabled=page >= len(pages) - 1))
 
-    async def callback(self, interaction: discord.Interaction) -> None:
-        if not await _require_setup_permission(interaction):
-            return
-        guild = interaction.guild
-        role = self.values[0]
-        if guild is None:
-            return await interaction.response.send_message("❌ This must be used inside a server.", ephemeral=True)
-
-        blockers: list[str] = []
-        warnings: list[str] = []
-        if role.is_default():
-            blockers.append("@everyone cannot be used here.")
-        if role.managed:
-            blockers.append(f"{role.mention} is managed by an integration/bot and cannot be used here.")
-        bot_member = _bot_member(guild)
-        manageable, reason = _can_manage_role(guild, bot_member, role)
-        if self.require_manage and not manageable:
-            blockers.append(reason)
-        elif not manageable:
-            warnings.append(f"Bot may not be able to manage {role.mention}: {reason}")
-
-        if blockers:
-            embed = discord.Embed(
-                title="🚫 Role Not Saved",
-                description="\n".join(f"• {x}" for x in blockers)
-                + "\n\nWhat to do next: pick a different role, or move Dank Shield's bot role above that role and try again.",
-                color=discord.Color.red(),
-            )
-            return await interaction.response.send_message(embed=embed, ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
-
-        payload = {column: _snowflake(role) for column in self.columns + self.also_same}
-        await _save_config(interaction, payload)
-        await _show_saved_section_screen(
-            interaction,
-            title="✅ Saved Setup Role",
-            saved_line=f"Saved {_mention(role)}.",
-            section=_section_from_columns(self.columns + self.also_same),
-            warnings=warnings,
+    def _for_page(self, page: int) -> "_SolidPickerView":
+        return _SolidPickerView(
+            choices=self._all_choices,
+            on_pick=self._picker_on_pick,
+            custom_id=self._base_custom_id,
+            placeholder=self._base_placeholder,
+            title=self._picker_title,
+            on_home=self._picker_on_home,
+            page=page,
         )
 
 
-class SaveChannelSelect(discord.ui.ChannelSelect):
+class _SolidPageButton(discord.ui.Button):
+    def __init__(self, *, delta: int, disabled: bool) -> None:
+        super().__init__(
+            label="Previous" if delta < 0 else "Next",
+            emoji="◀️" if delta < 0 else "▶️",
+            style=discord.ButtonStyle.secondary,
+            custom_id=(
+                "dank:setup_solid:picker:prev" if delta < 0
+                else "dank:setup_solid:picker:next"
+            ),
+            row=2,
+            disabled=bool(disabled),
+        )
+        self.delta = int(delta)
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        view = self.view
+        if not isinstance(view, _SolidPickerView):
+            return
+        page = max(0, min(view.page + self.delta, view.pages - 1))
+        await interaction.response.edit_message(view=view._for_page(page))
+
+
+async def _apply_save_role_pick(
+    interaction: discord.Interaction,
+    role: discord.Role,
+    *,
+    columns: tuple[str, ...],
+    require_manage: bool,
+    also_same: tuple[str, ...] = (),
+) -> None:
+    """The old SaveRoleSelect callback body, driven by the house picker."""
+    if not await _require_setup_permission(interaction):
+        return
+    guild = interaction.guild
+    if guild is None:
+        return await interaction.response.send_message("❌ This must be used inside a server.", ephemeral=True)
+
+    blockers: list[str] = []
+    warnings: list[str] = []
+    if role.is_default():
+        blockers.append("@everyone cannot be used here.")
+    if role.managed:
+        blockers.append(f"{role.mention} is managed by an integration/bot and cannot be used here.")
+    bot_member = _bot_member(guild)
+    manageable, reason = _can_manage_role(guild, bot_member, role)
+    if require_manage and not manageable:
+        blockers.append(reason)
+    elif not manageable:
+        warnings.append(f"Bot may not be able to manage {role.mention}: {reason}")
+
+    if blockers:
+        embed = discord.Embed(
+            title="🚫 Role Not Saved",
+            description="\n".join(f"• {x}" for x in blockers)
+            + "\n\nWhat to do next: pick a different role, or move Dank Shield's bot role above that role and try again.",
+            color=discord.Color.red(),
+        )
+        return await interaction.response.send_message(embed=embed, ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
+
+    payload = {column: _snowflake(role) for column in columns + also_same}
+    await _save_config(interaction, payload)
+    await _show_saved_section_screen(
+        interaction,
+        title="✅ Saved Setup Role",
+        saved_line=f"Saved {_mention(role)}.",
+        section=_section_from_columns(columns + also_same),
+        warnings=warnings,
+    )
+
+
+async def _apply_save_channel_pick(
+    interaction: discord.Interaction,
+    channel: discord.abc.GuildChannel,
+    *,
+    columns: tuple[str, ...],
+    also_same: tuple[str, ...] = (),
+    require_files: bool = False,
+) -> None:
+    """The old SaveChannelSelect callback body, driven by the house picker."""
+    if not await _require_setup_permission(interaction):
+        return
+    guild = interaction.guild
+    if guild is None:
+        return await interaction.response.send_message("❌ This must be used inside a server.", ephemeral=True)
+
+    blockers: list[str] = []
+    bot_member = _bot_member(guild)
+    if bot_member is None:
+        blockers.append("Bot member could not be resolved for permission checks.")
+    elif isinstance(channel, discord.CategoryChannel):
+        missing = _category_missing_perms(channel, bot_member)
+        if missing:
+            blockers.append(f"{channel.mention} is missing bot permissions: {', '.join(missing)}")
+    elif isinstance(channel, discord.TextChannel):
+        missing = _text_channel_missing_perms(channel, bot_member, need_files=require_files)
+        if missing:
+            blockers.append(f"{channel.mention} is missing bot permissions: {', '.join(missing)}")
+    elif isinstance(channel, discord.VoiceChannel):
+        perms = channel.permissions_for(bot_member)
+        missing = []
+        if not perms.view_channel:
+            missing.append("View Channel")
+        if not perms.connect:
+            missing.append("Connect")
+        if not perms.manage_channels:
+            missing.append("Manage Channels")
+        if missing:
+            blockers.append(f"{channel.mention} is missing bot permissions: {', '.join(missing)}")
+
+    if blockers:
+        embed = discord.Embed(
+            title="🚫 Channel Not Saved",
+            description="\n".join(f"• {x}" for x in blockers)
+            + "\n\nWhat to do next: pick a different channel, or fix Dank Shield's permissions in that channel and try again.",
+            color=discord.Color.red(),
+        )
+        return await interaction.response.send_message(embed=embed, ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
+
+    payload = {column: _snowflake(channel) for column in columns + also_same}
+    await _save_config(interaction, payload)
+    await _show_saved_section_screen(
+        interaction,
+        title="✅ Saved Setup Channel",
+        saved_line=f"Saved {_mention(channel)}.",
+        section=_section_from_columns(columns + also_same),
+    )
+
+
+class _SolidPickButton(discord.ui.Button):
+    """Opens the canonical guild resource browser for one setup field.
+
+    This is the native form of the button the setup resource-picker
+    binding used to substitute for the old SaveRoleSelect /
+    SaveChannelSelect classes: same label, custom_id scheme, browser
+    titles and empty messages; the pick delegates to the module's own
+    save handlers (_apply_save_role_pick / _apply_save_channel_pick).
+    """
+
     def __init__(
         self,
         *,
-        placeholder: str,
+        kind: str,
+        label: str,
         columns: tuple[str, ...],
-        channel_types: list[discord.ChannelType],
         also_same: tuple[str, ...] = (),
+        channel_types: Optional[list[discord.ChannelType]] = None,
         row: int = 0,
+        require_manage: bool = True,
         require_category_manage: bool = False,
         require_text: bool = False,
         require_files: bool = False,
     ) -> None:
-        super().__init__(placeholder=placeholder, min_values=1, max_values=1, channel_types=channel_types, row=row)
-        self.columns = columns
-        self.also_same = also_same
-        self.require_category_manage = require_category_manage
-        self.require_text = require_text
-        self.require_files = require_files
+        self.kind = kind
+        self.placeholder = str(label or ("Choose a role" if kind == "role" else "Choose a channel"))
+        self.columns = tuple(columns)
+        self.also_same = tuple(also_same)
+        self.channel_types = list(channel_types or [])
+        self.require_manage = bool(require_manage)
+        # Kept for parity with the old select's constructor contract; the
+        # permission validation itself lives in _apply_save_channel_pick.
+        self.require_category_manage = bool(require_category_manage)
+        self.require_text = bool(require_text)
+        self.require_files = bool(require_files)
+        prefix = "dank_setup:role" if kind == "role" else "dank_setup:channel"
+        super().__init__(
+            label=self.placeholder[:80],
+            emoji="🎭" if kind == "role" else "🧭",
+            style=discord.ButtonStyle.primary,
+            custom_id=_picker_custom_id(prefix, self.columns + self.also_same, row),
+            row=row,
+        )
 
     async def callback(self, interaction: discord.Interaction) -> None:
         if not await _require_setup_permission(interaction):
             return
         guild = interaction.guild
-        channel = self.values[0]
         if guild is None:
             return await interaction.response.send_message("❌ This must be used inside a server.", ephemeral=True)
 
-        blockers: list[str] = []
-        bot_member = _bot_member(guild)
-        if bot_member is None:
-            blockers.append("Bot member could not be resolved for permission checks.")
-        elif isinstance(channel, discord.CategoryChannel):
-            missing = _category_missing_perms(channel, bot_member)
-            if missing:
-                blockers.append(f"{channel.mention} is missing bot permissions: {', '.join(missing)}")
-        elif isinstance(channel, discord.TextChannel):
-            missing = _text_channel_missing_perms(channel, bot_member, need_files=self.require_files)
-            if missing:
-                blockers.append(f"{channel.mention} is missing bot permissions: {', '.join(missing)}")
-        elif isinstance(channel, discord.VoiceChannel):
-            perms = channel.permissions_for(bot_member)
-            missing = []
-            if not perms.view_channel:
-                missing.append("View Channel")
-            if not perms.connect:
-                missing.append("Connect")
-            if not perms.manage_channels:
-                missing.append("Manage Channels")
-            if missing:
-                blockers.append(f"{channel.mention} is missing bot permissions: {', '.join(missing)}")
+        parent_view = self.view
+        parent_embed = _picker_parent_embed(interaction)
 
-        if blockers:
-            embed = discord.Embed(
-                title="🚫 Channel Not Saved",
-                description="\n".join(f"• {x}" for x in blockers)
-                + "\n\nWhat to do next: pick a different channel, or fix Dank Shield's permissions in that channel and try again.",
-                color=discord.Color.red(),
+        async def on_home(home_interaction: discord.Interaction) -> None:
+            kwargs: dict[str, Any] = {"view": parent_view}
+            if parent_embed is not None:
+                kwargs["embed"] = parent_embed
+            await home_interaction.response.edit_message(**kwargs)
+
+        if self.kind == "role":
+            async def on_pick(pick_interaction: discord.Interaction, role: Any) -> None:
+                await _apply_save_role_pick(
+                    pick_interaction, role,
+                    columns=self.columns, require_manage=self.require_manage,
+                    also_same=self.also_same,
+                )
+
+            browser = DankGuildResourceBrowserView(
+                guild=guild,
+                author_id=int(interaction.user.id),
+                resource_kinds=("role",),
+                on_pick=on_pick,
+                custom_id=_picker_custom_id("dank_setup:role_browser", self.columns + self.also_same, int(self.row or 0)),
+                title="🎭 Choose a Server Role",
+                placeholder=self.placeholder,
+                on_home=on_home,
+                home_label="Back to Setup",
+                empty_message="No server roles matched. Try Search with part of the role name or its Discord ID.",
             )
-            return await interaction.response.send_message(embed=embed, ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
+        else:
+            async def on_pick(pick_interaction: discord.Interaction, channel: Any) -> None:
+                await _apply_save_channel_pick(
+                    pick_interaction, channel,
+                    columns=self.columns, also_same=self.also_same,
+                    require_files=self.require_files,
+                )
 
-        payload = {column: _snowflake(channel) for column in self.columns + self.also_same}
-        await _save_config(interaction, payload)
-        await _show_saved_section_screen(
-            interaction,
-            title="✅ Saved Setup Channel",
-            saved_line=f"Saved {_mention(channel)}.",
-            section=_section_from_columns(self.columns + self.also_same),
-        )
+            browser = DankGuildResourceBrowserView(
+                guild=guild,
+                author_id=int(interaction.user.id),
+                resource_kinds=_picker_resource_kinds(self.channel_types),
+                on_pick=on_pick,
+                custom_id=_picker_custom_id("dank_setup:channel_browser", self.columns + self.also_same, int(self.row or 0)),
+                title="🧭 Choose a Server Channel / Category",
+                placeholder=self.placeholder,
+                on_home=on_home,
+                home_label="Back to Setup",
+                empty_message="No matching server channels/categories were found. Try Search with part of the name or its Discord ID.",
+            )
+        await interaction.response.edit_message(embed=browser.embed(), view=browser)
 
 
 class TicketBasicsPickerView(SetupNavView):
     def __init__(self) -> None:
         super().__init__()
         self.add_item(
-            SaveChannelSelect(
-                placeholder="Where open tickets go",
+            _SolidPickButton(
+                kind='channel',
+                label="Where open tickets go",
                 columns=("ticket_category_id",),
                 channel_types=[discord.ChannelType.category],
                 row=0,
@@ -1894,8 +2066,9 @@ class TicketBasicsPickerView(SetupNavView):
             )
         )
         self.add_item(
-            SaveChannelSelect(
-                placeholder="Where closed tickets go",
+            _SolidPickButton(
+                kind='channel',
+                label="Where closed tickets go",
                 columns=("ticket_archive_category_id",),
                 also_same=("ticket_closed_category_id",),
                 channel_types=[discord.ChannelType.category],
@@ -1904,17 +2077,19 @@ class TicketBasicsPickerView(SetupNavView):
             )
         )
         self.add_item(
-            SaveRoleSelect(
-                placeholder="Staff role that handles tickets",
+            _SolidPickButton(
+                kind='role',
+                label="Staff role that handles tickets",
                 columns=("staff_role_id",),
                 also_same=("vc_staff_role_id",),
-                require_manage=False,
                 row=2,
+                require_manage=False,
             )
         )
         self.add_item(
-            SaveChannelSelect(
-                placeholder="Where users press Create Ticket",
+            _SolidPickButton(
+                kind='channel',
+                label="Where users press Create Ticket",
                 columns=("ticket_panel_channel_id",),
                 also_same=("support_channel_id",),
                 channel_types=[discord.ChannelType.text],
@@ -1928,36 +2103,40 @@ class AccessRolesPickerView(SetupNavView):
     def __init__(self) -> None:
         super().__init__()
         self.add_item(
-            SaveRoleSelect(
-                placeholder="New / waiting role (optional, any name)",
+            _SolidPickButton(
+                kind='role',
+                label="New / waiting role (optional, any name)",
                 columns=("unverified_role_id",),
-                require_manage=True,
                 row=0,
+                require_manage=True,
             )
         )
         self.add_item(
-            SaveRoleSelect(
-                placeholder="Approved role (optional, any name)",
+            _SolidPickButton(
+                kind='role',
+                label="Approved role (optional, any name)",
                 columns=("verified_role_id",),
-                require_manage=True,
                 row=1,
-            )
-        )
-        self.add_item(
-            SaveRoleSelect(
-                placeholder="Full access / member role (optional, any name)",
-                columns=("resident_role_id",),
                 require_manage=True,
-                row=2,
             )
         )
         self.add_item(
-            SaveRoleSelect(
-                placeholder="Server-control / setup admin role",
+            _SolidPickButton(
+                kind='role',
+                label="Full access / member role (optional, any name)",
+                columns=("resident_role_id",),
+                row=2,
+                require_manage=True,
+            )
+        )
+        self.add_item(
+            _SolidPickButton(
+                kind='role',
+                label="Server-control / setup admin role",
                 columns=("server_control_role_id",),
                 also_same=("control_role_id", "perm_role_id"),
-                require_manage=False,
                 row=3,
+                require_manage=False,
             )
         )
 
@@ -1969,8 +2148,9 @@ class VerificationChannelsPickerView(SetupNavView):
     def __init__(self) -> None:
         super().__init__()
         self.add_item(
-            SaveChannelSelect(
-                placeholder="Text channel for verification, if used",
+            _SolidPickButton(
+                kind='channel',
+                label="Text channel for verification, if used",
                 columns=("verify_channel_id",),
                 channel_types=[discord.ChannelType.text],
                 row=0,
@@ -1978,16 +2158,18 @@ class VerificationChannelsPickerView(SetupNavView):
             )
         )
         self.add_item(
-            SaveChannelSelect(
-                placeholder="Voice verification channel, if used",
+            _SolidPickButton(
+                kind='channel',
+                label="Voice verification channel, if used",
                 columns=("vc_verify_channel_id",),
                 channel_types=[discord.ChannelType.voice],
                 row=1,
             )
         )
         self.add_item(
-            SaveChannelSelect(
-                placeholder="Staff VC queue/status channel, if used",
+            _SolidPickButton(
+                kind='channel',
+                label="Staff VC queue/status channel, if used",
                 columns=("vc_verify_queue_channel_id",),
                 channel_types=[discord.ChannelType.text],
                 row=2,
@@ -1995,8 +2177,9 @@ class VerificationChannelsPickerView(SetupNavView):
             )
         )
         self.add_item(
-            SaveChannelSelect(
-                placeholder="Welcome/start channel, if used",
+            _SolidPickButton(
+                kind='channel',
+                label="Welcome/start channel, if used",
                 columns=("welcome_channel_id",),
                 channel_types=[discord.ChannelType.text],
                 row=3,
@@ -2058,8 +2241,9 @@ class AdvancedLogsPickerView(SetupNavView):
     def __init__(self) -> None:
         super().__init__()
         self.add_item(
-            SaveChannelSelect(
-                placeholder="Bans / blacklist channel, if used",
+            _SolidPickButton(
+                kind='channel',
+                label="Bans / blacklist channel, if used",
                 columns=("bans_channel_id",),
                 also_same=("blacklist_channel_id",),
                 channel_types=[discord.ChannelType.text],
@@ -2073,8 +2257,9 @@ class LogsStatusPickerView(SetupNavView):
     def __init__(self) -> None:
         super().__init__()
         self.add_item(
-            SaveChannelSelect(
-                placeholder="Where moderation/security logs go",
+            _SolidPickButton(
+                kind='channel',
+                label="Where moderation/security logs go",
                 columns=("modlog_channel_id",),
                 also_same=("raidlog_channel_id", "raid_log_channel_id", "force_verify_log_channel_id"),
                 channel_types=[discord.ChannelType.text],
@@ -2083,8 +2268,9 @@ class LogsStatusPickerView(SetupNavView):
             )
         )
         self.add_item(
-            SaveChannelSelect(
-                placeholder="Where ticket transcripts go",
+            _SolidPickButton(
+                kind='channel',
+                label="Where ticket transcripts go",
                 columns=("transcripts_channel_id",),
                 also_same=("transcript_channel_id",),
                 channel_types=[discord.ChannelType.text],
@@ -2094,8 +2280,9 @@ class LogsStatusPickerView(SetupNavView):
             )
         )
         self.add_item(
-            SaveChannelSelect(
-                placeholder="Where join/leave logs go",
+            _SolidPickButton(
+                kind='channel',
+                label="Where join/leave logs go",
                 columns=("join_log_channel_id",),
                 also_same=("join_exit_log_channel_id",),
                 channel_types=[discord.ChannelType.text],
@@ -2104,8 +2291,9 @@ class LogsStatusPickerView(SetupNavView):
             )
         )
         self.add_item(
-            SaveChannelSelect(
-                placeholder="Where bot status messages go",
+            _SolidPickButton(
+                kind='channel',
+                label="Where bot status messages go",
                 columns=("status_channel_id",),
                 also_same=("bot_status_channel_id", "health_channel_id"),
                 channel_types=[discord.ChannelType.text],
@@ -2346,59 +2534,93 @@ class VerificationIdleTimerModal(discord.ui.Modal, title="No-Start Auto-Remove")
         await _send_ephemeral(interaction, embed=embed, view=view)
 
 
-class VerificationModeSelect(discord.ui.Select):
+def _verification_mode_choices() -> list[Any]:
+    return [
+        make_choice(
+            "No access roles", "none",
+            description="Dank Shield will not require a waiting/approved/member role style.",
+            emoji="🚫",
+        ),
+        make_choice(
+            "One approved role only", "single_approved_role",
+            description="Users only get one approved role after verification.",
+            emoji="✅",
+        ),
+        make_choice(
+            "Waiting role → approved role", "waiting_to_approved",
+            description="Users start with one role, then switch to approved.",
+            emoji="🔁",
+        ),
+        make_choice(
+            "Waiting → approved → full access", "waiting_to_approved_to_member",
+            description="Use all three role steps if your server wants that.",
+            emoji="🎭",
+        ),
+        make_choice(
+            "Custom / staff controlled", "custom",
+            description="Use your saved role picks, but do not assume a fixed flow.",
+            emoji="🧩",
+        ),
+    ]
+
+
+async def _apply_verification_mode_pick(interaction: discord.Interaction, mode: str) -> None:
+    """The old VerificationModeSelect callback body, driven by the house picker."""
+    if not await _require_setup_permission(interaction):
+        return
+    await _save_config(interaction, {"verification_mode": mode})
+    await _show_saved_section_screen(
+        interaction,
+        title="✅ Saved Access Role Style",
+        saved_line=f"Saved verification mode: `{mode}`.",
+        section="behavior",
+    )
+
+
+class _VerificationModeOpenButton(discord.ui.Button):
+    """Opens the house picker for the access-role style on the same message."""
+
     def __init__(self) -> None:
-        options = [
-            discord.SelectOption(
-                label="No access roles",
-                value="none",
-                description="Dank Shield will not require a waiting/approved/member role style.",
-                emoji="🚫",
-            ),
-            discord.SelectOption(
-                label="One approved role only",
-                value="single_approved_role",
-                description="Users only get one approved role after verification.",
-                emoji="✅",
-            ),
-            discord.SelectOption(
-                label="Waiting role → approved role",
-                value="waiting_to_approved",
-                description="Users start with one role, then switch to approved.",
-                emoji="🔁",
-            ),
-            discord.SelectOption(
-                label="Waiting → approved → full access",
-                value="waiting_to_approved_to_member",
-                description="Use all three role steps if your server wants that.",
-                emoji="🎭",
-            ),
-            discord.SelectOption(
-                label="Custom / staff controlled",
-                value="custom",
-                description="Use your saved role picks, but do not assume a fixed flow.",
-                emoji="🧩",
-            ),
-        ]
-        super().__init__(placeholder="Choose how your server handles access roles", min_values=1, max_values=1, options=options, row=0)
+        super().__init__(
+            label="Choose how your server handles access roles",
+            emoji="🧭",
+            style=discord.ButtonStyle.primary,
+            custom_id="dank:setup_solid:verification_mode:open:v1",
+            row=0,
+        )
 
     async def callback(self, interaction: discord.Interaction) -> None:
-        if not await _require_setup_permission(interaction):
-            return
-        mode = str(self.values[0])
-        await _save_config(interaction, {"verification_mode": mode})
-        await _show_saved_section_screen(
-            interaction,
-            title="✅ Saved Access Role Style",
-            saved_line=f"Saved verification mode: `{mode}`.",
-            section="behavior",
+        async def on_pick(pick_interaction: discord.Interaction, value: str) -> None:
+            await _apply_verification_mode_pick(pick_interaction, value)
+
+        async def on_home(home_interaction: discord.Interaction) -> None:
+            message = getattr(home_interaction, "message", None)
+            embeds = getattr(message, "embeds", None) if message is not None else None
+            await home_interaction.response.edit_message(
+                embed=embeds[0] if embeds else None,
+                view=BehaviorSettingsView(),
+            )
+
+        picker = _SolidPickerView(
+            choices=_verification_mode_choices(),
+            on_pick=on_pick,
+            custom_id="dank:setup_solid:verification_mode:v1",
+            placeholder="Choose how your server handles access roles",
+            title="Access Role Style",
+            on_home=on_home,
+        )
+        message = getattr(interaction, "message", None)
+        embeds = getattr(message, "embeds", None) if message is not None else None
+        await interaction.response.edit_message(
+            embed=embeds[0] if embeds else None,
+            view=picker,
         )
 
 
 class BehaviorSettingsView(SetupNavView):
     def __init__(self) -> None:
         super().__init__()
-        self.add_item(VerificationModeSelect())
+        self.add_item(_VerificationModeOpenButton())
 
     @discord.ui.button(label="Verification Timers", emoji="⏱️", style=discord.ButtonStyle.primary, custom_id="stoney_solid:behavior_verify_timers", row=1)
     async def verify_timers(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -2666,52 +2888,133 @@ async def _seed_recommended_categories(
     return created, skipped, ""
 
 
-class CategorySelect(discord.ui.Select):
-    def __init__(self, rows: list[dict[str, Any]], *, action: str, placeholder: str, row: int) -> None:
-        super().__init__(placeholder=placeholder, min_values=1, max_values=1, options=_category_options(rows, placeholder=placeholder), row=row)
+def _solid_category_choices(rows: list[dict[str, Any]], *, placeholder: str) -> list[Any]:
+    """All category rows as house-picker choices (no 25-row cut)."""
+    choices: list[Any] = []
+    for row in rows:
+        slug = str(row.get("slug") or "").strip()
+        if not slug:
+            continue
+        name = str(row.get("name") or slug).strip()
+        intake_type = str(row.get("intake_type") or "custom").strip()
+        default = "Default • " if bool(row.get("is_default")) else ""
+        choices.append(make_choice(
+            _short(name, 95) or slug,
+            slug[:100],
+            description=_short(f"{default}{slug} • {intake_type}", 100),
+        ))
+    if not choices:
+        choices.append(make_choice("No options available", "__none__", description=placeholder[:100]))
+    return choices
+
+
+async def _apply_category_pick(
+    interaction: discord.Interaction,
+    *,
+    rows: list[dict[str, Any]],
+    action: str,
+    value: str,
+) -> None:
+    """The old CategorySelect callback body, driven by the house picker."""
+    if not await _require_setup_permission(interaction):
+        return
+    guild = interaction.guild
+    if guild is None:
+        return await interaction.response.send_message("❌ This must be used inside a server.", ephemeral=True)
+    if value == "__none__":
+        return await interaction.response.send_message("No ticket menu option was selected.", ephemeral=True)
+    item = _find_category(rows, value)
+    if item is None:
+        return await interaction.response.send_message("That ticket menu option was not found. Press Refresh and try again.", ephemeral=True)
+
+    if action == "edit":
+        try:
+            await interaction.response.send_modal(CategoryModal(existing=item))
+        except Exception as e:
+            embed = discord.Embed(
+                title="🚫 Edit Menu Did Not Open",
+                description=(
+                    f"`{type(e).__name__}: {str(e)[:250]}`\n\n"
+                    "Nothing was changed. Press **Refresh**, then try again."
+                ),
+                color=discord.Color.red(),
+            )
+            if interaction.response.is_done():
+                await interaction.followup.send(embed=embed, ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
+            else:
+                await interaction.response.send_message(embed=embed, ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
+        return
+
+    if action == "default":
+        await _safe_defer_update(interaction)
+        ok, msg = await _write_category(guild, {**item, "is_default": True}, set_default=True)
+        if not ok:
+            embed = discord.Embed(title="🚫 Default Not Saved", description=msg, color=discord.Color.red())
+            return await _edit_or_followup(interaction, embed=embed, view=CategoryManagerView(rows=rows))
+        embed, view = await _build_category_manager_payload(guild, title="✅ Default Ticket Option Saved")
+        await _edit_or_followup(interaction, embed=embed, view=view)
+        return
+
+
+class _CategoryPickOpenButton(discord.ui.Button):
+    """Opens the house picker for a ticket-choice action on the same message."""
+
+    def __init__(self, rows: list[dict[str, Any]], *, action: str, label: str, emoji: str, row: int, home_factory: Any = None) -> None:
+        super().__init__(
+            label=label[:80],
+            emoji=emoji,
+            style=discord.ButtonStyle.primary if action == "edit" else discord.ButtonStyle.secondary,
+            custom_id=f"dank:setup_solid:category:{action}:open:v1",
+            row=row,
+        )
         self.rows = rows
         self.action = action
+        self.placeholder = f"{emoji} {label}"
+        self.home_factory = home_factory
 
     async def callback(self, interaction: discord.Interaction) -> None:
-        if not await _require_setup_permission(interaction):
-            return
-        guild = interaction.guild
-        if guild is None:
-            return await interaction.response.send_message("❌ This must be used inside a server.", ephemeral=True)
-        value = str(self.values[0])
-        if value == "__none__":
-            return await interaction.response.send_message("No ticket menu option was selected.", ephemeral=True)
-        item = _find_category(self.rows, value)
-        if item is None:
-            return await interaction.response.send_message("That ticket menu option was not found. Press Refresh and try again.", ephemeral=True)
+        rows = self.rows
+        action = self.action
 
-        if self.action == "edit":
-            try:
-                await interaction.response.send_modal(CategoryModal(existing=item))
-            except Exception as e:
-                embed = discord.Embed(
-                    title="🚫 Edit Menu Did Not Open",
-                    description=(
-                        f"`{type(e).__name__}: {str(e)[:250]}`\n\n"
-                        "Nothing was changed. Press **Refresh**, then try again."
-                    ),
-                    color=discord.Color.red(),
+        async def on_pick(pick_interaction: discord.Interaction, value: str) -> None:
+            await _apply_category_pick(pick_interaction, rows=rows, action=action, value=value)
+
+        home_factory = self.home_factory
+        parent_view = self.view
+        parent_embed = _picker_parent_embed(interaction)
+
+        async def on_home(home_interaction: discord.Interaction) -> None:
+            if home_factory is not None:
+                message = getattr(home_interaction, "message", None)
+                embeds = getattr(message, "embeds", None) if message is not None else None
+                await home_interaction.response.edit_message(
+                    embed=embeds[0] if embeds else None,
+                    view=home_factory(),
                 )
-                if interaction.response.is_done():
-                    await interaction.followup.send(embed=embed, ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
-                else:
-                    await interaction.response.send_message(embed=embed, ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
-            return
+                return
+            # Restore the live parent panel. (The module-level
+            # CategoryManagerView name is owned by the ticket category
+            # setup guard in production, so reconstructing it here
+            # would build the wrong view.)
+            kwargs: dict[str, Any] = {"view": parent_view}
+            if parent_embed is not None:
+                kwargs["embed"] = parent_embed
+            await home_interaction.response.edit_message(**kwargs)
 
-        if self.action == "default":
-            await _safe_defer_update(interaction)
-            ok, msg = await _write_category(guild, {**item, "is_default": True}, set_default=True)
-            if not ok:
-                embed = discord.Embed(title="🚫 Default Not Saved", description=msg, color=discord.Color.red())
-                return await _edit_or_followup(interaction, embed=embed, view=CategoryManagerView(rows=self.rows))
-            embed, view = await _build_category_manager_payload(guild, title="✅ Default Ticket Option Saved")
-            await _edit_or_followup(interaction, embed=embed, view=view)
-            return
+        picker = _SolidPickerView(
+            choices=_solid_category_choices(rows, placeholder=self.placeholder),
+            on_pick=on_pick,
+            custom_id=f"dank:setup_solid:category:{action}:v1",
+            placeholder=self.placeholder,
+            title=self.placeholder,
+            on_home=on_home,
+        )
+        message = getattr(interaction, "message", None)
+        embeds = getattr(message, "embeds", None) if message is not None else None
+        await interaction.response.edit_message(
+            embed=embeds[0] if embeds else None,
+            view=picker,
+        )
 
 
 class CategoryManagerView(SetupNavView):
@@ -2723,8 +3026,8 @@ class CategoryManagerView(SetupNavView):
         # Only show edit/default dropdowns when real choices exist.
         # Showing fake empty dropdowns caused users to think setup was broken.
         if not db_error and rows:
-            self.add_item(CategorySelect(rows, action="edit", placeholder="✏️ Edit an existing ticket choice", row=0))
-            self.add_item(CategorySelect(rows, action="default", placeholder="⭐ Choose default fallback ticket choice", row=1))
+            self.add_item(_CategoryPickOpenButton(rows, action="edit", label="Edit an existing ticket choice", emoji="✏️", row=0))
+            self.add_item(_CategoryPickOpenButton(rows, action="default", label="Choose default fallback ticket choice", emoji="⭐", row=1))
 
         # Make the create button truthful after recommended choices already exist.
         try:

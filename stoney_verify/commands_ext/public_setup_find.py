@@ -10,6 +10,7 @@ from discord import app_commands
 
 from .common import safe_defer
 from stoney_verify.interaction_guard import run_guarded_interaction, safe_send_interaction
+from stoney_verify.ui.picker import DankPickerView, chunk_choices, make_choice
 from .public_setup_config_writer import apply_public_setup_writer_patch, upsert_guild_config
 from .public_setup_group import (
     _channel_value,
@@ -280,28 +281,121 @@ def _result_embed(guild: discord.Guild, spec: SetupTarget, query: str, matches: 
     if len(matches) > 10:
         preview.append(f"• …and {len(matches) - 10} more result(s)")
     embed.add_field(name=f"Matches found: {len(matches)}", value="\n".join(preview) or "None", inline=False)
-    embed.set_footer(text=f"Showing top {min(25, len(matches))} selectable result(s)")
+    embed.set_footer(text=f"All {len(matches)} result(s) are selectable in the picker")
     return embed
 
 
-class SetupSearchSelect(discord.ui.Select):
-    def __init__(self, *, spec: SetupTarget, matches: list[Any]) -> None:
-        options = [
-            discord.SelectOption(
-                label=_obj_label(obj, spec),
-                description=_obj_description(obj, spec),
-                value=str(int(obj.id)),
+class _SetupFindPickerView(DankPickerView):
+    """House picker for setup-find results.
+
+    Pages every match with chunk_choices so results past Discord's
+    25-option select limit stay reachable (the old raw select silently
+    cut the list at 25). Picking routes to the host view's guarded
+    apply, exactly like the old select callback did.
+    """
+
+    def __init__(self, host: "SetupSearchResultView", *, page: int = 0) -> None:
+        self.host = host
+        all_choices = [
+            make_choice(
+                _obj_label(obj, host.spec),
+                str(int(obj.id)),
+                description=_obj_description(obj, host.spec),
             )
-            for obj in matches[:25]
+            for obj in host.matches
         ]
-        super().__init__(placeholder=f"Choose {spec.label}", min_values=1, max_values=1, options=options)
-        self.spec = spec
+        pages = chunk_choices(all_choices) or [[]]
+        page = max(0, min(int(page), len(pages) - 1))
+        placeholder = f"Choose {host.spec.label}"
+
+        async def on_pick(interaction: discord.Interaction, value: str) -> None:
+            await host.apply(interaction, int(value))
+
+        async def on_home(interaction: discord.Interaction) -> None:
+            message = getattr(interaction, "message", None)
+            embeds = getattr(message, "embeds", None) if message is not None else None
+            await interaction.response.edit_message(
+                embed=embeds[0] if embeds else None,
+                view=host,
+            )
+
+        super().__init__(
+            author_id=int(host.owner_id),
+            choices=pages[page],
+            on_pick=on_pick,
+            custom_id=(
+                f"dank:setup_find:result:v1:{page}" if len(pages) > 1
+                else "dank:setup_find:result:v1"
+            ),
+            placeholder=(
+                f"{placeholder} • Page {page + 1}/{len(pages)}"
+                if len(pages) > 1 else placeholder
+            ),
+            title="Setup Search Results",
+            timeout=host.timeout_seconds,
+            on_home=on_home,
+            home_label="Back",
+        )
+        self.page = page
+        self.pages = len(pages)
+        if len(pages) > 1:
+            self.add_item(_SetupFindPageButton(delta=-1, disabled=page <= 0))
+            self.add_item(_SetupFindPageButton(delta=1, disabled=page >= len(pages) - 1))
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        return await self.host.interaction_check(interaction)
+
+    def _for_page(self, page: int) -> "_SetupFindPickerView":
+        return _SetupFindPickerView(self.host, page=page)
+
+
+class _SetupFindPageButton(discord.ui.Button):
+    def __init__(self, *, delta: int, disabled: bool) -> None:
+        super().__init__(
+            label="Previous" if delta < 0 else "Next",
+            emoji="◀️" if delta < 0 else "▶️",
+            style=discord.ButtonStyle.secondary,
+            custom_id=(
+                "dank:setup_find:result:prev" if delta < 0
+                else "dank:setup_find:result:next"
+            ),
+            row=2,
+            disabled=bool(disabled),
+        )
+        self.delta = int(delta)
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        view = self.view
+        if not isinstance(view, _SetupFindPickerView) or not await view.interaction_check(interaction):
+            return
+        page = max(0, min(view.page + self.delta, view.pages - 1))
+        await interaction.response.edit_message(view=view._for_page(page))
+
+
+class _SetupFindOpenButton(discord.ui.Button):
+    """Swaps the search results panel for the house picker on the same message."""
+
+    def __init__(self, spec: SetupTarget) -> None:
+        super().__init__(
+            label=f"Choose {spec.label}"[:80],
+            emoji="🔎",
+            style=discord.ButtonStyle.primary,
+            custom_id="dank:setup_find:result:open:v1",
+            row=0,
+        )
 
     async def callback(self, interaction: discord.Interaction) -> None:
         view = self.view
         if not isinstance(view, SetupSearchResultView):
             return await interaction.response.send_message("❌ Search view state expired. Run `/dank setup` again.", ephemeral=True)
-        await view.apply(interaction, int(self.values[0]))
+        if not await view.interaction_check(interaction):
+            return
+        message = getattr(interaction, "message", None)
+        embeds = getattr(message, "embeds", None) if message is not None else None
+        await interaction.response.edit_message(
+            embed=embeds[0] if embeds else None,
+            view=_SetupFindPickerView(view),
+        )
 
 
 class SetupSearchResultView(discord.ui.View):
@@ -309,7 +403,9 @@ class SetupSearchResultView(discord.ui.View):
         super().__init__(timeout=timeout)
         self.owner_id = int(owner_id)
         self.spec = spec
-        self.add_item(SetupSearchSelect(spec=spec, matches=matches))
+        self.matches = list(matches)
+        self.timeout_seconds = float(timeout)
+        self.add_item(_SetupFindOpenButton(spec))
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if int(interaction.user.id) != self.owner_id:

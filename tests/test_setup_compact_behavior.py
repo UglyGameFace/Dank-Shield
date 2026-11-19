@@ -70,8 +70,17 @@ def test_compact_home_uses_one_status_field_and_one_direct_area_picker(
     assert embed.title == "🚀 Dank Shield Setup"
     assert field_names(embed) == ["Next"]
     assert embed.footer.text is None
+    # Picker migration slice 3: the area picker is a house-framework
+    # opener button now, not a raw select child.
     assert len(
         [child for child in view.children if isinstance(child, discord.ui.Select)]
+    ) == 0
+    assert len(
+        [
+            child
+            for child in view.children
+            if getattr(child, "custom_id", "") == "dank_setup_compact:area:open:v1"
+        ]
     ) == 1
     button_text = [
         child.label

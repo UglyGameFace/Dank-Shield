@@ -15,6 +15,7 @@ import discord
 
 from ..guild_config import get_guild_config
 from ..navigation_registry import CATEGORIES
+from ..ui.picker import DankPickerView, chunk_choices, make_choice
 from ..setup_service_state import mark_setup_completed, service_state_from_config
 from . import public_setup_recommend as setup
 
@@ -145,27 +146,124 @@ async def _route_area(interaction: discord.Interaction, area: str) -> None:
     await navigation._open_category(interaction, str(area or "").strip())
 
 
-class FeatureAreaSelect(discord.ui.Select):
-    def __init__(self) -> None:
+class _CompactPickerView(DankPickerView):
+    """House picker for compact setup panels.
+
+    Pages long choice lists with chunk_choices so every option stays
+    reachable past Discord's 25-option select limit.
+    """
+
+    def __init__(
+        self,
+        *,
+        choices: Any,
+        on_pick: Any,
+        custom_id: str,
+        placeholder: str,
+        title: str,
+        on_home: Any = None,
+        page: int = 0,
+    ) -> None:
+        all_choices = list(choices or [])
+        pages = chunk_choices(all_choices) or [[]]
+        page = max(0, min(int(page), len(pages) - 1))
         super().__init__(
-            placeholder="Choose a section…",
-            min_values=1,
-            max_values=1,
-            custom_id="dank_setup_compact:area",
-            row=0,
-            options=[
-                discord.SelectOption(
-                    label=label,
-                    value=value,
-                    emoji=emoji,
-                    description=description[:100],
-                )
-                for value, label, emoji, description in FEATURE_AREAS
-            ],
+            author_id=0,
+            choices=pages[page],
+            on_pick=on_pick,
+            custom_id=f"{custom_id}:{page}" if len(pages) > 1 else custom_id,
+            placeholder=(
+                f"{placeholder} • Page {page + 1}/{len(pages)}"
+                if len(pages) > 1 else placeholder
+            ),
+            title=title,
+            timeout=900,
+            on_home=on_home,
+            home_label="Back",
+        )
+        self._all_choices = all_choices
+        self._picker_on_pick = on_pick
+        self._base_custom_id = custom_id
+        self._base_placeholder = placeholder
+        self._picker_title = title
+        self._picker_on_home = on_home
+        self.page = page
+        self.pages = len(pages)
+        if len(pages) > 1:
+            self.add_item(_CompactPageButton(delta=-1, disabled=page <= 0))
+            self.add_item(_CompactPageButton(delta=1, disabled=page >= len(pages) - 1))
+
+    def _for_page(self, page: int) -> "_CompactPickerView":
+        return _CompactPickerView(
+            choices=self._all_choices,
+            on_pick=self._picker_on_pick,
+            custom_id=self._base_custom_id,
+            placeholder=self._base_placeholder,
+            title=self._picker_title,
+            on_home=self._picker_on_home,
+            page=page,
         )
 
+
+class _CompactPageButton(discord.ui.Button):
+    def __init__(self, *, delta: int, disabled: bool) -> None:
+        super().__init__(
+            label="Previous" if delta < 0 else "Next",
+            emoji="◀️" if delta < 0 else "▶️",
+            style=discord.ButtonStyle.secondary,
+            custom_id=(
+                "dank_setup_compact:picker:prev" if delta < 0
+                else "dank_setup_compact:picker:next"
+            ),
+            row=2,
+            disabled=bool(disabled),
+        )
+        self.delta = int(delta)
+
     async def callback(self, interaction: discord.Interaction) -> None:
-        await _route_area(interaction, str(self.values[0]) if self.values else "")
+        view = self.view
+        if not isinstance(view, _CompactPickerView):
+            return
+        page = max(0, min(view.page + self.delta, view.pages - 1))
+        await interaction.response.edit_message(view=view._for_page(page))
+
+
+def _feature_area_choices() -> list[Any]:
+    return [
+        make_choice(label, value, description=description[:100], emoji=emoji)
+        for value, label, emoji, description in FEATURE_AREAS
+    ]
+
+
+async def _open_feature_area_picker(
+    interaction: discord.Interaction,
+    host_view: discord.ui.View,
+) -> None:
+    async def on_pick(pick_interaction: discord.Interaction, value: str) -> None:
+        await _route_area(pick_interaction, value)
+
+    async def on_home(home_interaction: discord.Interaction) -> None:
+        message = getattr(home_interaction, "message", None)
+        embeds = getattr(message, "embeds", None) if message is not None else None
+        await home_interaction.response.edit_message(
+            embed=embeds[0] if embeds else None,
+            view=host_view,
+        )
+
+    picker = _CompactPickerView(
+        choices=_feature_area_choices(),
+        on_pick=on_pick,
+        custom_id="dank_setup_compact:area:v1",
+        placeholder="Choose a section…",
+        title="Choose a Section",
+        on_home=on_home,
+    )
+    message = getattr(interaction, "message", None)
+    embeds = getattr(message, "embeds", None) if message is not None else None
+    await interaction.response.edit_message(
+        embed=embeds[0] if embeds else None,
+        view=picker,
+    )
 
 
 class CompactSetupHomeView(discord.ui.View):
@@ -175,7 +273,7 @@ class CompactSetupHomeView(discord.ui.View):
         self.started = bool(started)
         self.completed = bool(completed)
         if self.started:
-            self.add_item(FeatureAreaSelect())
+            _add(self, "Choose a Section", "🧭", discord.ButtonStyle.secondary, "dank_setup_compact:area:open:v1", self._area, 0)
 
         if self.completed:
             primary = ("View Setup Summary", "✅")
@@ -192,6 +290,9 @@ class CompactSetupHomeView(discord.ui.View):
             _add(self, "Check Configuration", "🩺", discord.ButtonStyle.secondary, "dank_setup_home:check", self._check, 2)
             _add(self, "Advanced", "⚙️", discord.ButtonStyle.secondary, "dank_setup_home:advanced", self._advanced, 2)
         _add(self, "Close", "✖️", discord.ButtonStyle.danger, "dank_setup_home:close", self._close, 2)
+
+    async def _area(self, interaction: discord.Interaction) -> None:
+        await _open_feature_area_picker(interaction, self)
 
     async def _primary(self, interaction: discord.Interaction) -> None:
         if self.completed:
@@ -219,12 +320,15 @@ class CompactSetupHomeView(discord.ui.View):
 class CompactManagerView(discord.ui.View):
     def __init__(self) -> None:
         super().__init__(timeout=900)
-        self.add_item(FeatureAreaSelect())
+        _add(self, "Choose a Section", "🧭", discord.ButtonStyle.secondary, "dank_setup_compact:area:open:v1", self._area, 0)
         _add(self, "Change Plan", "🧭", discord.ButtonStyle.primary, "dank_setup_compact:plan", self._plan, 1)
         _add(self, "Check Configuration", "🩺", discord.ButtonStyle.secondary, "dank_setup_compact:check", self._check, 1)
         _add(self, "Advanced", "⚙️", discord.ButtonStyle.secondary, "dank_setup_compact:advanced", self._advanced, 2)
         _add(self, "Setup Home", "🏠", discord.ButtonStyle.secondary, "dank_setup_compact:home", self._home, 2)
         _add(self, "Close", "✖️", discord.ButtonStyle.danger, "dank_setup_compact:close", self._close, 2)
+
+    async def _area(self, interaction: discord.Interaction) -> None:
+        await _open_feature_area_picker(interaction, self)
 
     async def _plan(self, interaction: discord.Interaction) -> None:
         await _open_plan(interaction)
@@ -599,34 +703,55 @@ def _clear_test_session(interaction: discord.Interaction) -> None:
     _TEST_SESSIONS.pop(_test_session_key(interaction), None)
 
 
-class TestAreaSelect(discord.ui.Select):
-    def __init__(self, state: dict[str, Any], confirmed: frozenset[str]) -> None:
-        self.state = dict(state)
-        self.confirmed = frozenset(confirmed)
-        super().__init__(
-            placeholder="Choose a feature to test…",
-            min_values=1,
-            max_values=1,
-            custom_id="dank_setup_test:area",
-            row=0,
-            options=[
-                discord.SelectOption(
-                    label=TEST_SPECS[key][0],
-                    value=key,
-                    emoji="✅" if key in confirmed else TEST_SPECS[key][1],
-                    description=("Tested" if key in confirmed else "Not tested") + " · open instructions",
-                )
-                for key in required_test_keys(state)
-            ],
+async def _open_test_area_picker(
+    interaction: discord.Interaction,
+    state: dict[str, Any],
+    confirmed: frozenset[str],
+    *,
+    placeholder: str = "Choose a feature to test…",
+    home_factory: Any = None,
+) -> None:
+    state = dict(state)
+    confirmed = frozenset(confirmed)
+    choices = [
+        make_choice(
+            TEST_SPECS[key][0],
+            key,
+            emoji="✅" if key in confirmed else TEST_SPECS[key][1],
+            description=("Tested" if key in confirmed else "Not tested") + " · open instructions",
+        )
+        for key in required_test_keys(state)
+    ]
+
+    async def on_pick(pick_interaction: discord.Interaction, value: str) -> None:
+        await _open_feature_test(pick_interaction, state, confirmed, value)
+
+    async def on_home(home_interaction: discord.Interaction) -> None:
+        message = getattr(home_interaction, "message", None)
+        embeds = getattr(message, "embeds", None) if message is not None else None
+        if home_factory is not None:
+            home_view = home_factory(state, confirmed)
+        else:
+            home_view = CompactTestView(state, confirmed=confirmed)
+        await home_interaction.response.edit_message(
+            embed=embeds[0] if embeds else None,
+            view=home_view,
         )
 
-    async def callback(self, interaction: discord.Interaction) -> None:
-        await _open_feature_test(
-            interaction,
-            self.state,
-            self.confirmed,
-            str(self.values[0]) if self.values else "",
-        )
+    picker = _CompactPickerView(
+        choices=choices,
+        on_pick=on_pick,
+        custom_id="dank_setup_test:area:v1",
+        placeholder=placeholder,
+        title="Test Your Setup",
+        on_home=on_home,
+    )
+    message = getattr(interaction, "message", None)
+    embeds = getattr(message, "embeds", None) if message is not None else None
+    await interaction.response.edit_message(
+        embed=embeds[0] if embeds else None,
+        view=picker,
+    )
 
 
 class CompactTestView(discord.ui.View):
@@ -641,7 +766,7 @@ class CompactTestView(discord.ui.View):
         self.confirmed = _confirmed(self.state, confirmed)
         required = set(required_test_keys(self.state))
         if required:
-            self.add_item(TestAreaSelect(self.state, self.confirmed))
+            _add(self, "Choose a Feature to Test", "🧪", discord.ButtonStyle.secondary, "dank_setup_test:area:open:v1", self._area, 0)
         if not self.state.get("completed"):
             _add(
                 self,
@@ -656,6 +781,9 @@ class CompactTestView(discord.ui.View):
         _add(self, "Recheck Configuration", "🩺", discord.ButtonStyle.secondary, "dank_setup_test:check", self._check, 1)
         _add(self, "Setup Home", "🏠", discord.ButtonStyle.secondary, "dank_setup_test:home", self._home, 2)
         _add(self, "Close", "✖️", discord.ButtonStyle.danger, "dank_setup_test:close", self._close, 2)
+
+    async def _area(self, interaction: discord.Interaction) -> None:
+        await _open_test_area_picker(interaction, self.state, self.confirmed)
 
     async def _finish(self, interaction: discord.Interaction) -> None:
         await _finish(interaction, self.confirmed)
@@ -889,9 +1017,7 @@ __all__ = [
     "CompactReviewView",
     "CompactSetupHomeView",
     "CompactTestView",
-    "FeatureAreaSelect",
     "FeatureTestView",
-    "TestAreaSelect",
     "apply_compact_setup_patch",
     "register_public_setup_compact_commands",
     "required_test_keys",

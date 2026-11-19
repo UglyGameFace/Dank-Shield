@@ -2,24 +2,28 @@ from __future__ import annotations
 
 """Canonical `/dank setup` resource-picker binding.
 
-The three public setup owners predate the shared Dank Shield resource browser and
-still define Discord-native RoleSelect/ChannelSelect compatibility classes.
-Those classes also contain the feature-specific validation/save behavior we do
-not want to fork. This module binds the live class names to buttons that open the
-shared cache-backed browser, then delegates the selected live object back through
-the original owner callback.
+The three public setup owners (public_setup_solid,
+public_setup_full_customization, public_setup_recommend) used to define
+Discord-native RoleSelect/ChannelSelect classes, and this module bound
+their live class names to buttons that open the shared cache-backed
+resource browser (DankGuildResourceBrowserView, a DankPickerView).
 
-This binding is installed explicitly by ``commands.py`` before split command
-registration. It is not a startup guard, import hook, config writer, or second
+Since the Slice 3 picker migration, the owners define those browser
+buttons natively and delegate picks to their own save handlers, so
+there is nothing left to substitute. This module now provides the
+shared custom_id / resource-kind helpers the owners use, and
+``apply_setup_resource_picker_binding`` verifies at bootstrap that
+every owner is on the canonical browser binding — commands.py treats a
+False result as a fatal bootstrap error, exactly as it did when the
+binding performed the substitution itself.
+
+It is not a startup guard, import hook, config writer, or second
 business-logic owner.
 """
 
-from types import SimpleNamespace
 from typing import Any, Iterable
 
 import discord
-
-from .ui import DankGuildResourceBrowserView
 
 _BOUND = False
 
@@ -69,378 +73,68 @@ async def _restore_parent(
     await interaction.response.edit_message(**kwargs)
 
 
-def _install_solid() -> None:
+def _owner_is_native(module: Any, *, opener_name: str, legacy_names: tuple[str, ...]) -> bool:
+    """True when the owner defines its browser opener natively and no
+    legacy Discord-native select class survives under the old names."""
+    opener = getattr(module, opener_name, None)
+    if not (isinstance(opener, type) and issubclass(opener, discord.ui.Button)):
+        return False
+    for name in legacy_names:
+        legacy = getattr(module, name, None)
+        if isinstance(legacy, type) and issubclass(
+            legacy, (discord.ui.Select, discord.ui.RoleSelect, discord.ui.ChannelSelect, discord.ui.UserSelect)
+        ):
+            return False
+    return True
+
+
+def _verify_solid() -> bool:
     from .commands_ext import public_setup_solid as solid
 
-    legacy_role = solid.SaveRoleSelect
-    legacy_channel = solid.SaveChannelSelect
-
-    class SetupRolePickerButton(discord.ui.Button):
-        def __init__(
-            self,
-            *,
-            placeholder: str,
-            columns: tuple[str, ...],
-            require_manage: bool,
-            also_same: tuple[str, ...] = (),
-            row: int = 0,
-        ) -> None:
-            self.placeholder = str(placeholder or "Choose a role")
-            self.columns = tuple(columns)
-            self.also_same = tuple(also_same)
-            self.require_manage = bool(require_manage)
-            super().__init__(
-                label=self.placeholder[:80],
-                emoji="🎭",
-                style=discord.ButtonStyle.primary,
-                custom_id=_custom_id("dank_setup:role", self.columns + self.also_same, row),
-                row=row,
-            )
-
-        async def callback(self, interaction: discord.Interaction) -> None:
-            if not await solid._require_setup_permission(interaction):
-                return
-            guild = interaction.guild
-            if guild is None:
-                return await interaction.response.send_message("❌ This must be used inside a server.", ephemeral=True)
-
-            parent_view = self.view
-            parent_embed = _message_embed(interaction)
-
-            async def on_home(home_interaction: discord.Interaction) -> None:
-                await _restore_parent(home_interaction, parent_view=parent_view, parent_embed=parent_embed)
-
-            async def on_pick(pick_interaction: discord.Interaction, role: Any) -> None:
-                adapter = SimpleNamespace(
-                    columns=self.columns,
-                    also_same=self.also_same,
-                    require_manage=self.require_manage,
-                    placeholder=self.placeholder,
-                    values=[role],
-                )
-                await legacy_role.callback(adapter, pick_interaction)
-
-            browser = DankGuildResourceBrowserView(
-                guild=guild,
-                author_id=int(interaction.user.id),
-                resource_kinds=("role",),
-                on_pick=on_pick,
-                custom_id=_custom_id("dank_setup:role_browser", self.columns + self.also_same, int(self.row or 0)),
-                title="🎭 Choose a Server Role",
-                placeholder=self.placeholder,
-                on_home=on_home,
-                home_label="Back to Setup",
-                empty_message="No server roles matched. Try Search with part of the role name or its Discord ID.",
-            )
-            await interaction.response.edit_message(embed=browser.embed(), view=browser)
-
-    class SetupChannelPickerButton(discord.ui.Button):
-        def __init__(
-            self,
-            *,
-            placeholder: str,
-            columns: tuple[str, ...],
-            channel_types: list[discord.ChannelType],
-            also_same: tuple[str, ...] = (),
-            row: int = 0,
-            require_category_manage: bool = False,
-            require_text: bool = False,
-            require_files: bool = False,
-        ) -> None:
-            self.placeholder = str(placeholder or "Choose a channel")
-            self.columns = tuple(columns)
-            self.channel_types = list(channel_types)
-            self.also_same = tuple(also_same)
-            self.require_category_manage = bool(require_category_manage)
-            self.require_text = bool(require_text)
-            self.require_files = bool(require_files)
-            super().__init__(
-                label=self.placeholder[:80],
-                emoji="🧭",
-                style=discord.ButtonStyle.primary,
-                custom_id=_custom_id("dank_setup:channel", self.columns + self.also_same, row),
-                row=row,
-            )
-
-        async def callback(self, interaction: discord.Interaction) -> None:
-            if not await solid._require_setup_permission(interaction):
-                return
-            guild = interaction.guild
-            if guild is None:
-                return await interaction.response.send_message("❌ This must be used inside a server.", ephemeral=True)
-
-            parent_view = self.view
-            parent_embed = _message_embed(interaction)
-
-            async def on_home(home_interaction: discord.Interaction) -> None:
-                await _restore_parent(home_interaction, parent_view=parent_view, parent_embed=parent_embed)
-
-            async def on_pick(pick_interaction: discord.Interaction, channel: Any) -> None:
-                adapter = SimpleNamespace(
-                    columns=self.columns,
-                    also_same=self.also_same,
-                    require_category_manage=self.require_category_manage,
-                    require_text=self.require_text,
-                    require_files=self.require_files,
-                    placeholder=self.placeholder,
-                    values=[channel],
-                )
-                await legacy_channel.callback(adapter, pick_interaction)
-
-            browser = DankGuildResourceBrowserView(
-                guild=guild,
-                author_id=int(interaction.user.id),
-                resource_kinds=_resource_kinds(self.channel_types),
-                on_pick=on_pick,
-                custom_id=_custom_id("dank_setup:channel_browser", self.columns + self.also_same, int(self.row or 0)),
-                title="🧭 Choose a Server Channel / Category",
-                placeholder=self.placeholder,
-                on_home=on_home,
-                home_label="Back to Setup",
-                empty_message="No matching server channels/categories were found. Try Search with part of the name or its Discord ID.",
-            )
-            await interaction.response.edit_message(embed=browser.embed(), view=browser)
-
-    solid.SaveRoleSelect = SetupRolePickerButton
-    solid.SaveChannelSelect = SetupChannelPickerButton
+    return _owner_is_native(
+        solid,
+        opener_name="_SolidPickButton",
+        legacy_names=("SaveRoleSelect", "SaveChannelSelect"),
+    )
 
 
-def _install_full_customization() -> None:
+def _verify_full_customization() -> bool:
     from .commands_ext import public_setup_full_customization as full
 
-    legacy_role = full.SaveRoleSelect
-    legacy_channel = full.SaveChannelSelect
-
-    class FullRolePickerButton(discord.ui.Button):
-        def __init__(
-            self,
-            *,
-            placeholder: str,
-            columns: tuple[str, ...],
-            also_same: tuple[str, ...] = (),
-            require_manage: bool = True,
-            row: int = 0,
-        ) -> None:
-            self.placeholder = str(placeholder or "Choose a role")
-            self.columns = tuple(columns)
-            self.also_same = tuple(also_same)
-            self.require_manage = bool(require_manage)
-            super().__init__(
-                label=self.placeholder[:80],
-                emoji="🎭",
-                style=discord.ButtonStyle.primary,
-                custom_id=_custom_id("dank_full:role", self.columns + self.also_same, row),
-                row=row,
-            )
-
-        async def callback(self, interaction: discord.Interaction) -> None:
-            if not await full._require_setup_permission(interaction):
-                return
-            guild = interaction.guild
-            if guild is None:
-                return await interaction.response.send_message("❌ This must be used inside a server.", ephemeral=True)
-
-            parent_view = self.view
-            parent_embed = _message_embed(interaction)
-
-            async def on_home(home_interaction: discord.Interaction) -> None:
-                await _restore_parent(home_interaction, parent_view=parent_view, parent_embed=parent_embed)
-
-            async def on_pick(pick_interaction: discord.Interaction, role: Any) -> None:
-                adapter = SimpleNamespace(
-                    columns=self.columns,
-                    also_same=self.also_same,
-                    require_manage=self.require_manage,
-                    placeholder=self.placeholder,
-                    values=[role],
-                )
-                await legacy_role.callback(adapter, pick_interaction)
-
-            browser = DankGuildResourceBrowserView(
-                guild=guild,
-                author_id=int(interaction.user.id),
-                resource_kinds=("role",),
-                on_pick=on_pick,
-                custom_id=_custom_id("dank_full:role_browser", self.columns + self.also_same, int(self.row or 0)),
-                title="🎭 Choose a Server Role",
-                placeholder=self.placeholder,
-                on_home=on_home,
-                home_label="Back to Full Setup",
-                empty_message="No server roles matched. Try Search with part of the role name or its Discord ID.",
-            )
-            await interaction.response.edit_message(embed=browser.embed(), view=browser)
-
-    class FullChannelPickerButton(discord.ui.Button):
-        def __init__(
-            self,
-            *,
-            placeholder: str,
-            columns: tuple[str, ...],
-            channel_types: list[discord.ChannelType],
-            also_same: tuple[str, ...] = (),
-            row: int = 0,
-            need_files: bool = False,
-        ) -> None:
-            self.placeholder = str(placeholder or "Choose a channel")
-            self.columns = tuple(columns)
-            self.channel_types = list(channel_types)
-            self.also_same = tuple(also_same)
-            self.need_files = bool(need_files)
-            super().__init__(
-                label=self.placeholder[:80],
-                emoji="🧭",
-                style=discord.ButtonStyle.primary,
-                custom_id=_custom_id("dank_full:channel", self.columns + self.also_same, row),
-                row=row,
-            )
-
-        async def callback(self, interaction: discord.Interaction) -> None:
-            if not await full._require_setup_permission(interaction):
-                return
-            guild = interaction.guild
-            if guild is None:
-                return await interaction.response.send_message("❌ This must be used inside a server.", ephemeral=True)
-
-            parent_view = self.view
-            parent_embed = _message_embed(interaction)
-
-            async def on_home(home_interaction: discord.Interaction) -> None:
-                await _restore_parent(home_interaction, parent_view=parent_view, parent_embed=parent_embed)
-
-            async def on_pick(pick_interaction: discord.Interaction, channel: Any) -> None:
-                adapter = SimpleNamespace(
-                    columns=self.columns,
-                    also_same=self.also_same,
-                    need_files=self.need_files,
-                    placeholder=self.placeholder,
-                    values=[channel],
-                )
-                await legacy_channel.callback(adapter, pick_interaction)
-
-            browser = DankGuildResourceBrowserView(
-                guild=guild,
-                author_id=int(interaction.user.id),
-                resource_kinds=_resource_kinds(self.channel_types),
-                on_pick=on_pick,
-                custom_id=_custom_id("dank_full:channel_browser", self.columns + self.also_same, int(self.row or 0)),
-                title="🧭 Choose a Server Channel / Category",
-                placeholder=self.placeholder,
-                on_home=on_home,
-                home_label="Back to Full Setup",
-                empty_message="No matching server channels/categories were found. Try Search with part of the name or its Discord ID.",
-            )
-            await interaction.response.edit_message(embed=browser.embed(), view=browser)
-
-    full.SaveRoleSelect = FullRolePickerButton
-    full.SaveChannelSelect = FullChannelPickerButton
+    return _owner_is_native(
+        full,
+        opener_name="_CustomPickButton",
+        legacy_names=("SaveRoleSelect", "SaveChannelSelect"),
+    )
 
 
-def _install_guided_recommend() -> None:
+def _verify_guided_recommend() -> bool:
     from .commands_ext import public_setup_recommend as recommend
 
-    class GuidedExistingRoleButton(discord.ui.Button):
-        def __init__(self, *, requirement_key: str) -> None:
-            self.requirement_key = str(requirement_key)
-            super().__init__(
-                label="Choose one I already have",
-                emoji="🔎",
-                style=discord.ButtonStyle.primary,
-                custom_id=f"dank_setup_guided_existing_role:{self.requirement_key}"[:100],
-                row=0,
-            )
-
-        async def callback(self, interaction: discord.Interaction) -> None:
-            if not await recommend.solid._require_setup_permission(interaction):
-                return
-            guild = interaction.guild
-            if guild is None:
-                return await interaction.response.send_message("❌ This must be used inside a server.", ephemeral=True)
-
-            parent_view = self.view
-            parent_embed = _message_embed(interaction)
-
-            async def on_home(home_interaction: discord.Interaction) -> None:
-                await _restore_parent(home_interaction, parent_view=parent_view, parent_embed=parent_embed)
-
-            async def on_pick(pick_interaction: discord.Interaction, role: Any) -> None:
-                await recommend._guided_save_existing_item(pick_interaction, self.requirement_key, role)
-
-            browser = DankGuildResourceBrowserView(
-                guild=guild,
-                author_id=int(interaction.user.id),
-                resource_kinds=("role",),
-                on_pick=on_pick,
-                custom_id=f"dank_guided:role:{self.requirement_key}"[:80],
-                title="🎭 Choose an Existing Role",
-                placeholder="Choose one I already have",
-                on_home=on_home,
-                home_label="Back to Guided Setup",
-            )
-            await interaction.response.edit_message(embed=browser.embed(), view=browser)
-
-    class GuidedExistingChannelButton(discord.ui.Button):
-        def __init__(
-            self,
-            *,
-            requirement_key: str,
-            channel_type: discord.ChannelType,
-        ) -> None:
-            self.requirement_key = str(requirement_key)
-            self.channel_type = channel_type
-            super().__init__(
-                label="Choose one I already have",
-                emoji="🔎",
-                style=discord.ButtonStyle.primary,
-                custom_id=f"dank_setup_guided_existing_channel:{self.requirement_key}"[:100],
-                row=0,
-            )
-
-        async def callback(self, interaction: discord.Interaction) -> None:
-            if not await recommend.solid._require_setup_permission(interaction):
-                return
-            guild = interaction.guild
-            if guild is None:
-                return await interaction.response.send_message("❌ This must be used inside a server.", ephemeral=True)
-
-            parent_view = self.view
-            parent_embed = _message_embed(interaction)
-
-            async def on_home(home_interaction: discord.Interaction) -> None:
-                await _restore_parent(home_interaction, parent_view=parent_view, parent_embed=parent_embed)
-
-            async def on_pick(pick_interaction: discord.Interaction, channel: Any) -> None:
-                await recommend._guided_save_existing_item(pick_interaction, self.requirement_key, channel)
-
-            browser = DankGuildResourceBrowserView(
-                guild=guild,
-                author_id=int(interaction.user.id),
-                resource_kinds=_resource_kinds((self.channel_type,)),
-                on_pick=on_pick,
-                custom_id=f"dank_guided:channel:{self.requirement_key}"[:80],
-                title="🧭 Choose an Existing Channel / Category",
-                placeholder="Choose one I already have",
-                on_home=on_home,
-                home_label="Back to Guided Setup",
-            )
-            await interaction.response.edit_message(embed=browser.embed(), view=browser)
-
-    recommend.GuidedExistingRoleSelect = GuidedExistingRoleButton
-    recommend.GuidedExistingChannelSelect = GuidedExistingChannelButton
+    return _owner_is_native(
+        recommend,
+        opener_name="_GuidedExistingOpenButton",
+        legacy_names=("GuidedExistingRoleSelect", "GuidedExistingChannelSelect"),
+    )
 
 
 def apply_setup_resource_picker_binding() -> bool:
-    """Bind all normal public setup entity choices to the shared Dank browser."""
+    """Verify all public setup entity choices use the canonical browser."""
 
     global _BOUND
     if _BOUND:
         return True
     try:
-        _install_solid()
-        _install_full_customization()
-        _install_guided_recommend()
+        ok = _verify_solid() and _verify_full_customization() and _verify_guided_recommend()
     except Exception as exc:
         try:
             print(f"❌ setup resource picker binding failed: {type(exc).__name__}: {exc}")
+        except Exception:
+            pass
+        return False
+    if not ok:
+        try:
+            print("❌ setup resource picker binding failed: a setup owner is not on the canonical browser binding")
         except Exception:
             pass
         return False

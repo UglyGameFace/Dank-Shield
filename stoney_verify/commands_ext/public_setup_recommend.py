@@ -13,7 +13,13 @@ from typing import Any, Optional
 
 import discord
 
+from ..ui import DankGuildResourceBrowserView
 from ..ui.current_channel import current_text_channel
+from ..ui.picker import DankPickerView, chunk_choices, make_choice
+from ..setup_resource_picker_binding import (
+    _message_embed as _picker_parent_embed,
+    _resource_kinds as _picker_resource_kinds,
+)
 
 from ..globals import now_utc
 from ..guild_config import get_guild_config
@@ -1062,41 +1068,161 @@ async def _product_main_setup_payload(
     embed.set_footer(text="/dank setup • server configuration")
     return embed, ProductSetupHomeView(ready=ready, started=started, completed=completed)
 
-class SetupChoiceSelect(discord.ui.Select):
-    def __init__(self, selected_key: Optional[str] = None) -> None:
+class _RecommendPickerView(DankPickerView):
+    """House picker for recommend/guided setup panels.
+
+    Pages long channel/role lists with chunk_choices so every entry
+    stays reachable past Discord's 25-option select limit.
+    """
+
+    def __init__(
+        self,
+        *,
+        choices: Any,
+        on_pick: Any,
+        custom_id: str,
+        placeholder: str,
+        title: str,
+        on_home: Any = None,
+        page: int = 0,
+    ) -> None:
+        all_choices = list(choices or [])
+        pages = chunk_choices(all_choices) or [[]]
+        page = max(0, min(int(page), len(pages) - 1))
         super().__init__(
-            placeholder="Choose what this server needs…",
-            min_values=1,
-            max_values=1,
-            options=build_setup_template_select_options(),
-            row=0,
+            author_id=0,
+            choices=pages[page],
+            on_pick=on_pick,
+            custom_id=f"{custom_id}:{page}" if len(pages) > 1 else custom_id,
+            placeholder=(
+                f"{placeholder} • Page {page + 1}/{len(pages)}"
+                if len(pages) > 1 else placeholder
+            ),
+            title=title,
+            timeout=900,
+            on_home=on_home,
+            home_label="Back",
         )
-        if selected_key:
-            for option in self.options:
-                option.default = option.value == selected_key
+        self._all_choices = all_choices
+        self._picker_on_pick = on_pick
+        self._base_custom_id = custom_id
+        self._base_placeholder = placeholder
+        self._picker_title = title
+        self._picker_on_home = on_home
+        self.page = page
+        self.pages = len(pages)
+        if len(pages) > 1:
+            self.add_item(_RecommendPageButton(delta=-1, disabled=page <= 0))
+            self.add_item(_RecommendPageButton(delta=1, disabled=page >= len(pages) - 1))
+
+    def _for_page(self, page: int) -> "_RecommendPickerView":
+        return _RecommendPickerView(
+            choices=self._all_choices,
+            on_pick=self._picker_on_pick,
+            custom_id=self._base_custom_id,
+            placeholder=self._base_placeholder,
+            title=self._picker_title,
+            on_home=self._picker_on_home,
+            page=page,
+        )
+
+
+class _RecommendPageButton(discord.ui.Button):
+    def __init__(self, *, delta: int, disabled: bool) -> None:
+        super().__init__(
+            label="Previous" if delta < 0 else "Next",
+            emoji="◀️" if delta < 0 else "▶️",
+            style=discord.ButtonStyle.secondary,
+            custom_id=(
+                "dank_setup_recommend:picker:prev" if delta < 0
+                else "dank_setup_recommend:picker:next"
+            ),
+            row=2,
+            disabled=bool(disabled),
+        )
+        self.delta = int(delta)
 
     async def callback(self, interaction: discord.Interaction) -> None:
-        if not await solid._require_setup_permission(interaction):
-            return
-        selected = str(self.values[0]) if self.values else ""
         view = self.view
-        if isinstance(view, SetupChoiceView):
-            view.selected_key = selected
-        guild_name = getattr(getattr(interaction, "guild", None), "name", "this server")
-        embed = build_setup_template_embed(selected_key=selected, guild_name=str(guild_name or "this server"))
-        embed.add_field(
-            name="Next",
-            value="Press **Use This Plan** to save this choice, or pick another option from the menu.",
-            inline=False,
+        if not isinstance(view, _RecommendPickerView):
+            return
+        page = max(0, min(view.page + self.delta, view.pages - 1))
+        await interaction.response.edit_message(view=view._for_page(page))
+
+
+def _setup_template_choices(selected_key: Optional[str] = None) -> list[Any]:
+    choices = []
+    for option in build_setup_template_select_options():
+        choices.append(make_choice(
+            str(option.label), str(option.value),
+            description=str(option.description or ""),
+            emoji=str(option.emoji) if option.emoji else None,
+            default=bool(selected_key) and str(option.value) == str(selected_key),
+        ))
+    return choices
+
+
+async def _apply_setup_choice_pick(interaction: discord.Interaction, selected: str) -> None:
+    """The old SetupChoiceSelect callback body, driven by the house picker."""
+    if not await solid._require_setup_permission(interaction):
+        return
+    view = SetupChoiceView(selected_key=selected)
+    guild_name = getattr(getattr(interaction, "guild", None), "name", "this server")
+    embed = build_setup_template_embed(selected_key=selected, guild_name=str(guild_name or "this server"))
+    embed.add_field(
+        name="Next",
+        value="Press **Use This Plan** to save this choice, or pick another option from the menu.",
+        inline=False,
+    )
+    await interaction.response.edit_message(embed=embed, view=view)
+
+
+class _SetupChoiceOpenButton(discord.ui.Button):
+    """Opens the house picker for the setup plan on the same message."""
+
+    def __init__(self, selected_key: Optional[str] = None) -> None:
+        super().__init__(
+            label="Choose what this server needs",
+            emoji="🧭",
+            style=discord.ButtonStyle.primary,
+            custom_id="dank_setup_choice:open:v1",
+            row=0,
         )
-        await interaction.response.edit_message(embed=embed, view=view)
+        self.selected_key = selected_key
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        async def on_pick(pick_interaction: discord.Interaction, value: str) -> None:
+            await _apply_setup_choice_pick(pick_interaction, value)
+
+        async def on_home(home_interaction: discord.Interaction) -> None:
+            message = getattr(home_interaction, "message", None)
+            embeds = getattr(message, "embeds", None) if message is not None else None
+            await home_interaction.response.edit_message(
+                embed=embeds[0] if embeds else None,
+                view=SetupChoiceView(selected_key=self.selected_key),
+            )
+
+        picker = _RecommendPickerView(
+            choices=_setup_template_choices(self.selected_key),
+            on_pick=on_pick,
+            custom_id="dank_setup_choice:pick:v1",
+            placeholder="Choose what this server needs…",
+            title="Choose what this server needs",
+            on_home=on_home,
+        )
+        message = getattr(interaction, "message", None)
+        embeds = getattr(message, "embeds", None) if message is not None else None
+        await interaction.response.edit_message(
+            embed=embeds[0] if embeds else None,
+            view=picker,
+        )
 
 
 class SetupChoiceView(solid.BackToSetupView):
     def __init__(self, *, selected_key: Optional[str] = None) -> None:
         super().__init__()
         self.selected_key = selected_key
-        self.add_item(SetupChoiceSelect(selected_key=selected_key))
+        self.add_item(_SetupChoiceOpenButton(selected_key=selected_key))
 
     @discord.ui.button(label="Use This Plan", emoji="✅", style=discord.ButtonStyle.success, custom_id="dank_setup_choice:publish", row=1)
     async def publish(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -2982,62 +3108,87 @@ async def _guided_create_item(
     )
 
 
-class GuidedExistingRoleSelect(discord.ui.RoleSelect):
-    def __init__(self, *, requirement_key: str) -> None:
-        self.requirement_key = str(requirement_key)
-        super().__init__(
-            placeholder="Choose one I already have",
-            min_values=1,
-            max_values=1,
-            custom_id=(
-                "dank_setup_guided_existing_role:"
-                f"{self.requirement_key}"
-            ),
-            row=0,
-        )
+class _GuidedExistingOpenButton(discord.ui.Button):
+    """Opens the canonical guild resource browser for a guided item.
 
-    async def callback(
-        self,
-        interaction: discord.Interaction,
-    ) -> None:
-        await _guided_save_existing_item(
-            interaction,
-            self.requirement_key,
-            self.values[0],
-        )
+    This is the native form of the button the setup resource-picker
+    binding used to substitute for the old GuidedExistingRoleSelect /
+    GuidedExistingChannelSelect classes: same label, custom_id, browser
+    titles and home label; the pick delegates to
+    _guided_save_existing_item, which still owns the save logic.
+    """
 
-
-class GuidedExistingChannelSelect(
-    discord.ui.ChannelSelect
-):
     def __init__(
         self,
         *,
+        kind: str,
         requirement_key: str,
-        channel_type: discord.ChannelType,
+        channel_type: Optional[discord.ChannelType] = None,
     ) -> None:
         self.requirement_key = str(requirement_key)
+        self.kind = kind
+        self.channel_type = channel_type
+        base = (
+            "dank_setup_guided_existing_role:"
+            if kind == "role" else
+            "dank_setup_guided_existing_channel:"
+        )
         super().__init__(
-            placeholder="Choose one I already have",
-            channel_types=[channel_type],
-            min_values=1,
-            max_values=1,
-            custom_id=(
-                "dank_setup_guided_existing_channel:"
-                f"{self.requirement_key}"
-            ),
+            label="Choose one I already have",
+            emoji="🔎",
+            style=discord.ButtonStyle.primary,
+            custom_id=f"{base}{self.requirement_key}"[:100],
             row=0,
         )
 
-    async def callback(
-        self,
-        interaction: discord.Interaction,
-    ) -> None:
-        await _guided_save_existing_item(
-            interaction,
-            self.requirement_key,
-            self.values[0],
-        )
+    async def callback(self, interaction: discord.Interaction) -> None:
+        if not await solid._require_setup_permission(interaction):
+            return
+        guild = interaction.guild
+        if guild is None:
+            return await interaction.response.send_message("❌ This must be used inside a server.", ephemeral=True)
+
+        parent_view = self.view
+        parent_embed = _picker_parent_embed(interaction)
+        requirement_key = self.requirement_key
+
+        async def on_home(home_interaction: discord.Interaction) -> None:
+            kwargs: dict[str, Any] = {"view": parent_view}
+            if parent_embed is not None:
+                kwargs["embed"] = parent_embed
+            await home_interaction.response.edit_message(**kwargs)
+
+        if self.kind == "role":
+            async def on_pick(pick_interaction: discord.Interaction, role: Any) -> None:
+                await _guided_save_existing_item(pick_interaction, requirement_key, role)
+
+            browser = DankGuildResourceBrowserView(
+                guild=guild,
+                author_id=int(interaction.user.id),
+                resource_kinds=("role",),
+                on_pick=on_pick,
+                custom_id=f"dank_guided:role:{requirement_key}"[:80],
+                title="🎭 Choose an Existing Role",
+                placeholder="Choose one I already have",
+                on_home=on_home,
+                home_label="Back to Guided Setup",
+            )
+        else:
+            async def on_pick(pick_interaction: discord.Interaction, channel: Any) -> None:
+                await _guided_save_existing_item(pick_interaction, requirement_key, channel)
+
+            browser = DankGuildResourceBrowserView(
+                guild=guild,
+                author_id=int(interaction.user.id),
+                resource_kinds=_picker_resource_kinds((self.channel_type,)),
+                on_pick=on_pick,
+                custom_id=f"dank_guided:channel:{requirement_key}"[:80],
+                title="🧭 Choose an Existing Channel / Category",
+                placeholder="Choose one I already have",
+                on_home=on_home,
+                home_label="Back to Guided Setup",
+            )
+        await interaction.response.edit_message(embed=browser.embed(), view=browser)
 
 
 class GuidedUseCurrentChannelButton(discord.ui.Button):
@@ -3125,7 +3276,8 @@ class GuidedOneItemView(discord.ui.View):
 
         if kind == "role":
             self.add_item(
-                GuidedExistingRoleSelect(
+                _GuidedExistingOpenButton(
+                    kind="role",
                     requirement_key=self.requirement_key,
                 )
             )
@@ -3138,7 +3290,8 @@ class GuidedOneItemView(discord.ui.View):
 
             if channel_type is not None:
                 self.add_item(
-                    GuidedExistingChannelSelect(
+                    _GuidedExistingOpenButton(
+                        kind="channel",
                         requirement_key=self.requirement_key,
                         channel_type=channel_type,
                     )

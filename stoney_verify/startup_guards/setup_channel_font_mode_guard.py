@@ -6,6 +6,11 @@ from typing import Any
 
 import discord
 
+from stoney_verify.ui.picker import (
+    DankPickerView as _DankPickerView,
+    chunk_choices as _chunk_choices,
+)
+
 try:
     from stoney_verify.startup_guards import channel_builder_full_font_catalog_guard as _font_catalog_guard
 
@@ -220,31 +225,154 @@ async def build_channel_font_embed(guild_id: int, *, saved_message: str | None =
     return embed
 
 
-class FontStyleSelect(discord.ui.Select):
-    def __init__(self, current: str) -> None:
-        options = [
-            discord.SelectOption(
-                label=(f"⚠️ {label}" if value in _RISKY_STYLES else label),
-                value=value,
-                description=("Decorative/high-risk" if value in _RISKY_STYLES else "Readable/recommended" if value != "normal" else "Plain Discord text"),
-                default=value == current,
-            )
-            for value, label in _STYLE_LABELS.items()
-        ]
-        super().__init__(placeholder="Choose font style…", min_values=1, max_values=1, options=options, row=0)
+def _font_style_choices(current: str) -> list[Any]:
+    from stoney_verify.ui.picker import make_choice
 
-    async def callback(self, interaction: discord.Interaction) -> None:  # type: ignore[override]
-        if not await _require_setup(interaction):
+    return [
+        make_choice(
+            (f"⚠️ {label}" if value in _RISKY_STYLES else label),
+            value,
+            description=("Decorative/high-risk" if value in _RISKY_STYLES else "Readable/recommended" if value != "normal" else "Plain Discord text"),
+            default=value == current,
+        )
+        for value, label in _STYLE_LABELS.items()
+    ]
+
+
+async def _apply_font_style_pick(interaction: discord.Interaction, value: str) -> None:
+    """The old FontStyleSelect callback body, driven by the house picker."""
+    if not await _require_setup(interaction):
+        return
+    if interaction.guild is None:
+        return await interaction.response.send_message("❌ This must be used inside a server.", ephemeral=True)
+    current = await load_channel_font_options(int(interaction.guild.id))
+    current["unicodeStyle"] = str(value)
+    saved = await save_channel_font_options(int(interaction.guild.id), current)
+    label = _STYLE_LABELS.get(saved["unicodeStyle"], saved["unicodeStyle"])
+    await interaction.response.edit_message(
+        embed=await build_channel_font_embed(int(interaction.guild.id), saved_message=f"Font style saved as **{label}**.", options_override=saved),
+        view=ChannelFontModeView(saved),
+    )
+
+
+class _FontPickerView(_DankPickerView):
+    """Paged house picker (chunk_choices) with Prev/Next buttons."""
+
+    def __init__(
+        self,
+        *,
+        choices: Any,
+        on_pick: Any,
+        custom_id: str,
+        placeholder: str,
+        title: str,
+        on_home: Any = None,
+        page: int = 0,
+    ) -> None:
+        all_choices = list(choices or [])
+        pages = _chunk_choices(all_choices) or [[]]
+        page = max(0, min(int(page), len(pages) - 1))
+        super().__init__(
+            author_id=0,
+            choices=pages[page],
+            on_pick=on_pick,
+            custom_id=f"{custom_id}:{page}" if len(pages) > 1 else custom_id,
+            placeholder=(
+                f"{placeholder} • Page {page + 1}/{len(pages)}"
+                if len(pages) > 1 else placeholder
+            ),
+            title=title,
+            timeout=900,
+            on_home=on_home,
+            home_label="Back",
+        )
+        self._all_choices = all_choices
+        self._picker_on_pick = on_pick
+        self._base_custom_id = custom_id
+        self._base_placeholder = placeholder
+        self._picker_title = title
+        self._picker_on_home = on_home
+        self.page = page
+        self.pages = len(pages)
+        if len(pages) > 1:
+            self.add_item(_FontPageButton(delta=-1, disabled=page <= 0))
+            self.add_item(_FontPageButton(delta=1, disabled=page >= len(pages) - 1))
+
+    def _for_page(self, page: int) -> "_FontPickerView":
+        return _FontPickerView(
+            choices=self._all_choices,
+            on_pick=self._picker_on_pick,
+            custom_id=self._base_custom_id,
+            placeholder=self._base_placeholder,
+            title=self._picker_title,
+            on_home=self._picker_on_home,
+            page=page,
+        )
+
+
+class _FontPageButton(discord.ui.Button):
+    def __init__(self, *, delta: int, disabled: bool) -> None:
+        super().__init__(
+            label="Previous" if delta < 0 else "Next",
+            emoji="◀️" if delta < 0 else "▶️",
+            style=discord.ButtonStyle.secondary,
+            custom_id=(
+                "dank_setup_font:picker:prev" if delta < 0
+                else "dank_setup_font:picker:next"
+            ),
+            row=2,
+            disabled=bool(disabled),
+        )
+        self.delta = int(delta)
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        view = self.view
+        if not isinstance(view, _FontPickerView):
             return
-        if interaction.guild is None:
-            return await interaction.response.send_message("❌ This must be used inside a server.", ephemeral=True)
-        current = await load_channel_font_options(int(interaction.guild.id))
-        current["unicodeStyle"] = str(self.values[0])
-        saved = await save_channel_font_options(int(interaction.guild.id), current)
-        label = _STYLE_LABELS.get(saved["unicodeStyle"], saved["unicodeStyle"])
+        page = max(0, min(view.page + self.delta, view.pages - 1))
+        await interaction.response.edit_message(view=view._for_page(page))
+
+
+class _FontStyleOpenButton(discord.ui.Button):
+    """Opens the house picker for the channel font style."""
+
+    def __init__(self, options: dict[str, str]) -> None:
+        super().__init__(
+            label="Choose font style",
+            emoji="🔤",
+            style=discord.ButtonStyle.primary,
+            custom_id="dank_setup_font:style:open:v1",
+            row=0,
+        )
+        self.options = normalize_font_options(options)
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        options = self.options
+
+        async def on_pick(pick_interaction: discord.Interaction, value: str) -> None:
+            await _apply_font_style_pick(pick_interaction, value)
+
+        async def on_home(home_interaction: discord.Interaction) -> None:
+            message = getattr(home_interaction, "message", None)
+            embeds = getattr(message, "embeds", None) if message is not None else None
+            await home_interaction.response.edit_message(
+                embed=embeds[0] if embeds else None,
+                view=ChannelFontModeView(options),
+            )
+
+        picker = _FontPickerView(
+            choices=_font_style_choices(options["unicodeStyle"]),
+            on_pick=on_pick,
+            custom_id="dank_setup_font:style:v1",
+            placeholder="Choose font style…",
+            title="Choose font style",
+            on_home=on_home,
+        )
+        message = getattr(interaction, "message", None)
+        embeds = getattr(message, "embeds", None) if message is not None else None
         await interaction.response.edit_message(
-            embed=await build_channel_font_embed(int(interaction.guild.id), saved_message=f"Font style saved as **{label}**.", options_override=saved),
-            view=ChannelFontModeView(saved),
+            embed=embeds[0] if embeds else None,
+            view=picker,
         )
 
 
@@ -252,7 +380,7 @@ class ChannelFontModeView(discord.ui.View):
     def __init__(self, options: dict[str, str]) -> None:
         super().__init__(timeout=900)
         self.options = normalize_font_options(options)
-        self.add_item(FontStyleSelect(self.options["unicodeStyle"]))
+        self.add_item(_FontStyleOpenButton(self.options))
         self._mark_scope_buttons()
 
     def _mark_scope_buttons(self) -> None:

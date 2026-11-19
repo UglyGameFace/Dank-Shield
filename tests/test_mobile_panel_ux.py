@@ -329,12 +329,20 @@ def test_setup_and_trusted_advert_buttons_are_partitioned_not_deleted():
         assert setup.AdvancedSettingsHubView is compact.CompactManagerView
     panel = compact.CompactManagerView()
     assert _buttons(panel) == {
-        "Change Plan", "Check Configuration", "Advanced", "Setup Home", "Close",
+        "Choose a Section", "Change Plan", "Check Configuration", "Advanced", "Setup Home", "Close",
     }
     _assert_compact(panel)
-    assert sum(isinstance(item, compact.FeatureAreaSelect) for item in panel.children) == 1
-    picker = next(item for item in panel.children if isinstance(item, compact.FeatureAreaSelect))
-    assert {option.value for option in picker.options} == {
+    # Picker migration slice 3: the area select is a house-framework
+    # opener button now; the picker itself carries every area value.
+    import discord as _discord
+
+    assert not any(isinstance(item, _discord.ui.Select) for item in panel.children)
+    openers = [
+        item for item in panel.children
+        if getattr(item, "custom_id", "") == "dank_setup_compact:area:open:v1"
+    ]
+    assert len(openers) == 1
+    assert {choice.value for choice in compact._feature_area_choices()} == {
         area[0] for area in compact.FEATURE_AREAS
     }
 
@@ -439,15 +447,25 @@ def test_compact_setup_section_picker_keeps_staff_permission_gate(monkeypatch):
         calls.append(("category", interaction, category))
 
     monkeypatch.setattr(navigation, "_open_category", open_category)
-    picker = compact.FeatureAreaSelect()
+    # Picker migration slice 3: picks route through the house picker's
+    # on_pick, which is the old select callback's _route_area call.
+    async def on_pick(_interaction, value):
+        await compact._route_area(_interaction, value)
+
+    picker = compact._CompactPickerView(
+        choices=compact._feature_area_choices(),
+        on_pick=on_pick,
+        custom_id="dank_setup_compact:area:v1",
+        placeholder="Choose a section…",
+        title="Choose a Section",
+    )
     chosen = compact.FEATURE_AREAS[0][0]
-    picker._values = [chosen]
     interaction = SimpleNamespace()
 
     monkeypatch.setattr(compact.setup.solid, "_require_setup_permission", deny)
-    asyncio.run(picker.callback(interaction))
+    asyncio.run(picker.handle_pick(interaction, chosen))
     assert calls == ["denied"]
 
     monkeypatch.setattr(compact.setup.solid, "_require_setup_permission", allow)
-    asyncio.run(picker.callback(interaction))
+    asyncio.run(picker.handle_pick(interaction, chosen))
     assert calls == ["denied", "allowed", ("category", interaction, chosen)]

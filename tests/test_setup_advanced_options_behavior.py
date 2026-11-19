@@ -76,13 +76,18 @@ class FakeInteraction:
 def test_manage_setup_is_compact_and_task_based() -> None:
     view = recommend.ManageSetupView()
     assert labels(view) == {
+        "Choose a Section",
         "Change Plan",
         "Check Configuration",
         "Advanced",
         "Setup Home",
         "Close",
     }
-    assert select_labels(view) == [category.label for category in CATEGORIES]
+    # The section list now lives behind the house-picker opener; its
+    # choices still mirror the navigation categories exactly.
+    assert [
+        str(choice.label) for choice in compact._feature_area_choices()
+    ] == [category.label for category in CATEGORIES]
 
 
 def test_advanced_settings_aliases_the_single_compact_manager() -> None:

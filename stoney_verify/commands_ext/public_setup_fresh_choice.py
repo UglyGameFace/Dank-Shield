@@ -9,6 +9,7 @@ import discord
 
 from ..globals import now_utc
 from ..setup_engine.verification_modes import id_verify_allowed_for_guild
+from ..ui.picker import DankPickerView, chunk_choices, make_choice
 from ..setup_service_state import (
     load_setup_service_state,
     normalize_custom_service_patch,
@@ -922,119 +923,243 @@ async def _open_legacy_voice_cleanup_if_needed(
     return True
 
 
-class CustomServicePresetSelect(discord.ui.Select):
-    def __init__(self, current: Any) -> None:
-        options: list[discord.SelectOption] = []
-        current_payload = {
-            key: bool(current.as_payload().get(key, False))
-            for key in _CUSTOM_SERVICE_FLAG_KEYS
-        }
-        preset_key = _custom_preset_key_for_payload(current_payload)
+class _FreshPickerView(DankPickerView):
+    """House picker for Quick Setup choice panels.
 
-        if not preset_key:
-            options.append(
-                discord.SelectOption(
-                    label=_custom_mix_label(current_payload)[:100],
-                    value="__custom_current__",
-                    description="Your current feature choices.",
-                    emoji="🧩",
-                    default=True,
-                )
-            )
+    Pages long choice lists with chunk_choices so every option stays
+    reachable past Discord's 25-option select limit.
+    """
 
-        for key, (
-            label,
-            flags,
-            desc,
-            emoji,
-        ) in CUSTOM_PRESETS.items():
-            preset_clean = {
-                flag_key: bool(flags.get(flag_key, False))
-                for flag_key in _CUSTOM_SERVICE_FLAG_KEYS
-            }
-            options.append(
-                discord.SelectOption(
-                    label=label,
-                    value=key,
-                    description=desc[:100],
-                    emoji=emoji,
-                    default=(key == preset_key),
-                )
-            )
-
-        super().__init__(
-            placeholder=_custom_mix_label(current_payload)[:150],
-            min_values=1,
-            max_values=1,
-            options=options[:25],
-            row=0,
-        )
-
-    async def callback(
+    def __init__(
         self,
-        interaction: discord.Interaction,
+        *,
+        choices: Any,
+        on_pick: Any,
+        custom_id: str,
+        placeholder: str,
+        title: str,
+        on_home: Any = None,
+        page: int = 0,
     ) -> None:
-        guild = interaction.guild
-        if guild is None:
-            return await interaction.response.send_message(
-                "❌ This must be used inside a server.",
-                ephemeral=True,
-            )
+        all_choices = list(choices or [])
+        pages = chunk_choices(all_choices) or [[]]
+        page = max(0, min(int(page), len(pages) - 1))
+        super().__init__(
+            author_id=0,
+            choices=pages[page],
+            on_pick=on_pick,
+            custom_id=f"{custom_id}:{page}" if len(pages) > 1 else custom_id,
+            placeholder=(
+                f"{placeholder} • Page {page + 1}/{len(pages)}"
+                if len(pages) > 1 else placeholder
+            ),
+            title=title,
+            timeout=900,
+            on_home=on_home,
+            home_label="Back",
+        )
+        self._all_choices = all_choices
+        self._picker_on_pick = on_pick
+        self._base_custom_id = custom_id
+        self._base_placeholder = placeholder
+        self._picker_title = title
+        self._picker_on_home = on_home
+        self.page = page
+        self.pages = len(pages)
+        if len(pages) > 1:
+            self.add_item(_FreshPageButton(delta=-1, disabled=page <= 0))
+            self.add_item(_FreshPageButton(delta=1, disabled=page >= len(pages) - 1))
 
-        key = str(self.values[0])
-        if key == "__custom_current__":
-            await interaction.response.defer(ephemeral=True)
-            state = await _load_custom_state(guild.id)
-            return await interaction.edit_original_response(
-                embed=_custom_services_embed(
-                    guild,
-                    state,
-                    saved_message=(
-                        "Still using your current core feature choices."
-                    ),
-                ),
-                view=CustomServiceModeView(state),
-            )
+    def _for_page(self, page: int) -> "_FreshPickerView":
+        return _FreshPickerView(
+            choices=self._all_choices,
+            on_pick=self._picker_on_pick,
+            custom_id=self._base_custom_id,
+            placeholder=self._base_placeholder,
+            title=self._picker_title,
+            on_home=self._picker_on_home,
+            page=page,
+        )
 
-        preset = CUSTOM_PRESETS.get(key)
-        if preset is None:
-            return await interaction.response.send_message(
-                (
-                    "❌ That feature choice is no longer available. "
-                    "Choose another option."
-                ),
-                ephemeral=True,
+
+class _FreshPageButton(discord.ui.Button):
+    def __init__(self, *, delta: int, disabled: bool) -> None:
+        super().__init__(
+            label="Previous" if delta < 0 else "Next",
+            emoji="◀️" if delta < 0 else "▶️",
+            style=discord.ButtonStyle.secondary,
+            custom_id=(
+                "dank_setup_fresh:picker:prev" if delta < 0
+                else "dank_setup_fresh:picker:next"
+            ),
+            row=2,
+            disabled=bool(disabled),
+        )
+        self.delta = int(delta)
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        view = self.view
+        if not isinstance(view, _FreshPickerView):
+            return
+        page = max(0, min(view.page + self.delta, view.pages - 1))
+        await interaction.response.edit_message(view=view._for_page(page))
+
+
+def _custom_preset_choices(current: Any) -> list[Any]:
+    choices: list[Any] = []
+    current_payload = {
+        key: bool(current.as_payload().get(key, False))
+        for key in _CUSTOM_SERVICE_FLAG_KEYS
+    }
+    preset_key = _custom_preset_key_for_payload(current_payload)
+
+    if not preset_key:
+        choices.append(
+            make_choice(
+                _custom_mix_label(current_payload)[:100],
+                "__custom_current__",
+                description="Your current feature choices.",
+                emoji="🧩",
+                default=True,
             )
-        label, flags, desc, _emoji = preset
+        )
+
+    for key, (
+        label,
+        flags,
+        desc,
+        emoji,
+    ) in CUSTOM_PRESETS.items():
+        choices.append(
+            make_choice(
+                label,
+                key,
+                description=desc[:100],
+                emoji=emoji,
+                default=(key == preset_key),
+            )
+        )
+    return choices
+
+
+def _custom_preset_placeholder(current: Any) -> str:
+    current_payload = {
+        key: bool(current.as_payload().get(key, False))
+        for key in _CUSTOM_SERVICE_FLAG_KEYS
+    }
+    return _custom_mix_label(current_payload)[:150]
+
+
+async def _apply_custom_preset_pick(
+    interaction: discord.Interaction,
+    key: str,
+) -> None:
+    """The old CustomServicePresetSelect callback body, picker-driven."""
+    guild = interaction.guild
+    if guild is None:
+        return await interaction.response.send_message(
+            "❌ This must be used inside a server.",
+            ephemeral=True,
+        )
+
+    if key == "__custom_current__":
         await interaction.response.defer(ephemeral=True)
-        await _save_custom_services(
-            guild.id,
-            dict(flags),
-            interaction.user,
-        )
         state = await _load_custom_state(guild.id)
-        reconcile_note = await _reconcile_voice_resources_if_disabled(
-            guild,
-            state,
-            actor=interaction.user,
-        )
-        saved_message = f"Saved **{label}**. {desc}"
-        if reconcile_note:
-            saved_message += f"\n{reconcile_note}"
-            if await _open_legacy_voice_cleanup_if_needed(
-                interaction,
-                guild,
-                saved_message,
-                already_deferred=True,
-            ):
-                return
-        await interaction.edit_original_response(
+        return await interaction.edit_original_response(
             embed=_custom_services_embed(
                 guild,
                 state,
-                saved_message=saved_message,
+                saved_message=(
+                    "Still using your current core feature choices."
+                ),
             ),
             view=CustomServiceModeView(state),
+        )
+
+    preset = CUSTOM_PRESETS.get(key)
+    if preset is None:
+        return await interaction.response.send_message(
+            (
+                "❌ That feature choice is no longer available. "
+                "Choose another option."
+            ),
+            ephemeral=True,
+        )
+    label, flags, desc, _emoji = preset
+    await interaction.response.defer(ephemeral=True)
+    await _save_custom_services(
+        guild.id,
+        dict(flags),
+        interaction.user,
+    )
+    state = await _load_custom_state(guild.id)
+    reconcile_note = await _reconcile_voice_resources_if_disabled(
+        guild,
+        state,
+        actor=interaction.user,
+    )
+    saved_message = f"Saved **{label}**. {desc}"
+    if reconcile_note:
+        saved_message += f"\n{reconcile_note}"
+        if await _open_legacy_voice_cleanup_if_needed(
+            interaction,
+            guild,
+            saved_message,
+            already_deferred=True,
+        ):
+            return
+    await interaction.edit_original_response(
+        embed=_custom_services_embed(
+            guild,
+            state,
+            saved_message=saved_message,
+        ),
+        view=CustomServiceModeView(state),
+    )
+
+
+class _CustomPresetOpenButton(discord.ui.Button):
+    """Swaps the core-features panel for the preset picker on the same message."""
+
+    def __init__(self, state: Any) -> None:
+        current_payload = {
+            key: bool(state.as_payload().get(key, False))
+            for key in _CUSTOM_SERVICE_FLAG_KEYS
+        }
+        super().__init__(
+            label=_custom_mix_label(current_payload)[:80],
+            emoji="🧩",
+            style=discord.ButtonStyle.secondary,
+            custom_id="dank_setup_custom:preset:open:v1",
+            row=0,
+        )
+        self.state = state
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        async def on_pick(pick_interaction: discord.Interaction, value: str) -> None:
+            await _apply_custom_preset_pick(pick_interaction, value)
+
+        async def on_home(home_interaction: discord.Interaction) -> None:
+            message = getattr(home_interaction, "message", None)
+            embeds = getattr(message, "embeds", None) if message is not None else None
+            await home_interaction.response.edit_message(
+                embed=embeds[0] if embeds else None,
+                view=CustomServiceModeView(self.state),
+            )
+
+        picker = _FreshPickerView(
+            choices=_custom_preset_choices(self.state),
+            on_pick=on_pick,
+            custom_id="dank_setup_custom:preset:v1",
+            placeholder=_custom_preset_placeholder(self.state),
+            title="Choose Core Features",
+            on_home=on_home,
+        )
+        message = getattr(interaction, "message", None)
+        embeds = getattr(message, "embeds", None) if message is not None else None
+        await interaction.response.edit_message(
+            embed=embeds[0] if embeds else None,
+            view=picker,
         )
 
 
@@ -1212,7 +1337,7 @@ class CustomServiceModeView(discord.ui.View):
 
     def __init__(self, state: Any) -> None:
         super().__init__(timeout=900)
-        self.add_item(CustomServicePresetSelect(state))
+        self.add_item(_CustomPresetOpenButton(state))
         self.add_item(
             CustomServiceToggleButton(
                 "tickets_enabled",
@@ -1387,28 +1512,22 @@ async def _open_plain_health(
     await recommend._open_health_check(interaction)
 
 
-class SetupTypeChoiceSelect(discord.ui.Select):
+class _SetupTypeOpenButton(discord.ui.Button):
+    """Swaps the plan panel for the house picker on the same message."""
+
     def __init__(
         self,
         *,
         guild: Optional[discord.Guild] = None,
     ) -> None:
-        choices = _choices_for_guild(guild)
         super().__init__(
-            placeholder="Choose a setup plan…",
-            min_values=1,
-            max_values=1,
-            options=[
-                discord.SelectOption(
-                    label=choice.label,
-                    value=choice.key,
-                    description=choice.short[:100],
-                    emoji=choice.emoji,
-                )
-                for choice in choices
-            ][:25],
+            label="Choose a setup plan",
+            emoji="🧭",
+            style=discord.ButtonStyle.primary,
+            custom_id="dank_setup_plans:choose:open:v1",
             row=0,
         )
+        self._guild = guild
 
     async def callback(
         self,
@@ -1417,13 +1536,47 @@ class SetupTypeChoiceSelect(discord.ui.Select):
         view = self.view
         if not isinstance(view, SetupTypeChoiceView):
             return
-        choice = CHOICES_BY_KEY.get(str(self.values[0]))
-        if choice is None:
-            return await interaction.response.send_message(
-                "❌ Unknown setup plan.",
-                ephemeral=True,
+        choices = [
+            make_choice(
+                choice.label,
+                choice.key,
+                description=choice.short[:100],
+                emoji=choice.emoji,
             )
-        await view._save_and_show(interaction, choice)
+            for choice in _choices_for_guild(self._guild)
+        ]
+
+        async def on_pick(pick_interaction: discord.Interaction, value: str) -> None:
+            choice = CHOICES_BY_KEY.get(str(value))
+            if choice is None:
+                return await pick_interaction.response.send_message(
+                    "❌ Unknown setup plan.",
+                    ephemeral=True,
+                )
+            await view._save_and_show(pick_interaction, choice)
+
+        async def on_home(home_interaction: discord.Interaction) -> None:
+            message = getattr(home_interaction, "message", None)
+            embeds = getattr(message, "embeds", None) if message is not None else None
+            await home_interaction.response.edit_message(
+                embed=embeds[0] if embeds else None,
+                view=view,
+            )
+
+        picker = _FreshPickerView(
+            choices=choices,
+            on_pick=on_pick,
+            custom_id="dank_setup_plans:choose:v1",
+            placeholder="Choose a setup plan…",
+            title="Choose a Setup Plan",
+            on_home=on_home,
+        )
+        message = getattr(interaction, "message", None)
+        embeds = getattr(message, "embeds", None) if message is not None else None
+        await interaction.response.edit_message(
+            embed=embeds[0] if embeds else None,
+            view=picker,
+        )
 
 
 class SetupTypeChoiceView(discord.ui.View):
@@ -1435,7 +1588,7 @@ class SetupTypeChoiceView(discord.ui.View):
         guild: Optional[discord.Guild] = None,
     ) -> None:
         super().__init__(timeout=900)
-        self.add_item(SetupTypeChoiceSelect(guild=guild))
+        self.add_item(_SetupTypeOpenButton(guild=guild))
 
     @discord.ui.button(
         label="Setup Home",

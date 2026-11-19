@@ -282,53 +282,99 @@ async def _detect_existing_for_custom_service(
     return payload, [f"Found **{label}** already configured." for label in found]
 
 
-class _CustomServicePresetSelect(discord.ui.Select):
+def _entitled_preset_choices(state: Any, *, fresh: Any, guild: Optional[discord.Guild] = None) -> list[Any]:
+    """The guard's preset choices: ID presets only for entitled guilds."""
+    from stoney_verify.ui.picker import make_choice
+
+    current = _custom_preset_key_for_payload(_state_payload(state), fresh)
+    entitled = id_verify_allowed_for_guild(guild)
+    choices: list[Any] = []
+    for key, (label, _flags, description, emoji) in fresh.CUSTOM_PRESETS.items():
+        if key in {"id_verify", "id_voice_verify"} and not entitled:
+            continue
+        choices.append(
+            make_choice(
+                str(label),
+                str(key),
+                description=str(description)[:100],
+                emoji=str(emoji),
+                default=str(key) == current,
+            )
+        )
+    return choices
+
+
+async def _apply_entitled_preset_pick(
+    interaction: discord.Interaction,
+    selected: str,
+    *,
+    fresh: Any,
+) -> None:
+    """The old _CustomServicePresetSelect callback body, picker-driven."""
+    if not await fresh.solid._require_setup_permission(interaction):
+        return
+    guild = interaction.guild
+    if guild is None:
+        return await interaction.response.send_message("❌ This must be used inside a server.", ephemeral=True)
+    preset = fresh.CUSTOM_PRESETS.get(selected)
+    if preset is None:
+        return await interaction.response.send_message("❌ That feature mix is no longer available. Reopen setup.", ephemeral=True)
+    _label, flags, _description, _emoji = preset
+    allow_id = id_verify_allowed_for_guild(guild)
+    await fresh.solid._safe_defer_update(interaction)
+    await _save_custom_services(guild.id, flags, interaction.user, allow_id_verify=allow_id)
+    state = await load_setup_service_state(guild.id)
+    await fresh.solid._edit_or_followup(
+        interaction,
+        embed=fresh._custom_services_embed(guild, state),
+        view=fresh.CustomServiceModeView(state, guild=guild),
+    )
+
+
+class _CustomServicePresetOpenButton(discord.ui.Button):
+    """Opens the house picker for the guard's entitled preset list."""
+
     def __init__(self, state: Any, *, fresh: Any, guild: Optional[discord.Guild] = None) -> None:
         self._fresh = fresh
         self._guild = guild
-        current = _custom_preset_key_for_payload(_state_payload(state), fresh)
-        entitled = id_verify_allowed_for_guild(guild)
-        options: list[discord.SelectOption] = []
-        for key, (label, _flags, description, emoji) in fresh.CUSTOM_PRESETS.items():
-            if key in {"id_verify", "id_voice_verify"} and not entitled:
-                continue
-            options.append(
-                discord.SelectOption(
-                    label=str(label),
-                    value=str(key),
-                    description=str(description)[:100],
-                    emoji=str(emoji),
-                    default=str(key) == current,
-                )
-            )
+        self._state = state
         super().__init__(
-            placeholder="Choose a starting feature mix",
-            min_values=1,
-            max_values=1,
-            options=options,
-            custom_id="dank_setup_custom_service_preset:v6",
+            label=str(fresh._custom_mix_label(_state_payload(state)))[:80],
+            emoji="🧩",
+            style=discord.ButtonStyle.secondary,
+            custom_id="dank_setup_custom:preset:open:v1",
             row=0,
         )
 
     async def callback(self, interaction: discord.Interaction) -> None:
-        if not await self._fresh.solid._require_setup_permission(interaction):
-            return
-        guild = interaction.guild
-        if guild is None:
-            return await interaction.response.send_message("❌ This must be used inside a server.", ephemeral=True)
-        selected = str(self.values[0] or "")
-        preset = self._fresh.CUSTOM_PRESETS.get(selected)
-        if preset is None:
-            return await interaction.response.send_message("❌ That feature mix is no longer available. Reopen setup.", ephemeral=True)
-        _label, flags, _description, _emoji = preset
-        allow_id = id_verify_allowed_for_guild(guild)
-        await self._fresh.solid._safe_defer_update(interaction)
-        await _save_custom_services(guild.id, flags, interaction.user, allow_id_verify=allow_id)
-        state = await load_setup_service_state(guild.id)
-        await self._fresh.solid._edit_or_followup(
-            interaction,
-            embed=self._fresh._custom_services_embed(guild, state),
-            view=self._fresh.CustomServiceModeView(state, guild=guild),
+        fresh = self._fresh
+        state = self._state
+        guild = self._guild
+
+        async def on_pick(pick_interaction: discord.Interaction, value: str) -> None:
+            await _apply_entitled_preset_pick(pick_interaction, value, fresh=fresh)
+
+        async def on_home(home_interaction: discord.Interaction) -> None:
+            message = getattr(home_interaction, "message", None)
+            embeds = getattr(message, "embeds", None) if message is not None else None
+            await home_interaction.response.edit_message(
+                embed=embeds[0] if embeds else None,
+                view=_CustomServiceModeView(state, fresh=fresh, guild=guild),
+            )
+
+        picker = fresh._FreshPickerView(
+            choices=_entitled_preset_choices(state, fresh=fresh, guild=guild),
+            on_pick=on_pick,
+            custom_id="dank_setup_custom_service_preset:v6",
+            placeholder="Choose a starting feature mix",
+            title="Choose a starting feature mix",
+            on_home=on_home,
+        )
+        message = getattr(interaction, "message", None)
+        embeds = getattr(message, "embeds", None) if message is not None else None
+        await interaction.response.edit_message(
+            embed=embeds[0] if embeds else None,
+            view=picker,
         )
 
 
@@ -391,7 +437,7 @@ class _CustomServiceModeView(discord.ui.View):
         self._fresh = fresh
         self._guild = guild
         payload = _state_payload(state)
-        self.add_item(_CustomServicePresetSelect(state, fresh=fresh, guild=guild))
+        self.add_item(_CustomServicePresetOpenButton(state, fresh=fresh, guild=guild))
         specs = (
             ("tickets_enabled", "Tickets", "🎫", 1),
             ("verification_enabled", "Simple Verify", "✅", 1),
@@ -736,7 +782,7 @@ def install() -> bool:
         return await _detect_existing_for_custom_service(guild, cfg, fresh=fresh)
 
     fresh._detect_existing_for_custom_service = detect
-    fresh.CustomServicePresetSelect = lambda state, guild=None: _CustomServicePresetSelect(state, fresh=fresh, guild=guild)
+    fresh._CustomPresetOpenButton = lambda state, guild=None: _CustomServicePresetOpenButton(state, fresh=fresh, guild=guild)
     fresh.CustomServiceToggleButton = lambda key, label, emoji, selected, row=1, guild=None: _CustomServiceToggleButton(key, label, emoji, selected, fresh=fresh, guild=guild, row=row)
 
     class CustomServiceModeView(_CustomServiceModeView):

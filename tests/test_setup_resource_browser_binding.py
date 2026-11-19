@@ -254,25 +254,41 @@ def test_resource_kind_mapping_keeps_setup_type_filters() -> None:
     assert _resource_kinds([discord.ChannelType.text, discord.ChannelType.voice]) == ("text", "voice")
 
 
-def test_binding_replaces_live_public_setup_entity_selectors() -> None:
+def test_binding_verifies_native_public_setup_entity_selectors() -> None:
     from stoney_verify.commands_ext import public_setup_full_customization as full
     from stoney_verify.commands_ext import public_setup_recommend as recommend
     from stoney_verify.commands_ext import public_setup_solid as solid
 
     assert apply_setup_resource_picker_binding() is True
 
-    assert issubclass(solid.SaveRoleSelect, discord.ui.Button)
-    assert issubclass(solid.SaveChannelSelect, discord.ui.Button)
-    assert not issubclass(solid.SaveRoleSelect, discord.ui.RoleSelect)
-    assert not issubclass(solid.SaveChannelSelect, discord.ui.ChannelSelect)
-
-    assert issubclass(full.SaveRoleSelect, discord.ui.Button)
-    assert issubclass(full.SaveChannelSelect, discord.ui.Button)
-    assert not issubclass(full.SaveRoleSelect, discord.ui.RoleSelect)
-    assert not issubclass(full.SaveChannelSelect, discord.ui.ChannelSelect)
-
-    assert issubclass(recommend.GuidedExistingRoleSelect, discord.ui.Button)
-    assert issubclass(recommend.GuidedExistingChannelSelect, discord.ui.Button)
+    # Since the Slice 3 picker migration the owners define the browser
+    # opener buttons natively; the legacy Discord-native select classes
+    # no longer exist under their old names.
+    for module, opener_name, legacy_names in (
+        (solid, "_SolidPickButton", ("SaveRoleSelect", "SaveChannelSelect")),
+        (full, "_CustomPickButton", ("SaveRoleSelect", "SaveChannelSelect")),
+        (
+            recommend,
+            "_GuidedExistingOpenButton",
+            ("GuidedExistingRoleSelect", "GuidedExistingChannelSelect"),
+        ),
+    ):
+        opener = getattr(module, opener_name)
+        assert issubclass(opener, discord.ui.Button)
+        for legacy_name in legacy_names:
+            legacy = getattr(module, legacy_name, None)
+            assert not (
+                isinstance(legacy, type)
+                and issubclass(
+                    legacy,
+                    (
+                        discord.ui.Select,
+                        discord.ui.RoleSelect,
+                        discord.ui.ChannelSelect,
+                        discord.ui.UserSelect,
+                    ),
+                )
+            )
 
 
 def test_live_setup_views_construct_without_native_entity_selects_after_binding() -> None:

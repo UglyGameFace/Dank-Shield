@@ -6,6 +6,7 @@ import discord
 from discord import app_commands
 
 from ..ui.current_channel import current_text_channel
+from ..ui.picker import DankPickerView, chunk_choices, make_choice
 from .common import safe_defer
 from .public_setup_config_writer import apply_public_setup_writer_patch, upsert_guild_config
 from .public_setup_group import (
@@ -30,7 +31,7 @@ from .public_setup_group import (
 # ------------------------------------------------------------
 # Interactive production-safe setup wizard.
 #
-# This uses Discord's native ChannelSelect and RoleSelect components so server
+# This uses the house picker framework (DankPickerView) so server
 # admins do not need to paste long IDs or fight styled channel/role names.
 # Every save still runs the same validation used by the normal setup commands.
 # ============================================================
@@ -88,15 +89,6 @@ def _line(guild: discord.Guild, label: str, value: Any, *, role: bool = False) -
     return f"**{label}:** Not set"
 
 
-def _selected_id(values: list[Any]) -> Optional[str]:
-    if not values:
-        return None
-    try:
-        return str(int(values[0].id))
-    except Exception:
-        return None
-
-
 class OwnerOnlyView(discord.ui.View):
     def __init__(self, *, owner_id: int, timeout: float = 600.0) -> None:
         super().__init__(timeout=timeout)
@@ -109,26 +101,199 @@ class OwnerOnlyView(discord.ui.View):
         return await _require_setup_permission(interaction)
 
 
-class ChannelPick(discord.ui.ChannelSelect):
-    def __init__(self, state: dict[str, Any], key: str, placeholder: str, channel_types: list[discord.ChannelType], *, row: int, required: bool = True) -> None:
-        super().__init__(placeholder=placeholder, channel_types=channel_types, min_values=1 if required else 0, max_values=1, row=row)
-        self.state = state
+def _wizard_channel_choices(guild: discord.Guild, channel_types: list[discord.ChannelType]) -> list[Any]:
+    choices = []
+    wanted = set(channel_types)
+    for channel in guild.channels:
+        if channel.type not in wanted:
+            continue
+        if channel.type in (discord.ChannelType.text, discord.ChannelType.news):
+            label, emoji = f"#{channel.name}", None
+        elif channel.type == discord.ChannelType.category:
+            label, emoji = channel.name, "📁"
+        elif channel.type == discord.ChannelType.voice:
+            label, emoji = channel.name, "🔊"
+        else:
+            label, emoji = channel.name, "🎙️"
+        category = getattr(channel, "category", None)
+        choices.append(make_choice(
+            label, str(int(channel.id)),
+            description=category.name if category is not None else "No category",
+            emoji=emoji,
+        ))
+    return choices
+
+
+def _wizard_role_choices(guild: discord.Guild) -> list[Any]:
+    choices = []
+    for role in sorted(guild.roles, key=lambda item: item.position, reverse=True):
+        choices.append(make_choice(
+            role.name, str(int(role.id)),
+            description=f"Role ID {int(role.id)} • {len(role.members)} member(s)",
+        ))
+    return choices
+
+
+class _WizardPickerView(DankPickerView):
+    """House picker bound to one setup-wizard panel (TicketPicker etc.).
+
+    Pages long channel/role lists with chunk_choices so every entry
+    stays reachable past Discord's 25-option select limit. Picking
+    stages the value into the host panel's state dict — the same dict
+    the old ChannelPick/RolePick wrote to — and returns to the host
+    panel; nothing is saved until the panel's Save button is pressed.
+    """
+
+    def __init__(
+        self,
+        host: "OwnerOnlyView",
+        *,
+        scope: str,
+        key: str,
+        label: str,
+        choices: list[Any],
+        required: bool = True,
+        page: int = 0,
+    ) -> None:
+        self.host = host
+        self.scope = scope
         self.key = key
+        self.label = label
+        self.required = bool(required)
+        self._raw_choices = list(choices or [])
+        all_choices = list(self._raw_choices)
+        if not self.required:
+            all_choices = [make_choice(
+                "None — clear this choice", "__clear__",
+                description="Leave this unset.", emoji="🚫",
+            )] + all_choices
+        self._all_choices = all_choices
+        pages = chunk_choices(all_choices) or [[]]
+        page = max(0, min(int(page), len(pages) - 1))
+        base_custom_id = f"dank:setup_wizard:{scope}:{key}:v1"
+
+        async def on_pick(interaction: discord.Interaction, value: str) -> None:
+            host.state[key] = None if value == "__clear__" else str(int(value))
+            guild = interaction.guild
+            if guild is not None:
+                await _edit_or_send(interaction, embed=host.embed(guild), view=host)
+
+        async def on_home(interaction: discord.Interaction) -> None:
+            guild = interaction.guild
+            if guild is not None:
+                await _edit_or_send(interaction, embed=host.embed(guild), view=host)
+
+        super().__init__(
+            author_id=int(host.owner_id),
+            choices=pages[page],
+            on_pick=on_pick,
+            custom_id=f"{base_custom_id}:{page}" if len(pages) > 1 else base_custom_id,
+            placeholder=(
+                f"{label} • Page {page + 1}/{len(pages)}"
+                if len(pages) > 1 else label
+            ),
+            title=label,
+            timeout=600,
+            on_home=on_home,
+            home_label="Back",
+        )
+        self.page = page
+        self.pages = len(pages)
+        if len(pages) > 1:
+            self.add_item(_WizardPageButton(delta=-1, disabled=page <= 0))
+            self.add_item(_WizardPageButton(delta=1, disabled=page >= len(pages) - 1))
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        return await self.host.interaction_check(interaction)
+
+    def _for_page(self, page: int) -> "_WizardPickerView":
+        return _WizardPickerView(
+            self.host,
+            scope=self.scope,
+            key=self.key,
+            label=self.label,
+            choices=self._raw_choices,
+            required=self.required,
+            page=page,
+        )
+
+
+class _WizardPageButton(discord.ui.Button):
+    def __init__(self, *, delta: int, disabled: bool) -> None:
+        super().__init__(
+            label="Previous" if delta < 0 else "Next",
+            emoji="◀️" if delta < 0 else "▶️",
+            style=discord.ButtonStyle.secondary,
+            custom_id=(
+                "dank:setup_wizard:picker:prev" if delta < 0
+                else "dank:setup_wizard:picker:next"
+            ),
+            row=2,
+            disabled=bool(disabled),
+        )
+        self.delta = int(delta)
 
     async def callback(self, interaction: discord.Interaction) -> None:
-        self.state[self.key] = _selected_id(list(self.values))
-        await interaction.response.defer()
+        view = self.view
+        if not isinstance(view, _WizardPickerView) or not await view.interaction_check(interaction):
+            return
+        page = max(0, min(view.page + self.delta, view.pages - 1))
+        await interaction.response.edit_message(view=view._for_page(page))
 
 
-class RolePick(discord.ui.RoleSelect):
-    def __init__(self, state: dict[str, Any], key: str, placeholder: str, *, row: int, required: bool = True) -> None:
-        super().__init__(placeholder=placeholder, min_values=1 if required else 0, max_values=1, row=row)
-        self.state = state
+class _WizardPickButton(discord.ui.Button):
+    """Opens the house picker for one wizard field on the same message."""
+
+    def __init__(
+        self,
+        *,
+        scope: str,
+        key: str,
+        label: str,
+        kind: str,
+        channel_types: Optional[list[discord.ChannelType]] = None,
+        row: int,
+        required: bool = True,
+    ) -> None:
+        super().__init__(
+            label=label[:80],
+            emoji="🧭" if kind == "channel" else "🎭",
+            style=discord.ButtonStyle.secondary,
+            custom_id=f"dank:setup_wizard:{scope}:{key}:open:v1",
+            row=row,
+        )
+        self.scope = scope
         self.key = key
+        self.label = label
+        self.kind = kind
+        self.channel_types = channel_types
+        self.required = bool(required)
 
     async def callback(self, interaction: discord.Interaction) -> None:
-        self.state[self.key] = _selected_id(list(self.values))
-        await interaction.response.defer()
+        host = self.view
+        if not isinstance(host, OwnerOnlyView) or not await host.interaction_check(interaction):
+            return
+        guild = interaction.guild
+        if guild is None:
+            return await interaction.response.send_message("❌ This must be used inside a server.", ephemeral=True)
+        if self.kind == "role":
+            choices = _wizard_role_choices(guild)
+        else:
+            choices = _wizard_channel_choices(guild, self.channel_types or [])
+        picker = _WizardPickerView(
+            host,
+            scope=self.scope,
+            key=self.key,
+            label=self.label,
+            choices=choices,
+            required=self.required,
+        )
+        message = getattr(interaction, "message", None)
+        embeds = getattr(message, "embeds", None) if message is not None else None
+        await interaction.response.edit_message(
+            embed=embeds[0] if embeds else None,
+            view=picker,
+        )
 
 
 async def _edit_or_send(interaction: discord.Interaction, *, embed: discord.Embed, view: discord.ui.View) -> None:
@@ -292,10 +457,10 @@ class TicketPicker(OwnerOnlyView):
             "staff_role_id": getattr(cfg, "staff_role_id", None),
             "transcripts_channel_id": getattr(cfg, "transcripts_channel_id", None),
         }
-        self.add_item(ChannelPick(self.state, "ticket_category_id", "Open ticket category", _CATEGORY_TYPES, row=0))
-        self.add_item(ChannelPick(self.state, "ticket_archive_category_id", "Archive/closed category", _CATEGORY_TYPES, row=1, required=False))
-        self.add_item(RolePick(self.state, "staff_role_id", "Ticket staff role", row=2))
-        self.add_item(ChannelPick(self.state, "transcripts_channel_id", "Transcript text channel", _TEXT_TYPES, row=3, required=False))
+        self.add_item(_WizardPickButton(scope="tickets", key="ticket_category_id", label="Open ticket category", kind="channel", channel_types=_CATEGORY_TYPES, row=0))
+        self.add_item(_WizardPickButton(scope="tickets", key="ticket_archive_category_id", label="Archive/closed category", kind="channel", channel_types=_CATEGORY_TYPES, row=1, required=False))
+        self.add_item(_WizardPickButton(scope="tickets", key="staff_role_id", label="Ticket staff role", kind="role", row=2))
+        self.add_item(_WizardPickButton(scope="tickets", key="transcripts_channel_id", label="Transcript text channel", kind="channel", channel_types=_TEXT_TYPES, row=3, required=False))
 
     def embed(self, guild: discord.Guild) -> discord.Embed:
         embed = discord.Embed(title="🎫 Ticket Setup Picker", description="Pick values, then press **Save Tickets**.", color=discord.Color.blurple())
@@ -369,10 +534,10 @@ class VerifyPicker(OwnerOnlyView):
             "verified_role_id": getattr(cfg, "verified_role_id", None),
             "resident_role_id": getattr(cfg, "resident_role_id", None),
         }
-        self.add_item(ChannelPick(self.state, "verify_channel_id", "Verify/start text channel", _TEXT_TYPES, row=0))
-        self.add_item(RolePick(self.state, "unverified_role_id", "Unverified role", row=1))
-        self.add_item(RolePick(self.state, "verified_role_id", "Verified role", row=2))
-        self.add_item(RolePick(self.state, "resident_role_id", "Resident/member role", row=3, required=False))
+        self.add_item(_WizardPickButton(scope="verify", key="verify_channel_id", label="Verify/start text channel", kind="channel", channel_types=_TEXT_TYPES, row=0))
+        self.add_item(_WizardPickButton(scope="verify", key="unverified_role_id", label="Unverified role", kind="role", row=1))
+        self.add_item(_WizardPickButton(scope="verify", key="verified_role_id", label="Verified role", kind="role", row=2))
+        self.add_item(_WizardPickButton(scope="verify", key="resident_role_id", label="Resident/member role", kind="role", row=3, required=False))
 
     def embed(self, guild: discord.Guild) -> discord.Embed:
         embed = discord.Embed(title="✅ Verification Setup Picker", description="Pick the verify text channel and core roles.", color=discord.Color.blurple())
@@ -448,8 +613,8 @@ class VCPicker(OwnerOnlyView):
             "vc_verify_channel_id": getattr(cfg, "vc_verify_channel_id", None),
             "vc_verify_queue_channel_id": getattr(cfg, "vc_verify_queue_channel_id", None),
         }
-        self.add_item(ChannelPick(self.state, "vc_verify_channel_id", "VC verify voice/stage channel", _VOICE_TYPES, row=0, required=False))
-        self.add_item(ChannelPick(self.state, "vc_verify_queue_channel_id", "VC queue/status text channel", _TEXT_TYPES, row=1, required=False))
+        self.add_item(_WizardPickButton(scope="vc", key="vc_verify_channel_id", label="VC verify voice/stage channel", kind="channel", channel_types=_VOICE_TYPES, row=0, required=False))
+        self.add_item(_WizardPickButton(scope="vc", key="vc_verify_queue_channel_id", label="VC queue/status text channel", kind="channel", channel_types=_TEXT_TYPES, row=1, required=False))
 
     def embed(self, guild: discord.Guild) -> discord.Embed:
         embed = discord.Embed(title="🎙️ VC Verification Picker", description="Pick the voice channel and VC queue/status text channel.", color=discord.Color.blurple())
@@ -519,10 +684,10 @@ class LogPicker(OwnerOnlyView):
             "join_log_channel_id": getattr(cfg, "join_log_channel_id", None),
             "force_verify_log_channel_id": getattr(cfg, "force_verify_log_channel_id", None),
         }
-        self.add_item(ChannelPick(self.state, "modlog_channel_id", "Modlog text channel", _TEXT_TYPES, row=0))
-        self.add_item(ChannelPick(self.state, "raidlog_channel_id", "Raid/security log text channel", _TEXT_TYPES, row=1, required=False))
-        self.add_item(ChannelPick(self.state, "join_log_channel_id", "Join/exit log text channel", _TEXT_TYPES, row=2, required=False))
-        self.add_item(ChannelPick(self.state, "force_verify_log_channel_id", "Forced verification log text channel", _TEXT_TYPES, row=3, required=False))
+        self.add_item(_WizardPickButton(scope="logs", key="modlog_channel_id", label="Modlog text channel", kind="channel", channel_types=_TEXT_TYPES, row=0))
+        self.add_item(_WizardPickButton(scope="logs", key="raidlog_channel_id", label="Raid/security log text channel", kind="channel", channel_types=_TEXT_TYPES, row=1, required=False))
+        self.add_item(_WizardPickButton(scope="logs", key="join_log_channel_id", label="Join/exit log text channel", kind="channel", channel_types=_TEXT_TYPES, row=2, required=False))
+        self.add_item(_WizardPickButton(scope="logs", key="force_verify_log_channel_id", label="Forced verification log text channel", kind="channel", channel_types=_TEXT_TYPES, row=3, required=False))
 
     def embed(self, guild: discord.Guild) -> discord.Embed:
         embed = discord.Embed(title="🗃️ Log Setup Picker", description="Pick log channels. Reusing one channel for multiple log types is allowed.", color=discord.Color.blurple())
