@@ -99,22 +99,39 @@ def _activity_embed() -> discord.Embed:
     embed = discord.Embed(
         title="📊 Activity & Cleanup",
         description=(
-            "Review activity across current member types using server evidence, not presence. "
-            "Cleanup remains preview-first and destructive actions keep confirmation gates."
+            "See what any member has done in this server, or find members who "
+            "have gone quiet.\n\n"
+            "This counts messages and actions Dank Shield actually saw in this "
+            "server — not just someone being online. Voice time doesn't count.\n\n"
+            "You always see the list first, and nobody is kicked until you confirm it."
         ),
         color=discord.Color.blurple(),
         timestamp=discord.utils.utcnow(),
     )
     embed.add_field(
-        name="Review presets",
-        value="Use 30, 90, or 180 days, or enter custom thresholds.",
+        name="Look up one member",
+        value=(
+            "Use the first picker below to see everything Dank Shield has "
+            "recorded for one member — last message, tickets, joins and more. "
+            "Works for active members too."
+        ),
         inline=False,
     )
     embed.add_field(
-        name="Cleanup tools",
+        name="Find inactive members",
         value=(
-            "Select one member for validated cleanup, build a safe queue, or preview "
-            "all strictly eligible members. Nothing is removed from this menu alone."
+            "Show members with no activity for 30, 90 or 180 days, or a number "
+            "you pick. **Tracking Check** shows whether the bot has watched "
+            "this server long enough for these results to be trusted."
+        ),
+        inline=False,
+    )
+    embed.add_field(
+        name="Kick members",
+        value=(
+            "Check one member for kicking with the second picker, kick a list "
+            "of up to 20, or kick everyone eligible. "
+            "Nothing is removed from this menu alone."
         ),
         inline=False,
     )
@@ -423,11 +440,11 @@ class CenterRoleBrowserView(RoleMemberBrowserView):
 class CleanupMemberSelect(discord.ui.UserSelect):
     def __init__(self) -> None:
         super().__init__(
-            placeholder="Validate cleanup for one current member…",
+            placeholder="Check one member for kicking…",
             min_values=1,
             max_values=1,
             custom_id="dank_members_center:cleanup_member",
-            row=2,
+            row=3,
         )
 
     async def callback(self, interaction: discord.Interaction) -> None:
@@ -452,9 +469,83 @@ class CleanupMemberSelect(discord.ui.UserSelect):
         await _invoke_command(members_cleanup_user, interaction, member)
 
 
+class ActivityLookupMemberSelect(discord.ui.UserSelect):
+    """Pick ANY current member — active included — and see their activity.
+
+    This is the lookup the Activity & Cleanup panel was missing: the scans
+    below only ever list members who went quiet, so an active member's
+    recorded activity had no door on this panel. The read is the exact
+    stored-history read the Intelligence panel uses
+    (``_show_stored_member_history``); no second activity store exists.
+    """
+
+    def __init__(self, parent: "ActivityCleanupMenuView") -> None:
+        self.parent_view = parent
+        super().__init__(
+            placeholder="Look up one member's activity…",
+            min_values=1,
+            max_values=1,
+            custom_id="dank_members_center:activity_lookup_member",
+            row=2,
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        selected = self.values[0] if self.values else None
+        user_id = int(getattr(selected, "id", 0) or 0)
+        if user_id <= 0:
+            await reply_ephemeral(interaction, "❌ Select a member first.")
+            return
+        # REST verification can exceed Discord's 3-second response window.
+        await interaction.response.defer(ephemeral=True)
+        member, status = await _resolve_intelligence_member(interaction.guild, user_id)
+        view = ActivityLookupResultView(self.parent_view.owner_id, member_id=user_id)
+        await _show_stored_member_history(
+            interaction, user_id, presence=status, view=view,
+            live_member=member,
+        )
+
+
+class ActivityLookupResultView(OwnedView):
+    """The looked-up member's stored activity, with a way back to the panel.
+
+    Deliberately NOT the Intelligence target view: this panel's job is
+    "show me what this member did", not investigation, so the only actions
+    are refresh and navigation back.
+    """
+
+    def __init__(self, owner_id: int, *, member_id: int) -> None:
+        self.member_id = int(member_id)
+        super().__init__(owner_id)
+
+    @discord.ui.button(label="Refresh Activity", emoji="🔄", style=discord.ButtonStyle.primary, row=0)
+    async def refresh(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        # Discord's fetch_member may exceed the 3-second interaction window.
+        if not interaction.response.is_done():
+            await interaction.response.defer(ephemeral=True)
+        member, status = await _resolve_intelligence_member(interaction.guild, self.member_id)
+        await _show_stored_member_history(
+            interaction, self.member_id, presence=status, view=self,
+            live_member=member, force_refresh=True,
+        )
+
+    @discord.ui.button(label="Activity & Cleanup", emoji="📊", style=discord.ButtonStyle.secondary, row=0)
+    async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        view = ActivityCleanupMenuView(self.owner_id)
+        await _replace_panel(interaction, embed=_activity_embed(), view=view)
+
+    @discord.ui.button(label="Command Center", emoji="🏠", style=discord.ButtonStyle.secondary, row=0)
+    async def command_center(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        view = MemberCommandCenterView(self.owner_id)
+        await _replace_panel(interaction, embed=_center_embed(), view=view)
+
+
 class ActivityCleanupMenuView(OwnedView):
     def __init__(self, owner_id: int) -> None:
         super().__init__(owner_id)
+        self.add_item(ActivityLookupMemberSelect(self))
         self.add_item(CleanupMemberSelect())
 
     async def _scan(self, interaction: discord.Interaction, days: int) -> None:
@@ -462,22 +553,22 @@ class ActivityCleanupMenuView(OwnedView):
 
         await _run_activity_scan(interaction, inactive_days=days)
 
-    @discord.ui.button(label="30d Review", emoji="⚡", style=discord.ButtonStyle.secondary, row=0)
+    @discord.ui.button(label="30d Inactive", emoji="⚡", style=discord.ButtonStyle.secondary, row=0)
     async def scan_30(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await self._scan(interaction, 30)
 
-    @discord.ui.button(label="90d Review", emoji="🎯", style=discord.ButtonStyle.primary, row=0)
+    @discord.ui.button(label="90d Inactive", emoji="🎯", style=discord.ButtonStyle.primary, row=0)
     async def scan_90(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await self._scan(interaction, 90)
 
-    @discord.ui.button(label="180d Review", emoji="🗓️", style=discord.ButtonStyle.secondary, row=0)
+    @discord.ui.button(label="180d Inactive", emoji="🗓️", style=discord.ButtonStyle.secondary, row=0)
     async def scan_180(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await self._scan(interaction, 180)
 
-    @discord.ui.button(label="Custom Review", emoji="🛠️", style=discord.ButtonStyle.secondary, row=0)
+    @discord.ui.button(label="Custom Days", emoji="🛠️", style=discord.ButtonStyle.secondary, row=0)
     async def custom_scan(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await interaction.response.send_modal(CustomActivityScanModal())
@@ -495,7 +586,7 @@ class ActivityCleanupMenuView(OwnedView):
         if report is None:
             await reply_ephemeral(
                 interaction,
-                "No activity review has been run since the bot restarted. Use a review button in this menu first.",
+                "No inactive-member scan has been run since the bot restarted. Use one of the Inactive buttons in this menu first.",
             )
             return
         await interaction.response.send_message(
@@ -512,28 +603,28 @@ class ActivityCleanupMenuView(OwnedView):
 
         await _invoke_command(members_cleanup_queue, interaction)
 
-    @discord.ui.button(label="Purge Eligible", emoji="⚠️", style=discord.ButtonStyle.danger, row=1)
+    @discord.ui.button(label="Kick Everyone Eligible", emoji="⚠️", style=discord.ButtonStyle.danger, row=1)
     async def purge_eligible(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         from .public_members_cleanup_group import members_purge_all
 
         await _invoke_command(members_purge_all, interaction)
 
-    @discord.ui.button(label="Evidence Coverage", emoji="📡", style=discord.ButtonStyle.secondary, row=1)
+    @discord.ui.button(label="Tracking Check", emoji="📡", style=discord.ButtonStyle.secondary, row=1)
     async def coverage(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         from .public_members_group import members_coverage
 
         await _invoke_command(members_coverage, interaction)
 
-    @discord.ui.button(label="Command Center", emoji="🏠", style=discord.ButtonStyle.secondary, row=3)
+    @discord.ui.button(label="Command Center", emoji="🏠", style=discord.ButtonStyle.secondary, row=4)
     async def command_center(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         view = MemberCommandCenterView(self.owner_id)
         await _replace_panel(interaction, embed=_center_embed(), view=view)
 
 
-class CustomActivityScanModal(discord.ui.Modal, title="Custom activity review"):
+class CustomActivityScanModal(discord.ui.Modal, title="Find inactive members"):
     inactive_days = discord.ui.TextInput(
         label="Inactive days (7-730)",
         placeholder="90",
@@ -545,7 +636,7 @@ class CustomActivityScanModal(discord.ui.Modal, title="Custom activity review"):
         max_length=2,
     )
     low_confidence = discord.ui.TextInput(
-        label="Include low confidence? yes/no",
+        label="Include less-sure members? yes/no",
         placeholder="yes",
         max_length=3,
     )
@@ -561,7 +652,7 @@ class CustomActivityScanModal(discord.ui.Modal, title="Custom activity review"):
         if low_text not in {"yes", "y", "true", "no", "n", "false"}:
             await reply_ephemeral(
                 interaction,
-                "❌ Include low confidence must be yes or no.",
+                "❌ Answer yes or no for including less-sure members.",
             )
             return
         from .public_members_group import _run_activity_scan
