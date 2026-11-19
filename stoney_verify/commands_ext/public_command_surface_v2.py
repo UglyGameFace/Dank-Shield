@@ -1845,6 +1845,8 @@ def install_compact_public_surface_v2(bot: Any, tree: Any) -> dict[str, Any]:
     global _INSTALLED
     from .public_community_tools import ensure_community_tools_runtime
     ensure_community_tools_runtime(bot)
+    from ..embed_studio_sticky import ensure_studio_sticky_runtime
+    ensure_studio_sticky_runtime(bot)
     from ..community_hub_runtime import ensure_community_hub_runtime
     ensure_community_hub_runtime(bot)
     from ..dead_server_clapbacks import ensure_dead_server_clapback_runtime
