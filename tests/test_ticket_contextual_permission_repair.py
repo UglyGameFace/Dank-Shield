@@ -71,20 +71,22 @@ def test_current_ticket_center_keeps_full_action_menu_and_adds_contextual_repair
         item
         for item in view.children
         if str(getattr(item, "custom_id", "") or "")
-        == "dank:ticket:center:channel:v1"
+        == "dank:ticket:center:channel:open:v1"
     ]
-    action_selects = [
+    action_openers = [
         item
         for item in view.children
         if str(getattr(item, "custom_id", "") or "")
-        == "dank:ticket:center:action:v1"
+        == "dank:ticket:center:action:open:v1"
     ]
 
     assert len(repair_buttons) == 1
     assert repair_buttons[0].label == "Check / Fix Access"
     assert len(channel_pickers) == 1
-    assert len(action_selects) == 1
-    assert len(action_selects[0].options) == 16
+    assert isinstance(channel_pickers[0], repair.ContextualTicketChannelPickOpenButton)
+    assert len(action_openers) == 1
+    picker = action_openers[0]._build(SimpleNamespace(guild=None))
+    assert len(picker.choices) == 16
 
 
 def test_ticket_health_view_exposes_manual_state_when_required_mapping_is_absent() -> None:

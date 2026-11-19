@@ -18,6 +18,7 @@ from ..globals import (
 )
 from ..guild_context import get_guild_context
 from ..interaction_guard import run_guarded_interaction
+from ..ui.picker import DankPickerView, chunk_choices, make_choice
 from .repository import get_ticket_by_any_channel_id
 from .service import (
     add_internal_note,
@@ -2134,130 +2135,187 @@ class AddInternalNoteModal(discord.ui.Modal, title="Add Internal Note"):
             await _safe_followup(interaction, "Failed to save internal note.")
 
 
-class MacroSelect(discord.ui.Select):
-    def __init__(self, *, channel_id: int, actor_id: int, macro_rows: List[Dict[str, Any]]):
+async def _apply_macro_pick(
+    interaction: discord.Interaction,
+    *,
+    channel_id: int,
+    actor_id: int,
+    slug_value: str,
+) -> None:
+    """Send one picked macro; the old MacroSelect callback body, rehoused."""
+    try:
+        channel = interaction.channel
+        actor = _resolve_member(interaction)
+
+        if not isinstance(channel, discord.TextChannel) or actor is None:
+            return await _safe_followup(interaction, "This can only be used inside a ticket channel.")
+
+        if int(channel.id) != int(channel_id):
+            return await _safe_followup(interaction, "This macro picker belongs to a different ticket.")
+
+        if int(actor.id) != int(actor_id):
+            return await _safe_followup(interaction, "Only the staff member who opened this picker can use it.")
+
+        if not _is_staff_member(actor):
+            return await _safe_followup(interaction, "Only staff can use ticket macros.")
+
+        row = await _ticket_row_for_channel(channel)
+        if _ticket_is_deleted(row):
+            return await _safe_followup(interaction, "❌ This ticket is deleted.")
+        if _ticket_is_closed_or_stale_closed(channel, row):
+            return await _safe_followup(interaction, "❌ Closed tickets cannot send macros.")
+
+        slug = str(slug_value or "").strip()
+        if not slug or slug == "__none__":
+            return await _safe_followup(interaction, "No macro was selected.")
+
+        await _safe_defer(interaction)
+
+        result = await send_ticket_macro(
+            channel=channel,
+            slug=slug,
+            actor=actor,
+        )
+
+        if not result.get("ok"):
+            _debug(
+                f"macro send failed guild={channel.guild.id} "
+                f"user={actor.id} channel={channel.id} slug={slug} "
+                f"error={result.get('message')!r}"
+            )
+            return await _safe_followup(
+                interaction,
+                str(result.get("message") or "Failed to send macro."),
+            )
+
+        macro = result.get("macro") or {}
+        send_as_note = bool(result.get("send_as_note", False))
+        macro_name = str(macro.get("name") or macro.get("slug") or slug)
+
+        _debug(
+            f"macro send success guild={channel.guild.id} "
+            f"user={actor.id} channel={channel.id} slug={slug} "
+            f"send_as_note={send_as_note}"
+        )
+
+        if send_as_note:
+            await _safe_followup(
+                interaction,
+                f"Saved macro **{macro_name}** as an internal note.",
+            )
+        else:
+            await _safe_followup(
+                interaction,
+                f"Sent macro **{macro_name}**.",
+            )
+
+    except Exception as e:
+        print("❌ Macro select callback failed:", repr(e))
+        await _safe_followup(interaction, "Failed to send the selected macro.")
+
+
+
+
+class MacroPickerView(DankPickerView):
+    """House picker for sending a ticket macro.
+
+    Class C fit: the picker is ``allow_anyone`` at the framework level
+    because every gate lives in :func:`_apply_macro_pick` exactly as it
+    did in the old select callback — same-ticket check, opener-only
+    check, staff check, deleted/closed checks. The custom_id keeps the
+    ``ticket_macro_select:<channel>:<actor>`` contract the interaction
+    router treats as ticket-owned. Macro lists longer than Discord's
+    25-option limit page with chunk_choices instead of the old silent
+    ``[:25]`` truncation.
+    """
+
+    def __init__(
+        self,
+        *,
+        channel_id: int,
+        actor_id: int,
+        macro_rows: List[Dict[str, Any]],
+        page: int = 0,
+    ):
         self.channel_id = int(channel_id)
         self.actor_id = int(actor_id)
         self.macro_rows = list(macro_rows)
 
-        options: List[discord.SelectOption] = []
-        for row in self.macro_rows[:_MACRO_OPTION_LIMIT]:
+        all_choices = []
+        for row in self.macro_rows:
             slug = str(row.get("slug") or "").strip()
             if not slug:
                 continue
+            all_choices.append(make_choice(
+                _macro_option_label(row),
+                slug,
+                description=_macro_option_description(row),
+            ))
+        if not all_choices:
+            all_choices = [make_choice(
+                "No macros available",
+                "__none__",
+                description="Nothing available for this ticket right now.",
+            )]
+        pages = chunk_choices(all_choices) or [[]]
+        page = max(0, min(int(page), len(pages) - 1))
+        self._all_choices = all_choices
+        self.page = page
+        self.pages = len(pages)
 
-            options.append(
-                discord.SelectOption(
-                    label=_macro_option_label(row),
-                    value=slug,
-                    description=_macro_option_description(row),
-                )
-            )
-
-        if not options:
-            options.append(
-                discord.SelectOption(
-                    label="No macros available",
-                    value="__none__",
-                    description="Nothing available for this ticket right now.",
-                )
-            )
-
-        super().__init__(
-            placeholder="Choose a macro to send…",
-            min_values=1,
-            max_values=1,
-            options=options,
-            custom_id=f"ticket_macro_select:{self.channel_id}:{self.actor_id}",
-            row=0,
-        )
-
-    async def callback(self, interaction: discord.Interaction) -> None:
-        try:
-            channel = interaction.channel
-            actor = _resolve_member(interaction)
-
-            if not isinstance(channel, discord.TextChannel) or actor is None:
-                return await _safe_followup(interaction, "This can only be used inside a ticket channel.")
-
-            if int(channel.id) != int(self.channel_id):
-                return await _safe_followup(interaction, "This macro picker belongs to a different ticket.")
-
-            if int(actor.id) != int(self.actor_id):
-                return await _safe_followup(interaction, "Only the staff member who opened this picker can use it.")
-
-            if not _is_staff_member(actor):
-                return await _safe_followup(interaction, "Only staff can use ticket macros.")
-
-            row = await _ticket_row_for_channel(channel)
-            if _ticket_is_deleted(row):
-                return await _safe_followup(interaction, "❌ This ticket is deleted.")
-            if _ticket_is_closed_or_stale_closed(channel, row):
-                return await _safe_followup(interaction, "❌ Closed tickets cannot send macros.")
-
-            slug = str(self.values[0] if self.values else "").strip()
-            if not slug or slug == "__none__":
-                return await _safe_followup(interaction, "No macro was selected.")
-
-            await _safe_defer(interaction)
-
-            result = await send_ticket_macro(
-                channel=channel,
-                slug=slug,
-                actor=actor,
-            )
-
-            if not result.get("ok"):
-                _debug(
-                    f"macro send failed guild={channel.guild.id} "
-                    f"user={actor.id} channel={channel.id} slug={slug} "
-                    f"error={result.get('message')!r}"
-                )
-                return await _safe_followup(
-                    interaction,
-                    str(result.get("message") or "Failed to send macro."),
-                )
-
-            macro = result.get("macro") or {}
-            send_as_note = bool(result.get("send_as_note", False))
-            macro_name = str(macro.get("name") or macro.get("slug") or slug)
-
-            _debug(
-                f"macro send success guild={channel.guild.id} "
-                f"user={actor.id} channel={channel.id} slug={slug} "
-                f"send_as_note={send_as_note}"
-            )
-
-            if send_as_note:
-                await _safe_followup(
-                    interaction,
-                    f"Saved macro **{macro_name}** as an internal note.",
-                )
-            else:
-                await _safe_followup(
-                    interaction,
-                    f"Sent macro **{macro_name}**.",
-                )
-
-        except Exception as e:
-            print("❌ Macro select callback failed:", repr(e))
-            await _safe_followup(interaction, "Failed to send the selected macro.")
-
-
-class MacroPickerView(discord.ui.View):
-    def __init__(self, *, channel_id: int, actor_id: int, macro_rows: List[Dict[str, Any]]):
-        super().__init__(timeout=180)
-        self.channel_id = int(channel_id)
-        self.actor_id = int(actor_id)
-        self.macro_rows = list(macro_rows)
-
-        self.add_item(
-            MacroSelect(
+        async def on_pick(interaction: discord.Interaction, value: str) -> None:
+            await _apply_macro_pick(
+                interaction,
                 channel_id=self.channel_id,
                 actor_id=self.actor_id,
-                macro_rows=self.macro_rows,
+                slug_value=value,
             )
+
+        base_custom_id = f"ticket_macro_select:{self.channel_id}:{self.actor_id}"
+        super().__init__(
+            author_id=self.actor_id,
+            choices=pages[page],
+            on_pick=on_pick,
+            custom_id=f"{base_custom_id}:{page}" if len(pages) > 1 else base_custom_id,
+            placeholder="Choose a macro to send\u2026",
+            title="Ticket Macros",
+            timeout=180,
+            allow_anyone=True,
         )
+        if len(pages) > 1:
+            self.add_item(_MacroPickerPageButton(delta=-1, disabled=page <= 0))
+            self.add_item(_MacroPickerPageButton(delta=1, disabled=page >= len(pages) - 1))
+
+    def _for_page(self, page: int) -> "MacroPickerView":
+        return MacroPickerView(
+            channel_id=self.channel_id,
+            actor_id=self.actor_id,
+            macro_rows=self.macro_rows,
+            page=page,
+        )
+
+
+class _MacroPickerPageButton(discord.ui.Button):
+    def __init__(self, *, delta: int, disabled: bool) -> None:
+        super().__init__(
+            label="Previous" if delta < 0 else "Next",
+            emoji="\u25c0\ufe0f" if delta < 0 else "\u25b6\ufe0f",
+            style=discord.ButtonStyle.secondary,
+            custom_id=(
+                "ticket_macro_select:prev" if delta < 0
+                else "ticket_macro_select:next"
+            ),
+            row=2,
+            disabled=bool(disabled),
+        )
+        self.delta = int(delta)
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        view = self.view
+        if not isinstance(view, MacroPickerView):
+            return
+        page = max(0, min(view.page + self.delta, view.pages - 1))
+        await interaction.response.edit_message(view=view._for_page(page))
 
 
 async def _action_claim(interaction: discord.Interaction) -> None:
@@ -2637,78 +2695,90 @@ async def _action_ticket_info(interaction: discord.Interaction) -> None:
     await _safe_followup(interaction, _ticket_summary_text(channel, row))
 
 
-class TicketActionSelect(discord.ui.Select):
-    def __init__(self):
-        options = [
-            discord.SelectOption(
-                label="Transfer Ticket",
-                value="transfer",
-                description="Move this ticket to another staff member",
-                emoji="🔁",
-            ),
-            discord.SelectOption(
-                label="Set Priority",
-                value="priority",
-                description="Change the urgency level",
-                emoji="🚦",
-            ),
-            discord.SelectOption(
-                label="Add Internal Note",
-                value="add_note",
-                description="Save a staff-only note",
-                emoji="📝",
-            ),
-            discord.SelectOption(
-                label="View Internal Notes",
-                value="view_notes",
-                description="Read staff-only notes for this ticket",
-                emoji="📚",
-            ),
-            discord.SelectOption(
-                label="List Macros",
-                value="list_macros",
-                description="See available saved replies",
-                emoji="📋",
-            ),
-            discord.SelectOption(
-                label="Send Macro",
-                value="use_macro",
-                description="Pick and send a saved reply",
-                emoji="⚡",
-            ),
-        ]
+_TICKET_MORE_ACTIONS = (
+    ("Transfer Ticket", "transfer", "Move this ticket to another staff member", "\U0001f501"),
+    ("Set Priority", "priority", "Change the urgency level", "\U0001f6a6"),
+    ("Add Internal Note", "add_note", "Save a staff-only note", "\U0001f4dd"),
+    ("View Internal Notes", "view_notes", "Read staff-only notes for this ticket", "\U0001f4da"),
+    ("List Macros", "list_macros", "See available saved replies", "\U0001f4cb"),
+    ("Send Macro", "use_macro", "Pick and send a saved reply", "\u26a1"),
+)
+
+
+async def _apply_ticket_more_action(interaction: discord.Interaction, action_value: str) -> None:
+    """Dispatch one picked in-ticket action; the old TicketActionSelect routes."""
+    action = str(action_value or "").strip()
+
+    if action == "transfer":
+        return await _run_ticket_panel_action(interaction, lambda: _action_transfer(interaction), "transfer ticket")
+    if action == "priority":
+        return await _run_ticket_panel_action(interaction, lambda: _action_set_priority(interaction), "set priority")
+    if action == "add_note":
+        return await _run_ticket_panel_action(interaction, lambda: _action_add_note(interaction), "add internal note")
+    if action == "view_notes":
+        return await _run_ticket_panel_action(interaction, lambda: _action_view_notes(interaction), "view internal notes")
+    if action == "list_macros":
+        return await _run_ticket_panel_action(interaction, lambda: _action_list_macros(interaction), "list macros")
+    if action == "use_macro":
+        return await _run_ticket_panel_action(interaction, lambda: _action_use_macro(interaction), "send macro")
+
+    return await _safe_followup(interaction, "That ticket action is not available.")
+
+
+class TicketMoreActionsPickerView(DankPickerView):
+    """House picker behind the in-ticket panel's More Actions button.
+
+    Class C fit: the persistent panel is shared by every staff member in
+    the ticket channel, so this picker is ``allow_anyone`` — each action
+    keeps the staff/owner checks inside its own handler, exactly as the
+    previous persistent select's callback did. The picker keeps the old
+    select's custom_id (``ticket_actions_more_select``) as its stable id.
+    """
+
+    def __init__(self) -> None:
+        async def on_pick(interaction: discord.Interaction, value: str) -> None:
+            await _apply_ticket_more_action(interaction, value)
+
         super().__init__(
-            placeholder="More ticket actions…",
-            min_values=1,
-            max_values=1,
-            options=options,
+            author_id=0,
+            choices=[
+                make_choice(label, value, description=description, emoji=emoji)
+                for label, value, description, emoji in _TICKET_MORE_ACTIONS
+            ],
+            on_pick=on_pick,
             custom_id="ticket_actions_more_select",
+            placeholder="More ticket actions\u2026",
+            title="Ticket Actions",
+            timeout=300,
+            allow_anyone=True,
+        )
+
+
+class TicketMoreActionsOpenButton(discord.ui.Button):
+    """Persistent-panel button that opens the More Actions house picker."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            label="More Actions",
+            emoji="\U0001f9f0",
+            style=discord.ButtonStyle.secondary,
+            custom_id="ticket_actions_more_open",
             row=1,
         )
 
     async def callback(self, interaction: discord.Interaction) -> None:
-        action = str(self.values[0] if self.values else "").strip()
-
-        if action == "transfer":
-            return await _run_ticket_panel_action(interaction, lambda: _action_transfer(interaction), "transfer ticket")
-        if action == "priority":
-            return await _run_ticket_panel_action(interaction, lambda: _action_set_priority(interaction), "set priority")
-        if action == "add_note":
-            return await _run_ticket_panel_action(interaction, lambda: _action_add_note(interaction), "add internal note")
-        if action == "view_notes":
-            return await _run_ticket_panel_action(interaction, lambda: _action_view_notes(interaction), "view internal notes")
-        if action == "list_macros":
-            return await _run_ticket_panel_action(interaction, lambda: _action_list_macros(interaction), "list macros")
-        if action == "use_macro":
-            return await _run_ticket_panel_action(interaction, lambda: _action_use_macro(interaction), "send macro")
-
-        return await _safe_followup(interaction, "That ticket action is not available.")
+        await interaction.response.send_message(
+            "Choose a ticket action\u2026",
+            ephemeral=True,
+            view=TicketMoreActionsPickerView(),
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
 
 
 class TicketChannelActionsView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
-        self.add_item(TicketActionSelect())
+        self.add_item(TicketMoreActionsOpenButton())
 
     @discord.ui.button(
         label="Claim",
@@ -3094,9 +3164,8 @@ __all__ = [
     "TransferTicketModal",
     "SetPriorityModal",
     "AddInternalNoteModal",
-    "MacroSelect",
     "MacroPickerView",
-    "TicketActionSelect",
+    "TicketMoreActionsPickerView",
     "TicketChannelActionsView",
     "LegacyTicketChannelCompatibilityView",
     "TicketPanelView",

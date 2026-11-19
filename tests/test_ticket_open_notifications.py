@@ -176,8 +176,8 @@ def test_all_creation_paths_alert_once_without_reopen_or_reuse() -> None:
 def test_alerts_are_managed_in_existing_mobile_ticket_operations() -> None:
     assert 'label="Staff Alerts"' in CENTER
     assert "class TicketNotificationSettingsView(_OwnedView):" in CENTER
-    assert "class TicketNotificationRoleSelect(discord.ui.RoleSelect):" in CENTER
-    assert "class TicketNotificationChannelSelect(discord.ui.ChannelSelect):" in CENTER
-    assert "class TicketNotificationCategorySelect(discord.ui.Select):" in CENTER
+    assert "class TicketNotificationRoleSelect(DankRoleSelect):" in CENTER
+    assert "class TicketNotificationChannelOpenButton(_PickerOpenButton):" in CENTER
+    assert "class TicketNotificationCategoryOpenButton(_PickerOpenButton):" in CENTER
     assert "_require_ticket_notification_manager" in CENTER
     assert "staff_alert_channel_id" in CENTER

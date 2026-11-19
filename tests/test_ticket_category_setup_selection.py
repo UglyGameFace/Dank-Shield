@@ -374,9 +374,10 @@ def test_managed_multi_select_defaults_match_saved_selection() -> None:
         reason="",
         version=categories.CATEGORY_SETUP_VERSION,
     )
-    select = setup_guard.ManagedCategorySelection(state)
-    defaults = {option.value for option in select.options if option.default}
+    picker = setup_guard.ManagedCategorySelectionView(state, author_id=1)
+    defaults = {choice.value for choice in picker.choices if choice.default}
     assert defaults == {"report", "support"}
+    select = picker.children[0]
     assert select.min_values == 1
     assert select.max_values == len(categories.CATEGORY_CATALOG)
 
@@ -571,12 +572,13 @@ def test_owner_setup_exposes_full_catalog_and_optional_presets() -> None:
     assert "dank_ticket_category_setup:preset_service_gaming" in custom_ids
     assert "dank_ticket_category_setup:preset_all" in custom_ids
 
-    selector = next(child for child in view.children if isinstance(child, setup_guard.ManagedCategorySelection))
-    assert len(selector.options) == len(categories.CATEGORY_CATALOG) == 16
-    assert {option.value for option in selector.options} == {
+    opener = next(child for child in view.children if isinstance(child, setup_guard.ManagedCategorySelectionOpenButton))
+    picker = setup_guard.ManagedCategorySelectionView(opener.state, author_id=1)
+    assert len(picker.choices) == len(categories.CATEGORY_CATALOG) == 16
+    assert {choice.value for choice in picker.choices} == {
         row["category_key"] for row in categories.CATEGORY_CATALOG
     }
-    assert {option.value for option in selector.options if option.default} == {"support"}
+    assert {choice.value for choice in picker.choices if choice.default} == {"support"}
 
 
 def test_setup_presets_are_catalog_subsets_not_global_forcing() -> None:
@@ -820,11 +822,12 @@ def test_ticket_context_reuses_canonical_selector_with_ticket_navigation() -> No
     selectors = [
         child
         for child in view.children
-        if isinstance(child, setup_guard.ManagedCategorySelection)
+        if isinstance(child, setup_guard.ManagedCategorySelectionOpenButton)
     ]
     assert len(selectors) == 1
     assert selectors[0].context == "tickets"
-    defaults = {option.value for option in selectors[0].options if option.default}
+    picker = setup_guard.ManagedCategorySelectionView(selectors[0].state, author_id=1, context="tickets")
+    defaults = {choice.value for choice in picker.choices if choice.default}
     assert defaults == {"support"}
 
 

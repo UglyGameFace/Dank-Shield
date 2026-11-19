@@ -20,6 +20,7 @@ import discord
 from discord import app_commands
 
 from .common import _staff_check, reply_once
+from ..ui.picker import DankPickerView, chunk_choices, make_choice
 from stoney_verify.panel_lifecycle import public_panel_lifecycle_text
 from stoney_verify.tickets_new import managed_category_service as managed_categories
 from stoney_verify.tickets_new.counter_allocator import reserve_next_ticket_number as reserve_persistent_ticket_number
@@ -837,28 +838,103 @@ class TicketConfirmView(discord.ui.View):
         await _edit_or_reply(i, content="Choose a ticket type.", embed=embed, view=TicketSelectView(self.rows, self.owner_id, self.session_id))
 
 
-class TicketSelect(discord.ui.Select):
-    def __init__(self, rows: List[Dict[str, Any]], owner_id: int, session_id: str) -> None:
+async def _apply_ticket_type_pick(
+    i: discord.Interaction,
+    rows: List[Dict[str, Any]],
+    owner_id: int,
+    session_id: str,
+    slug_value: str,
+) -> None:
+    """Apply one picked ticket type exactly as the old TicketSelect did.
+
+    Shared by the house picker below and by the restart-recovery runtime
+    in ``ticket_panel_runtime`` (which defers the interaction, reloads
+    the rows, validates the slug, then delegates here).
+    """
+    guild = i.guild
+    member = _member_from_interaction(i)
+    if guild is None or member is None or int(member.id) != int(owner_id) or not _menu_session_current(guild.id, member.id, session_id):
+        return await _stale_ticket_menu(i)
+    slug = _safe_str(slug_value, "support")
+    row = next((r for r in rows if _row_slug(r) == slug), {"slug": slug, "name": "Support"})
+    _log(f"ticket type selected guild={guild.id} user={member.id} category={_row_slug(row)}")
+    await _edit_or_reply(i, content="Confirm this ticket type.", embed=_category_embed(row), view=TicketConfirmView(rows, row, int(owner_id), session_id))
+
+
+class TicketSelectView(DankPickerView):
+    """House picker for the member-facing Create Ticket type menu.
+
+    Class C fit: this menu belongs to whichever member opened it, but
+    the binding is the per-member menu session validated inside
+    :func:`_apply_ticket_type_pick` — so the picker itself is
+    ``allow_anyone`` and the session check stays the authority, exactly
+    as with the previous raw select. The stable custom_id plus the
+    unchanged message content/embed title keep the restart-recovery
+    listener in ``ticket_panel_runtime`` able to find and re-drive a
+    press whose temporary view was lost. Category lists longer than
+    Discord's 25-option limit page with chunk_choices instead of the
+    old silent ``rows[:25]`` truncation.
+    """
+
+    def __init__(self, rows: List[Dict[str, Any]], owner_id: int, session_id: str, *, page: int = 0) -> None:
         self.rows = rows
         self.owner_id = int(owner_id)
         self.session_id = str(session_id)
-        super().__init__(placeholder="Choose a ticket type", min_values=1, max_values=1, options=[discord.SelectOption(label=_row_name(r), value=_row_slug(r), description=_row_desc(r), emoji="🎫") for r in rows[:25]])
+        all_choices = [
+            make_choice(_row_name(r), _row_slug(r), description=_row_desc(r), emoji="\U0001f3ab")
+            for r in rows
+        ]
+        pages = chunk_choices(all_choices) or [[]]
+        page = max(0, min(int(page), len(pages) - 1))
+        self._all_choices = all_choices
+        self.page = page
+        self.pages = len(pages)
 
-    async def callback(self, i: discord.Interaction) -> None:
-        guild = i.guild
-        member = _member_from_interaction(i)
-        if guild is None or member is None or int(member.id) != self.owner_id or not _menu_session_current(guild.id, member.id, self.session_id):
-            return await _stale_ticket_menu(i)
-        slug = _safe_str(self.values[0], "support")
-        row = next((r for r in self.rows if _row_slug(r) == slug), {"slug": slug, "name": "Support"})
-        _log(f"ticket type selected guild={guild.id} user={member.id} category={_row_slug(row)}")
-        await _edit_or_reply(i, content="Confirm this ticket type.", embed=_category_embed(row), view=TicketConfirmView(self.rows, row, self.owner_id, self.session_id))
+        async def on_pick(interaction: discord.Interaction, value: str) -> None:
+            await _apply_ticket_type_pick(interaction, rows, self.owner_id, self.session_id, value)
+
+        super().__init__(
+            author_id=self.owner_id,
+            choices=pages[page],
+            on_pick=on_pick,
+            custom_id=(
+                f"dank:tickets:panel_clean:ticket_type:v1:{page}"
+                if len(pages) > 1 else "dank:tickets:panel_clean:ticket_type:v1"
+            ),
+            placeholder="Choose a ticket type",
+            title="Create Ticket",
+            timeout=_MENU_TTL_SECONDS,
+            allow_anyone=True,
+        )
+        if len(pages) > 1:
+            self.add_item(_TicketTypePageButton(delta=-1, disabled=page <= 0))
+            self.add_item(_TicketTypePageButton(delta=1, disabled=page >= len(pages) - 1))
+
+    def _for_page(self, page: int) -> "TicketSelectView":
+        return TicketSelectView(self.rows, self.owner_id, self.session_id, page=page)
 
 
-class TicketSelectView(discord.ui.View):
-    def __init__(self, rows: List[Dict[str, Any]], owner_id: int, session_id: str) -> None:
-        super().__init__(timeout=_MENU_TTL_SECONDS)
-        self.add_item(TicketSelect(rows, owner_id, session_id))
+class _TicketTypePageButton(discord.ui.Button):
+    def __init__(self, *, delta: int, disabled: bool) -> None:
+        super().__init__(
+            label="Previous" if delta < 0 else "Next",
+            emoji="\u25c0\ufe0f" if delta < 0 else "\u25b6\ufe0f",
+            style=discord.ButtonStyle.secondary,
+            custom_id=(
+                "dank:tickets:panel_clean:type:prev" if delta < 0
+                else "dank:tickets:panel_clean:type:next"
+            ),
+            row=2,
+            disabled=bool(disabled),
+        )
+        self.delta = int(delta)
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        view = self.view
+        if not isinstance(view, TicketSelectView):
+            return
+        page = max(0, min(view.page + self.delta, view.pages - 1))
+        await interaction.response.edit_message(view=view._for_page(page))
 
 
 async def _handle_panel_button_core(i: discord.Interaction) -> None:

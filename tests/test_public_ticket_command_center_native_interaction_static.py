@@ -8,7 +8,7 @@ COMMON = Path("stoney_verify/commands_ext/common.py").read_text(encoding="utf-8"
 
 def _runner_region() -> str:
     start = CENTER.index("async def _run_ticket_command(")
-    end = CENTER.index("class TicketChannelPicker", start)
+    end = CENTER.index("class TicketChannelPickOpenButton", start)
     return CENTER[start:end]
 
 

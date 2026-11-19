@@ -13,6 +13,7 @@ from typing import Any, Optional
 import discord
 
 from ..ui.current_channel import current_text_channel
+from ..ui.picker import DankPickerView, DankRoleSelect, DankUserSelect, chunk_choices, make_choice
 
 from ..panel_lifecycle import PRIVATE_MENU_TTL_SECONDS
 from discord import app_commands
@@ -114,6 +115,179 @@ def _current_or_selected(interaction: discord.Interaction, selected_id: int = 0)
     if selected is not None:
         return selected
     return interaction.channel if isinstance(interaction.channel, discord.TextChannel) else None
+
+
+
+def _channel_choices(guild: Optional[discord.Guild]) -> list:
+    """Every text channel as a house-picker choice, in server order."""
+    choices = []
+    if guild is None:
+        return choices
+    for channel in guild.text_channels:
+        category = getattr(channel, "category", None)
+        choices.append(make_choice(
+            f"#{channel.name}", str(int(channel.id)),
+            description=str(getattr(category, "name", "") or "No category"),
+        ))
+    return choices
+
+
+class _TicketPickerView(DankPickerView):
+    """Paged house picker bound to one ticket staff panel owner.
+
+    Pages long choice lists with chunk_choices so every option stays
+    reachable past Discord's 25-option select limit. Keeps the staff
+    panels' owner gate and denial wording exactly.
+    """
+
+    def __init__(
+        self,
+        owner_id: int,
+        *,
+        choices: Any,
+        on_pick: Any,
+        custom_id: str,
+        placeholder: str,
+        title: str,
+        on_home: Any = None,
+        home_label: str = "Back",
+        page: int = 0,
+    ) -> None:
+        all_choices = list(choices or [])
+        pages = chunk_choices(all_choices) or [[]]
+        page = max(0, min(int(page), len(pages) - 1))
+        super().__init__(
+            author_id=int(owner_id),
+            choices=pages[page],
+            on_pick=on_pick,
+            custom_id=f"{custom_id}:{page}" if len(pages) > 1 else custom_id,
+            placeholder=(
+                f"{placeholder} \u2022 Page {page + 1}/{len(pages)}"
+                if len(pages) > 1 else placeholder
+            ),
+            title=title,
+            timeout=PRIVATE_MENU_TTL_SECONDS,
+            on_home=on_home,
+            home_label=home_label,
+        )
+        self.owner_id = int(owner_id)
+        self._all_choices = all_choices
+        self._picker_on_pick = on_pick
+        self._base_custom_id = custom_id
+        self._base_placeholder = placeholder
+        self._picker_title = title
+        self._picker_on_home = on_home
+        self._picker_home_label = home_label
+        self.page = page
+        self.pages = len(pages)
+        if len(pages) > 1:
+            self.add_item(_TicketPickerPageButton(delta=-1, disabled=page <= 0))
+            self.add_item(_TicketPickerPageButton(delta=1, disabled=page >= len(pages) - 1))
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if int(interaction.user.id) == self.owner_id:
+            return True
+        await _private(interaction, "\u274c Open your own ticket control panel to use these controls.")
+        return False
+
+    def _for_page(self, page: int) -> "_TicketPickerView":
+        return _TicketPickerView(
+            self.owner_id,
+            choices=self._all_choices,
+            on_pick=self._picker_on_pick,
+            custom_id=self._base_custom_id,
+            placeholder=self._base_placeholder,
+            title=self._picker_title,
+            on_home=self._picker_on_home,
+            home_label=self._picker_home_label,
+            page=page,
+        )
+
+
+class _TicketPickerPageButton(discord.ui.Button):
+    def __init__(self, *, delta: int, disabled: bool) -> None:
+        super().__init__(
+            label="Previous" if delta < 0 else "Next",
+            emoji="\u25c0\ufe0f" if delta < 0 else "\u25b6\ufe0f",
+            style=discord.ButtonStyle.secondary,
+            custom_id=(
+                "dank:ticket:picker:prev" if delta < 0
+                else "dank:ticket:picker:next"
+            ),
+            row=2,
+            disabled=bool(disabled),
+        )
+        self.delta = int(delta)
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        view = self.view
+        if not isinstance(view, _TicketPickerView) or not await view.interaction_check(interaction):
+            return
+        page = max(0, min(view.page + self.delta, view.pages - 1))
+        await interaction.response.edit_message(view=view._for_page(page))
+
+
+class _PickerOpenButton(discord.ui.Button):
+    """Swaps a staff panel for a house picker on the same message."""
+
+    def __init__(
+        self,
+        *,
+        label: str,
+        emoji: Optional[str],
+        custom_id: str,
+        row: int,
+        build: Any,
+        style: discord.ButtonStyle = discord.ButtonStyle.secondary,
+    ) -> None:
+        super().__init__(label=label, emoji=emoji, style=style, custom_id=custom_id, row=row)
+        self._build = build
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        host = self.view
+        if isinstance(host, _OwnedView) and not await host.interaction_check(interaction):
+            return
+        picker = self._build(interaction)
+        message = getattr(interaction, "message", None)
+        embeds = getattr(message, "embeds", None) if message is not None else None
+        await interaction.response.edit_message(
+            embed=embeds[0] if embeds else None,
+            view=picker,
+        )
+
+
+def _channel_picker(
+    owner_id: int,
+    *,
+    guild: Optional[discord.Guild],
+    custom_id: str,
+    placeholder: str,
+    title: str,
+    error_message: str,
+    on_channel: Any,
+    on_home: Any = None,
+) -> _TicketPickerView:
+    """House channel picker shared by the ticket staff panels."""
+
+    async def on_pick(interaction: discord.Interaction, value: str) -> None:
+        try:
+            channel_id = int(value)
+        except (TypeError, ValueError):
+            channel_id = 0
+        channel = _text_channel(interaction.guild, channel_id)
+        if channel is None:
+            return await _private(interaction, error_message)
+        await on_channel(interaction, channel)
+
+    return _TicketPickerView(
+        owner_id,
+        choices=_channel_choices(guild),
+        on_pick=on_pick,
+        custom_id=custom_id,
+        placeholder=placeholder,
+        title=title,
+        on_home=on_home,
+    )
 
 
 def _ticket_center_embed(channel: Optional[discord.TextChannel]) -> discord.Embed:
@@ -231,103 +405,163 @@ async def _run_ticket_command_action(
         await _private(interaction, f"❌ Ticket action **{name}** needs more information.")
 
 
-class TicketChannelPicker(discord.ui.ChannelSelect):
-    def __init__(self, parent: "TicketActionCenterView") -> None:
-        self.parent_view = parent
-        super().__init__(
-            placeholder="Optional: choose a different ticket channel…",
-            min_values=1,
-            max_values=1,
-            channel_types=[discord.ChannelType.text],
-            custom_id="dank:ticket:center:channel:v1",
-            row=0,
+async def _dispatch_ticket_action(
+    interaction: discord.Interaction,
+    parent: "TicketActionCenterView",
+    action: str,
+) -> None:
+    """Route one picked ticket action exactly as the old action select did."""
+    channel = parent.target(interaction)
+    if channel is None:
+        return await _private(interaction, "\u274c Run `/ticket` inside a ticket or choose a ticket channel first.")
+    if action in {"info", "claim", "unclaim", "lock", "unlock", "owner", "access"}:
+        return await _run_ticket_command(interaction, name=action, channel=channel)
+    if action in {"transfer", "add", "remove"}:
+        view = TicketMemberActionView(
+            owner_id=parent.owner_id,
+            channel_id=channel.id,
+            action=action,
         )
-
-    async def callback(self, interaction: discord.Interaction) -> None:
-        selected = self.values[0] if self.values else None
-        channel = interaction.guild.get_channel(int(getattr(selected, "id", 0) or 0))
-        if not isinstance(channel, discord.TextChannel):
-            return await _private(interaction, "❌ Choose a text channel from this server.")
-        self.parent_view.channel_id = int(channel.id)
-        await interaction.response.edit_message(
-            embed=_ticket_center_embed(channel),
-            view=self.parent_view,
-            allowed_mentions=discord.AllowedMentions.none(),
-        )
-
-
-class TicketActionSelect(discord.ui.Select):
-    def __init__(self, parent: "TicketActionCenterView") -> None:
-        self.parent_view = parent
-        options = [
-            discord.SelectOption(label="Ticket Info", value="info", emoji="ℹ️", description="Status, owner, assignment and ticket details"),
-            discord.SelectOption(label="Claim", value="claim", emoji="🎯", description="Claim this active ticket"),
-            discord.SelectOption(label="Unclaim", value="unclaim", emoji="↩️", description="Remove the current assignment"),
-            discord.SelectOption(label="Transfer", value="transfer", emoji="🔁", description="Choose another staff member"),
-            discord.SelectOption(label="Set Priority", value="priority", emoji="🚦", description="Low, Medium, High, or Urgent"),
-            discord.SelectOption(label="Close", value="close", emoji="🔒", description="Close/archive without deleting"),
-            discord.SelectOption(label="Reopen", value="reopen", emoji="🔓", description="Restore a closed ticket"),
-            discord.SelectOption(label="Post Transcript", value="transcript", emoji="🧾", description="Generate/post a transcript now"),
-            discord.SelectOption(label="Add Member Access", value="add", emoji="➕", description="Choose a member to add"),
-            discord.SelectOption(label="Remove Member Access", value="remove", emoji="➖", description="Choose a member to remove"),
-            discord.SelectOption(label="Rename", value="rename", emoji="✏️", description="Only where canonical numbering allows it"),
-            discord.SelectOption(label="Lock Owner Replies", value="lock", emoji="🔐", description="Keep ticket visible but stop owner replies"),
-            discord.SelectOption(label="Unlock Owner Replies", value="unlock", emoji="🔓", description="Restore owner replies on an open ticket"),
-            discord.SelectOption(label="Show Owner", value="owner", emoji="👑", description="Resolve the ticket owner"),
-            discord.SelectOption(label="Show Access", value="access", emoji="👥", description="Inspect explicit ticket access"),
-            discord.SelectOption(label="Delete Ticket", value="delete", emoji="🗑️", description="Transcript-first guarded deletion"),
-        ]
-        super().__init__(
-            placeholder="Choose a ticket action…",
-            min_values=1,
-            max_values=1,
-            options=options,
-            custom_id="dank:ticket:center:action:v1",
-            row=1,
-        )
-
-    async def callback(self, interaction: discord.Interaction) -> None:
-        action = str(self.values[0] if self.values else "").strip()
-        channel = self.parent_view.target(interaction)
-        if channel is None:
-            return await _private(interaction, "❌ Run `/ticket` inside a ticket or choose a ticket channel first.")
-        if action in {"info", "claim", "unclaim", "lock", "unlock", "owner", "access"}:
-            return await _run_ticket_command(interaction, name=action, channel=channel)
-        if action in {"transfer", "add", "remove"}:
-            view = TicketMemberActionView(
-                owner_id=self.parent_view.owner_id,
+        return await _replace(interaction, embed=view.embed(interaction.guild), view=view)
+    if action == "priority":
+        view = TicketPriorityView(parent.owner_id, channel.id)
+        return await _replace(interaction, embed=view.embed(interaction.guild), view=view)
+    if action in {"close", "reopen", "transcript"}:
+        return await interaction.response.send_modal(
+            TicketReasonModal(
+                owner_id=parent.owner_id,
                 channel_id=channel.id,
                 action=action,
             )
-            return await _replace(interaction, embed=view.embed(interaction.guild), view=view)
-        if action == "priority":
-            view = TicketPriorityView(self.parent_view.owner_id, channel.id)
-            return await _replace(interaction, embed=view.embed(interaction.guild), view=view)
-        if action in {"close", "reopen", "transcript"}:
-            return await interaction.response.send_modal(
-                TicketReasonModal(
-                    owner_id=self.parent_view.owner_id,
-                    channel_id=channel.id,
-                    action=action,
-                )
+        )
+    if action == "rename":
+        return await interaction.response.send_modal(
+            TicketRenameModal(parent.owner_id, channel.id)
+        )
+    if action == "delete":
+        return await interaction.response.send_modal(
+            TicketDeleteModal(parent.owner_id, channel.id)
+        )
+    await _private(interaction, "\u274c That ticket action is unavailable.")
+
+
+_TICKET_ACTION_OPTIONS = (
+    ("Ticket Info", "info", "\u2139\ufe0f", "Status, owner, assignment and ticket details"),
+    ("Claim", "claim", "\U0001f3af", "Claim this active ticket"),
+    ("Unclaim", "unclaim", "\u21a9\ufe0f", "Remove the current assignment"),
+    ("Transfer", "transfer", "\U0001f501", "Choose another staff member"),
+    ("Set Priority", "priority", "\U0001f6a6", "Low, Medium, High, or Urgent"),
+    ("Close", "close", "\U0001f512", "Close/archive without deleting"),
+    ("Reopen", "reopen", "\U0001f513", "Restore a closed ticket"),
+    ("Post Transcript", "transcript", "\U0001f9fe", "Generate/post a transcript now"),
+    ("Add Member Access", "add", "\u2795", "Choose a member to add"),
+    ("Remove Member Access", "remove", "\u2796", "Choose a member to remove"),
+    ("Rename", "rename", "\u270f\ufe0f", "Only where canonical numbering allows it"),
+    ("Lock Owner Replies", "lock", "\U0001f510", "Keep ticket visible but stop owner replies"),
+    ("Unlock Owner Replies", "unlock", "\U0001f513", "Restore owner replies on an open ticket"),
+    ("Show Owner", "owner", "\U0001f451", "Resolve the ticket owner"),
+    ("Show Access", "access", "\U0001f465", "Inspect explicit ticket access"),
+    ("Delete Ticket", "delete", "\U0001f5d1\ufe0f", "Transcript-first guarded deletion"),
+)
+
+
+class TicketChannelPickOpenButton(discord.ui.Button):
+    """Opens the house channel picker for the Current Ticket center.
+
+    The pick behavior lives in :meth:`_apply_pick` so the contextual
+    permission-repair adoption can rebuild its own center view after a
+    pick without replacing the picker mechanics.
+    """
+
+    def __init__(self, parent: "TicketActionCenterView") -> None:
+        super().__init__(
+            label="Choose Ticket Channel",
+            emoji="\U0001f9ed",
+            style=discord.ButtonStyle.secondary,
+            custom_id="dank:ticket:center:channel:open:v1",
+            row=0,
+        )
+        self.parent_view = parent
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        if not await self.parent_view.interaction_check(interaction):
+            return
+        message = getattr(interaction, "message", None)
+        embeds = getattr(message, "embeds", None) if message is not None else None
+        await interaction.response.edit_message(
+            embed=embeds[0] if embeds else None,
+            view=self.build_picker(interaction),
+        )
+
+    def build_picker(self, interaction: discord.Interaction) -> _TicketPickerView:
+        parent = self.parent_view
+
+        async def on_home(home_interaction: discord.Interaction) -> None:
+            channel = parent.target(home_interaction)
+            await _replace(home_interaction, embed=_ticket_center_embed(channel), view=parent)
+
+        return _channel_picker(
+            parent.owner_id,
+            guild=interaction.guild,
+            custom_id="dank:ticket:center:channel:v1",
+            placeholder="Optional: choose a different ticket channel\u2026",
+            title="Choose a Ticket Channel",
+            error_message="\u274c Choose a text channel from this server.",
+            on_channel=self._apply_pick,
+            on_home=on_home,
+        )
+
+    async def _apply_pick(self, interaction: discord.Interaction, channel: discord.TextChannel) -> None:
+        self.parent_view.channel_id = int(channel.id)
+        await _replace(
+            interaction,
+            embed=_ticket_center_embed(channel),
+            view=self.parent_view,
+        )
+
+
+class TicketActionPickOpenButton(_PickerOpenButton):
+    """Opens the house picker listing the Current Ticket actions."""
+
+    def __init__(self, parent: "TicketActionCenterView") -> None:
+        self.parent_view = parent
+
+        def build(interaction: discord.Interaction) -> _TicketPickerView:
+            async def on_pick(pick_interaction: discord.Interaction, value: str) -> None:
+                await _dispatch_ticket_action(pick_interaction, parent, value)
+
+            async def on_home(home_interaction: discord.Interaction) -> None:
+                channel = parent.target(home_interaction)
+                await _replace(home_interaction, embed=_ticket_center_embed(channel), view=parent)
+
+            return _TicketPickerView(
+                parent.owner_id,
+                choices=[
+                    make_choice(label, value, description=description, emoji=emoji)
+                    for label, value, emoji, description in _TICKET_ACTION_OPTIONS
+                ],
+                on_pick=on_pick,
+                custom_id="dank:ticket:center:action:v1",
+                placeholder="Choose a ticket action\u2026",
+                title="Choose a Ticket Action",
+                on_home=on_home,
             )
-        if action == "rename":
-            return await interaction.response.send_modal(
-                TicketRenameModal(self.parent_view.owner_id, channel.id)
-            )
-        if action == "delete":
-            return await interaction.response.send_modal(
-                TicketDeleteModal(self.parent_view.owner_id, channel.id)
-            )
-        await _private(interaction, "❌ That ticket action is unavailable.")
+
+        super().__init__(
+            label="Choose Ticket Action",
+            emoji="\U0001f3ab",
+            custom_id="dank:ticket:center:action:open:v1",
+            row=0,
+            build=build,
+        )
 
 
 class TicketActionCenterView(_OwnedView):
     def __init__(self, owner_id: int, *, channel_id: int = 0) -> None:
         self.channel_id = int(channel_id or 0)
         super().__init__(owner_id)
-        self.add_item(TicketChannelPicker(self))
-        self.add_item(TicketActionSelect(self))
+        self.add_item(TicketChannelPickOpenButton(self))
+        self.add_item(TicketActionPickOpenButton(self))
 
     def target(self, interaction: discord.Interaction) -> Optional[discord.TextChannel]:
         return _current_or_selected(interaction, self.channel_id)
@@ -391,37 +625,36 @@ class TicketActionCenterView(_OwnedView):
         )
 
 
-class TicketMemberSelect(discord.ui.UserSelect):
-    def __init__(self, parent: "TicketMemberActionView") -> None:
-        self.parent_view = parent
-        labels = {"transfer": "staff member", "add": "member to add", "remove": "member to remove"}
-        super().__init__(
-            placeholder=f"Choose the {labels.get(parent.action, 'member')}…",
-            min_values=1,
-            max_values=1,
-            custom_id=f"dank:ticket:center:member:{parent.action}:v1",
-            row=0,
-        )
+def _ticket_member_select(parent: "TicketMemberActionView") -> DankUserSelect:
+    """House user picker for transfer / add / remove member actions."""
+    labels = {"transfer": "staff member", "add": "member to add", "remove": "member to remove"}
 
-    async def callback(self, interaction: discord.Interaction) -> None:
-        selected = self.values[0] if self.values else None
-        member = interaction.guild.get_member(int(getattr(selected, "id", 0) or 0))
-        channel = _text_channel(interaction.guild, self.parent_view.channel_id)
+    async def on_pick(interaction: discord.Interaction, user: Any) -> None:
+        guild = interaction.guild
+        member = guild.get_member(int(getattr(user, "id", 0) or 0)) if guild is not None else None
+        channel = _text_channel(guild, parent.channel_id)
         if not isinstance(member, discord.Member) or channel is None:
-            return await _private(interaction, "❌ The selected member or ticket is no longer available.")
+            return await _private(interaction, "\u274c The selected member or ticket is no longer available.")
         if not await _require_staff(interaction):
             return
         if not await _authorize_ticket_command(
             interaction,
-            command_name=self.parent_view.action,
+            command_name=parent.action,
             channel=channel,
         ):
             return
         from .public_ticket_group import ticket_group
-        command = ticket_group.get_command(self.parent_view.action)
+        command = ticket_group.get_command(parent.action)
         if command is None:
-            return await _private(interaction, "❌ That ticket action is unavailable.")
+            return await _private(interaction, "\u274c That ticket action is unavailable.")
         await _invoke(command, interaction, member=member, channel=channel)
+
+    return DankUserSelect(
+        author_id=parent.owner_id,
+        on_pick=on_pick,
+        placeholder=f"Choose the {labels.get(parent.action, 'member')}\u2026",
+        row=0,
+    )
 
 
 class TicketMemberActionView(_OwnedView):
@@ -429,7 +662,7 @@ class TicketMemberActionView(_OwnedView):
         self.channel_id = int(channel_id)
         self.action = str(action)
         super().__init__(owner_id)
-        self.add_item(TicketMemberSelect(self))
+        self.add_item(_ticket_member_select(self))
 
     def embed(self, guild: Optional[discord.Guild]) -> discord.Embed:
         channel = _text_channel(guild, self.channel_id)
@@ -448,50 +681,51 @@ class TicketMemberActionView(_OwnedView):
         await _replace(interaction, embed=_ticket_center_embed(channel), view=view)
 
 
-class TicketPrioritySelect(discord.ui.Select):
-    def __init__(self, parent: "TicketPriorityView") -> None:
-        self.parent_view = parent
-        super().__init__(
-            placeholder="Choose ticket priority…",
-            min_values=1,
-            max_values=1,
-            options=[
-                discord.SelectOption(label="Low", value="low", emoji="🟢"),
-                discord.SelectOption(label="Medium", value="medium", emoji="🔵"),
-                discord.SelectOption(label="High", value="high", emoji="🟠"),
-                discord.SelectOption(label="Urgent", value="urgent", emoji="🔴"),
-            ],
-            custom_id="dank:ticket:center:priority:v1",
-            row=0,
-        )
+class TicketPriorityView(_TicketPickerView):
+    """House picker for the ticket priority flow."""
 
-    async def callback(self, interaction: discord.Interaction) -> None:
-        channel = _text_channel(interaction.guild, self.parent_view.channel_id)
-        if channel is None:
-            return await _private(interaction, "❌ That ticket channel no longer exists.")
-        if not await _require_staff(interaction):
-            return
-        if not await _authorize_ticket_command(interaction, command_name="priority", channel=channel):
-            return
-        from .public_ticket_group import ticket_group
-        command = ticket_group.get_command("priority")
-        if command is None:
-            return await _private(interaction, "❌ Ticket priority is unavailable.")
-        value = str(self.values[0])
-        choice = app_commands.Choice(name=value.title(), value=value)
-        await _invoke(command, interaction, priority=choice, channel=channel)
-
-
-class TicketPriorityView(_OwnedView):
     def __init__(self, owner_id: int, channel_id: int) -> None:
         self.channel_id = int(channel_id)
-        super().__init__(owner_id)
-        self.add_item(TicketPrioritySelect(self))
+
+        async def on_pick(interaction: discord.Interaction, value: str) -> None:
+            channel = _text_channel(interaction.guild, self.channel_id)
+            if channel is None:
+                return await _private(interaction, "\u274c That ticket channel no longer exists.")
+            if not await _require_staff(interaction):
+                return
+            if not await _authorize_ticket_command(interaction, command_name="priority", channel=channel):
+                return
+            from .public_ticket_group import ticket_group
+            command = ticket_group.get_command("priority")
+            if command is None:
+                return await _private(interaction, "\u274c Ticket priority is unavailable.")
+            choice = app_commands.Choice(name=value.title(), value=value)
+            await _invoke(command, interaction, priority=choice, channel=channel)
+
+        async def on_home(interaction: discord.Interaction) -> None:
+            channel = _text_channel(interaction.guild, self.channel_id)
+            view = TicketActionCenterView(self.owner_id, channel_id=self.channel_id)
+            await _replace(interaction, embed=_ticket_center_embed(channel), view=view)
+
+        super().__init__(
+            owner_id,
+            choices=[
+                make_choice("Low", "low", emoji="\U0001f7e2"),
+                make_choice("Medium", "medium", emoji="\U0001f535"),
+                make_choice("High", "high", emoji="\U0001f7e0"),
+                make_choice("Urgent", "urgent", emoji="\U0001f534"),
+            ],
+            on_pick=on_pick,
+            custom_id="dank:ticket:center:priority:v1",
+            placeholder="Choose ticket priority\u2026",
+            title="Ticket Priority",
+            on_home=on_home,
+        )
 
     def embed(self, guild: Optional[discord.Guild]) -> discord.Embed:
         channel = _text_channel(guild, self.channel_id)
         return discord.Embed(
-            title="🚦 Ticket Priority",
+            title="\U0001f6a6 Ticket Priority",
             description=f"Target: {channel.mention if channel else '`missing`'}\nChoose the new priority.",
             color=discord.Color.blurple(),
         )
@@ -612,28 +846,28 @@ async def _run_queue(interaction: discord.Interaction, name: str) -> None:
     await _invoke(command, interaction)
 
 
-class TicketHistoryUserSelect(discord.ui.UserSelect):
-    def __init__(self) -> None:
-        super().__init__(
-            placeholder="User ticket history…",
-            min_values=1,
-            max_values=1,
-            custom_id="dank:tickets:center:user_history:v1",
-            row=2,
-        )
+def _history_user_select(owner_id: int) -> DankUserSelect:
+    """House user picker for one member's ticket history lookup."""
 
-    async def callback(self, interaction: discord.Interaction) -> None:
+    async def on_pick(interaction: discord.Interaction, user: Any) -> None:
         if not await _require_staff(interaction):
             return
-        selected = self.values[0] if self.values else None
-        member = interaction.guild.get_member(int(getattr(selected, "id", 0) or 0))
+        guild = interaction.guild
+        member = guild.get_member(int(getattr(user, "id", 0) or 0)) if guild is not None else None
         if not isinstance(member, discord.Member):
-            return await _private(interaction, "❌ That user is not currently a server member.")
+            return await _private(interaction, "\u274c That user is not currently a server member.")
         from .public_tickets_group import tickets_group
         command = tickets_group.get_command("for-user")
         if command is None:
-            return await _private(interaction, "❌ User ticket history is unavailable.")
+            return await _private(interaction, "\u274c User ticket history is unavailable.")
         await _invoke(command, interaction, member=member)
+
+    return DankUserSelect(
+        author_id=int(owner_id),
+        on_pick=on_pick,
+        placeholder="User ticket history\u2026",
+        row=1,
+    )
 
 
 _TICKET_OPERATIONS_SECTIONS = {
@@ -642,29 +876,49 @@ _TICKET_OPERATIONS_SECTIONS = {
 }
 
 
-class TicketOperationsSectionSelect(discord.ui.Select):
+class TicketOperationsSectionOpenButton(_PickerOpenButton):
+    """Opens the house picker for switching Ticket Operations sections."""
+
     def __init__(self, owner_id: int, section: str) -> None:
         self.owner_id = int(owner_id)
-        super().__init__(
-            placeholder="Choose ticket task",
-            options=[
-                discord.SelectOption(
-                    label=label, value=key, default=key == section,
-                )
-                for key, label in (
-                    ("queues", "Review Tickets"),
-                    ("setup", "Manage Ticket Settings"),
-                )
-            ],
-            row=0, custom_id="dank:tickets:operations:section:v2",
-        )
+        self.section = section
 
-    async def callback(self, interaction: discord.Interaction) -> None:
-        if not await _require_staff(interaction):
-            return
-        await _replace(
-            interaction, embed=_operations_embed(section=self.values[0]),
-            view=TicketOperationsView(self.owner_id, section=self.values[0]),
+        def build(interaction: discord.Interaction) -> _TicketPickerView:
+            async def on_pick(pick_interaction: discord.Interaction, value: str) -> None:
+                if not await _require_staff(pick_interaction):
+                    return
+                await _replace(
+                    pick_interaction,
+                    embed=_operations_embed(section=value),
+                    view=TicketOperationsView(self.owner_id, section=value),
+                )
+
+            async def on_home(home_interaction: discord.Interaction) -> None:
+                await _replace(
+                    home_interaction,
+                    embed=_operations_embed(section=self.section),
+                    view=TicketOperationsView(self.owner_id, section=self.section),
+                )
+
+            return _TicketPickerView(
+                self.owner_id,
+                choices=[
+                    make_choice("Review Tickets", "queues", default=self.section == "queues"),
+                    make_choice("Manage Ticket Settings", "setup", default=self.section == "setup"),
+                ],
+                on_pick=on_pick,
+                custom_id="dank:tickets:operations:section:v2",
+                placeholder="Choose ticket task",
+                title="Ticket Operations",
+                on_home=on_home,
+            )
+
+        super().__init__(
+            label="Switch Section",
+            emoji="\U0001f9ed",
+            custom_id="dank:tickets:operations:section:open:v1",
+            row=0,
+            build=build,
         )
 
 
@@ -674,11 +928,9 @@ class TicketOperationsView(_OwnedView):
         self.section = section if section in _TICKET_OPERATIONS_SECTIONS else "queues"
         existing = {str(getattr(item, "label", "")): item for item in self.children}
         self.clear_items()
-        self.add_item(TicketOperationsSectionSelect(owner_id, self.section))
+        self.add_item(TicketOperationsSectionOpenButton(owner_id, self.section))
         if self.section == "queues":
-            history = TicketHistoryUserSelect()
-            history.row = 1
-            self.add_item(history)
+            self.add_item(_history_user_select(owner_id))
         for index, label in enumerate(_TICKET_OPERATIONS_SECTIONS[self.section]):
             item = existing[label]
             item.row = (2 if self.section == "queues" else 1) + index // 4
@@ -783,35 +1035,58 @@ async def _require_ticket_notification_manager(interaction: discord.Interaction)
     return False
 
 
-class TicketNotificationCategorySelect(discord.ui.Select):
+class TicketNotificationCategoryOpenButton(_PickerOpenButton):
+    """Opens the house picker for the staff-alert category being edited."""
+
     def __init__(self, parent: "TicketNotificationSettingsView") -> None:
         self.parent_view = parent
-        options = [
-            discord.SelectOption(label="All tickets (default)", value="*", description="Fallback staff roles"),
-        ]
-        for slug, name in parent.categories[:23]:
-            options.append(discord.SelectOption(label=name[:100], value=slug))
-        options.append(discord.SelectOption(label="Other custom category…", value=":custom:", emoji="✏️"))
-        super().__init__(
-            placeholder="Choose a category before selecting its staff roles…",
-            min_values=1, max_values=1, options=options,
-            custom_id="dank:tickets:notifications:category:v1", row=0,
-        )
 
-    async def callback(self, interaction: discord.Interaction) -> None:
-        if not await _require_ticket_notification_manager(interaction):
-            return
-        value = str(self.values[0])
-        if value == ":custom:":
-            return await interaction.response.send_modal(
-                TicketNotificationCustomCategoryModal(self.parent_view)
+        def build(interaction: discord.Interaction) -> _TicketPickerView:
+            choices = [
+                make_choice("All tickets (default)", "*", description="Fallback staff roles"),
+            ]
+            for slug, name in parent.categories:
+                choices.append(make_choice(str(name)[:100], slug))
+            choices.append(make_choice("Other custom category\u2026", ":custom:", emoji="\u270f\ufe0f"))
+
+            async def on_pick(pick_interaction: discord.Interaction, value: str) -> None:
+                if not await _require_ticket_notification_manager(pick_interaction):
+                    return
+                if value == ":custom:":
+                    return await pick_interaction.response.send_modal(
+                        TicketNotificationCustomCategoryModal(parent)
+                    )
+                parent.category = value
+                await pick_interaction.response.defer()
+                await _replace(
+                    pick_interaction,
+                    embed=await parent.embed(pick_interaction.guild),
+                    view=parent,
+                )
+
+            async def on_home(home_interaction: discord.Interaction) -> None:
+                await _replace(
+                    home_interaction,
+                    embed=await parent.embed(home_interaction.guild),
+                    view=parent,
+                )
+
+            return _TicketPickerView(
+                parent.owner_id,
+                choices=choices,
+                on_pick=on_pick,
+                custom_id="dank:tickets:notifications:category:v1",
+                placeholder="Choose a category before selecting its staff roles\u2026",
+                title="Ticket Alert Category",
+                on_home=on_home,
             )
-        self.parent_view.category = value
-        await interaction.response.defer()
-        await _replace(
-            interaction,
-            embed=await self.parent_view.embed(interaction.guild),
-            view=self.parent_view,
+
+        super().__init__(
+            label="Choose Category",
+            emoji="\U0001f5c2\ufe0f",
+            custom_id="dank:tickets:notifications:category:open:v1",
+            row=0,
+            build=build,
         )
 
 
@@ -836,13 +1111,29 @@ class TicketNotificationCustomCategoryModal(discord.ui.Modal, title="Custom Tick
         )
 
 
-class TicketNotificationRoleSelect(discord.ui.RoleSelect):
+async def _ignore_single_role_pick(interaction: discord.Interaction, role: Any) -> None:
+    """Unused single-role route; the subclass below handles multi-picks."""
+    return None
+
+
+class TicketNotificationRoleSelect(DankRoleSelect):
+    """House role picker keeping the multi-role (up to 5) save contract.
+
+    DankRoleSelect's own callback only forwards the first value, so this
+    subclass keeps the framework wrapper (owner check contract, house
+    wording) and overrides the callback to save every picked role,
+    exactly as the previous raw RoleSelect did.
+    """
+
     def __init__(self, parent: "TicketNotificationSettingsView") -> None:
         self.parent_view = parent
         super().__init__(
-            placeholder="Choose up to 5 staff roles to ping…",
-            min_values=1, max_values=5,
-            custom_id="dank:tickets:notifications:roles:v1", row=1,
+            author_id=int(parent.owner_id),
+            on_pick=_ignore_single_role_pick,
+            placeholder="Choose up to 5 staff roles to ping\u2026",
+            min_values=1,
+            max_values=5,
+            row=1,
         )
 
     async def callback(self, interaction: discord.Interaction) -> None:
@@ -858,7 +1149,7 @@ class TicketNotificationRoleSelect(discord.ui.RoleSelect):
         ]
         roles = [role for role in selected if isinstance(role, discord.Role) and not role.is_default()]
         if not roles:
-            return await _private(interaction, "❌ Choose an existing staff role, not @everyone.")
+            return await _private(interaction, "\u274c Choose an existing staff role, not @everyone.")
         await interaction.response.defer()
         from ..tickets_new.open_notifications import save_settings
         patch = (
@@ -869,7 +1160,7 @@ class TicketNotificationRoleSelect(discord.ui.RoleSelect):
         try:
             await save_settings(guild.id, patch)
         except Exception as exc:
-            return await _private(interaction, f"❌ Settings were not saved: {type(exc).__name__}. Reopen Staff Alerts.")
+            return await _private(interaction, f"\u274c Settings were not saved: {type(exc).__name__}. Reopen Staff Alerts.")
         await _replace(interaction, embed=await self.parent_view.embed(guild), view=self.parent_view)
 
 
@@ -903,23 +1194,41 @@ async def _save_ticket_staff_alert_channel(
     await _replace(interaction, embed=await parent.embed(guild), view=parent)
 
 
-class TicketNotificationChannelSelect(discord.ui.ChannelSelect):
+class TicketNotificationChannelOpenButton(_PickerOpenButton):
+    """Opens the house picker for the private staff alert channel."""
+
     def __init__(self, parent: "TicketNotificationSettingsView") -> None:
         self.parent_view = parent
+
+        def build(interaction: discord.Interaction) -> _TicketPickerView:
+            async def on_channel(pick_interaction: discord.Interaction, channel: discord.TextChannel) -> None:
+                await _save_ticket_staff_alert_channel(pick_interaction, channel, parent)
+
+            async def on_home(home_interaction: discord.Interaction) -> None:
+                await _replace(
+                    home_interaction,
+                    embed=await parent.embed(home_interaction.guild),
+                    view=parent,
+                )
+
+            return _channel_picker(
+                parent.owner_id,
+                guild=interaction.guild,
+                custom_id="dank:tickets:notifications:channel:v1",
+                placeholder="Optional: private staff alert channel\u2026",
+                title="Staff Alert Channel",
+                error_message="\u274c Choose a text channel in this server.",
+                on_channel=on_channel,
+                on_home=on_home,
+            )
+
         super().__init__(
-            placeholder="Optional: private staff alert channel…",
-            min_values=1, max_values=1,
-            channel_types=[discord.ChannelType.text],
-            custom_id="dank:tickets:notifications:channel:v1", row=2,
+            label="Choose Alert Channel",
+            emoji="\U0001f4e3",
+            custom_id="dank:tickets:notifications:channel:open:v1",
+            row=0,
+            build=build,
         )
-
-    async def callback(self, interaction: discord.Interaction) -> None:
-        guild = interaction.guild
-        channel = guild.get_channel(int(self.values[0].id)) if guild and self.values else None
-        if not isinstance(channel, discord.TextChannel):
-            return await _private(interaction, "❌ Choose a text channel in this server.")
-        await _save_ticket_staff_alert_channel(interaction, channel, self.parent_view)
-
 
 
 class TicketNotificationSettingsView(_OwnedView):
@@ -927,9 +1236,9 @@ class TicketNotificationSettingsView(_OwnedView):
         super().__init__(owner_id)
         self.category = "*"
         self.categories = categories
-        self.add_item(TicketNotificationCategorySelect(self))
+        self.add_item(TicketNotificationCategoryOpenButton(self))
         self.add_item(TicketNotificationRoleSelect(self))
-        self.add_item(TicketNotificationChannelSelect(self))
+        self.add_item(TicketNotificationChannelOpenButton(self))
 
     @classmethod
     async def create(
@@ -1106,32 +1415,45 @@ class TicketTopicCleanupConfirmView(_OwnedView):
         await _private(interaction, "Cancelled. No ticket topics were changed.")
 
 
-class TicketPanelChannelSelect(discord.ui.ChannelSelect):
+class TicketPanelChannelOpenButton(_PickerOpenButton):
+    """Opens the house picker for where the public ticket panel posts."""
+
     def __init__(self, parent: "TicketPanelToolsView") -> None:
         self.parent_view = parent
-        super().__init__(
-            placeholder="Optional: choose where to post the public ticket panel…",
-            min_values=1,
-            max_values=1,
-            channel_types=[discord.ChannelType.text],
-            custom_id="dank:tickets:panel:channel:v1",
-            row=0,
-        )
 
-    async def callback(self, interaction: discord.Interaction) -> None:
-        selected = self.values[0] if self.values else None
-        channel = interaction.guild.get_channel(int(getattr(selected, "id", 0) or 0))
-        if not isinstance(channel, discord.TextChannel):
-            return await _private(interaction, "❌ Choose a text channel.")
-        self.parent_view.channel_id = int(channel.id)
-        await interaction.response.edit_message(embed=self.parent_view.embed(), view=self.parent_view)
+        def build(interaction: discord.Interaction) -> _TicketPickerView:
+            async def on_channel(pick_interaction: discord.Interaction, channel: discord.TextChannel) -> None:
+                parent.channel_id = int(channel.id)
+                await _replace(pick_interaction, embed=parent.embed(), view=parent)
+
+            async def on_home(home_interaction: discord.Interaction) -> None:
+                await _replace(home_interaction, embed=parent.embed(), view=parent)
+
+            return _channel_picker(
+                parent.owner_id,
+                guild=interaction.guild,
+                custom_id="dank:tickets:panel:channel:v1",
+                placeholder="Optional: choose where to post the public ticket panel\u2026",
+                title="Public Ticket Panel Channel",
+                error_message="\u274c Choose a text channel.",
+                on_channel=on_channel,
+                on_home=on_home,
+            )
+
+        super().__init__(
+            label="Choose Panel Channel",
+            emoji="\U0001f9ed",
+            custom_id="dank:tickets:panel:channel:open:v1",
+            row=0,
+            build=build,
+        )
 
 
 class TicketPanelToolsView(_OwnedView):
     def __init__(self, owner_id: int) -> None:
         self.channel_id = 0
         super().__init__(owner_id)
-        self.add_item(TicketPanelChannelSelect(self))
+        self.add_item(TicketPanelChannelOpenButton(self))
 
     def embed(self) -> discord.Embed:
         return discord.Embed(
@@ -1210,44 +1532,68 @@ class TicketPanelToolsView(_OwnedView):
         await _replace(interaction, embed=_operations_embed(), view=TicketOperationsView(self.owner_id))
 
 
-class TicketIntakeActionSelect(discord.ui.Select):
+async def _dispatch_intake_action(
+    interaction: discord.Interaction,
+    parent: "TicketIntakeToolsView",
+    action: str,
+) -> None:
+    """Route one picked intake/routing tool exactly as the old select did."""
+    from . import public_ticket_intake_group as intake
+    if action == "categories":
+        return await _invoke(intake.intake_categories, interaction)
+    if action == "status":
+        return await _invoke(intake.intake_status, interaction)
+    if action == "match":
+        return await interaction.response.send_modal(IntakeMatchModal(parent.owner_id))
+    if action == "preview":
+        return await interaction.response.send_modal(IntakePreviewModal(parent.owner_id))
+    if action == "post-actions":
+        view = TicketIntakePostActionsView(parent.owner_id)
+        return await _replace(interaction, embed=view.embed(), view=view)
+
+
+class TicketIntakeActionOpenButton(_PickerOpenButton):
+    """Opens the house picker listing the intake/routing tools."""
+
     def __init__(self, parent: "TicketIntakeToolsView") -> None:
         self.parent_view = parent
-        super().__init__(
-            placeholder="Choose an intake/routing tool…",
-            min_values=1,
-            max_values=1,
-            options=[
-                discord.SelectOption(label="Category Inventory", value="categories", emoji="🗂️"),
-                discord.SelectOption(label="Intake Status", value="status", emoji="📡"),
-                discord.SelectOption(label="Test Reason Match", value="match", emoji="🧪"),
-                discord.SelectOption(label="Preview Category", value="preview", emoji="🔎"),
-                discord.SelectOption(label="Post Staff Actions", value="post-actions", emoji="🛠️"),
-            ],
-            custom_id="dank:tickets:intake:action:v1",
-            row=0,
-        )
 
-    async def callback(self, interaction: discord.Interaction) -> None:
-        action = str(self.values[0])
-        from . import public_ticket_intake_group as intake
-        if action == "categories":
-            return await _invoke(intake.intake_categories, interaction)
-        if action == "status":
-            return await _invoke(intake.intake_status, interaction)
-        if action == "match":
-            return await interaction.response.send_modal(IntakeMatchModal(self.parent_view.owner_id))
-        if action == "preview":
-            return await interaction.response.send_modal(IntakePreviewModal(self.parent_view.owner_id))
-        if action == "post-actions":
-            view = TicketIntakePostActionsView(self.parent_view.owner_id)
-            return await _replace(interaction, embed=view.embed(), view=view)
+        def build(interaction: discord.Interaction) -> _TicketPickerView:
+            async def on_pick(pick_interaction: discord.Interaction, value: str) -> None:
+                await _dispatch_intake_action(pick_interaction, parent, value)
+
+            async def on_home(home_interaction: discord.Interaction) -> None:
+                await _replace(home_interaction, embed=parent.embed(), view=parent)
+
+            return _TicketPickerView(
+                parent.owner_id,
+                choices=[
+                    make_choice("Category Inventory", "categories", emoji="\U0001f5c2\ufe0f"),
+                    make_choice("Intake Status", "status", emoji="\U0001f4e1"),
+                    make_choice("Test Reason Match", "match", emoji="\U0001f9ea"),
+                    make_choice("Preview Category", "preview", emoji="\U0001f50e"),
+                    make_choice("Post Staff Actions", "post-actions", emoji="\U0001f6e0\ufe0f"),
+                ],
+                on_pick=on_pick,
+                custom_id="dank:tickets:intake:action:v1",
+                placeholder="Choose an intake/routing tool\u2026",
+                title="Ticket Intake & Routing",
+                on_home=on_home,
+            )
+
+        super().__init__(
+            label="Choose Intake Tool",
+            emoji="\U0001f9ed",
+            custom_id="dank:tickets:intake:action:open:v1",
+            row=0,
+            build=build,
+        )
 
 
 class TicketIntakeToolsView(_OwnedView):
     def __init__(self, owner_id: int) -> None:
         super().__init__(owner_id)
-        self.add_item(TicketIntakeActionSelect(self))
+        self.add_item(TicketIntakeActionOpenButton(self))
 
     def embed(self) -> discord.Embed:
         return discord.Embed(
@@ -1290,31 +1636,44 @@ class IntakePreviewModal(discord.ui.Modal, title="Preview Ticket Category"):
         await _invoke(intake_preview, interaction, slug=str(self.slug.value))
 
 
-class IntakeActionsChannelSelect(discord.ui.ChannelSelect):
+class IntakeActionsChannelOpenButton(_PickerOpenButton):
+    """Opens the house picker for the staff-actions target ticket."""
+
     def __init__(self, parent: "TicketIntakePostActionsView") -> None:
         self.parent_view = parent
-        super().__init__(
-            placeholder="Choose an active ticket channel…",
-            min_values=1,
-            max_values=1,
-            channel_types=[discord.ChannelType.text],
-            custom_id="dank:tickets:intake:post_actions:v1",
-            row=0,
-        )
 
-    async def callback(self, interaction: discord.Interaction) -> None:
-        selected = self.values[0] if self.values else None
-        channel = interaction.guild.get_channel(int(getattr(selected, "id", 0) or 0))
-        if not isinstance(channel, discord.TextChannel):
-            return await _private(interaction, "❌ Choose an active ticket channel.")
-        from .public_ticket_intake_group import intake_post_actions
-        await _invoke(intake_post_actions, interaction, channel=channel)
+        def build(interaction: discord.Interaction) -> _TicketPickerView:
+            async def on_channel(pick_interaction: discord.Interaction, channel: discord.TextChannel) -> None:
+                from .public_ticket_intake_group import intake_post_actions
+                await _invoke(intake_post_actions, pick_interaction, channel=channel)
+
+            async def on_home(home_interaction: discord.Interaction) -> None:
+                await _replace(home_interaction, embed=parent.embed(), view=parent)
+
+            return _channel_picker(
+                parent.owner_id,
+                guild=interaction.guild,
+                custom_id="dank:tickets:intake:post_actions:v1",
+                placeholder="Choose an active ticket channel\u2026",
+                title="Post Staff Actions Channel",
+                error_message="\u274c Choose an active ticket channel.",
+                on_channel=on_channel,
+                on_home=on_home,
+            )
+
+        super().__init__(
+            label="Choose Ticket Channel",
+            emoji="\U0001f9ed",
+            custom_id="dank:tickets:intake:post_actions:open:v1",
+            row=0,
+            build=build,
+        )
 
 
 class TicketIntakePostActionsView(_OwnedView):
     def __init__(self, owner_id: int) -> None:
         super().__init__(owner_id)
-        self.add_item(IntakeActionsChannelSelect(self))
+        self.add_item(IntakeActionsChannelOpenButton(self))
 
     def embed(self) -> discord.Embed:
         return discord.Embed(
@@ -1342,51 +1701,75 @@ class TicketIntakePostActionsView(_OwnedView):
         await _replace(interaction, embed=view.embed(), view=view)
 
 
-class TicketCategoryActionSelect(discord.ui.Select):
+async def _dispatch_category_action(
+    interaction: discord.Interaction,
+    parent: "TicketCategoryToolsView",
+    action: str,
+) -> None:
+    """Route one picked category action exactly as the old select did."""
+    from . import public_ticket_category_group as categories
+    if action == "sync":
+        return await _invoke(categories.category_sync, interaction)
+    modal_map = {
+        "create": CategoryCreateModal,
+        "edit": CategoryEditModal,
+        "delete": CategorySlugModal,
+        "set-default": CategorySlugModal,
+        "reorder": CategoryReorderModal,
+        "keywords": CategoryKeywordsModal,
+    }
+    cls = modal_map.get(action)
+    if cls is None:
+        return await _private(interaction, "\u274c That category action is unavailable.")
+    if cls is CategorySlugModal:
+        return await interaction.response.send_modal(cls(parent.owner_id, action=action))
+    return await interaction.response.send_modal(cls(parent.owner_id))
+
+
+class TicketCategoryActionOpenButton(_PickerOpenButton):
+    """Opens the house picker listing the ticket-category actions."""
+
     def __init__(self, parent: "TicketCategoryToolsView") -> None:
         self.parent_view = parent
-        super().__init__(
-            placeholder="Choose a ticket-category action…",
-            min_values=1,
-            max_values=1,
-            options=[
-                discord.SelectOption(label="Sync Managed Catalog", value="sync", emoji="🔄", description="Repair/update built-in definitions; does not enable all"),
-                discord.SelectOption(label="Create Custom Category", value="create", emoji="➕"),
-                discord.SelectOption(label="Edit Custom Category", value="edit", emoji="✏️"),
-                discord.SelectOption(label="Delete Custom Category", value="delete", emoji="🗑️"),
-                discord.SelectOption(label="Set Custom Default", value="set-default", emoji="⭐"),
-                discord.SelectOption(label="Reorder Custom Category", value="reorder", emoji="↕️"),
-                discord.SelectOption(label="Replace Custom Keywords", value="keywords", emoji="🏷️"),
-            ],
-            custom_id="dank:tickets:categories:action:v1",
-            row=0,
-        )
 
-    async def callback(self, interaction: discord.Interaction) -> None:
-        action = str(self.values[0])
-        from . import public_ticket_category_group as categories
-        if action == "sync":
-            return await _invoke(categories.category_sync, interaction)
-        modal_map = {
-            "create": CategoryCreateModal,
-            "edit": CategoryEditModal,
-            "delete": CategorySlugModal,
-            "set-default": CategorySlugModal,
-            "reorder": CategoryReorderModal,
-            "keywords": CategoryKeywordsModal,
-        }
-        cls = modal_map.get(action)
-        if cls is None:
-            return await _private(interaction, "❌ That category action is unavailable.")
-        if cls is CategorySlugModal:
-            return await interaction.response.send_modal(cls(self.parent_view.owner_id, action=action))
-        return await interaction.response.send_modal(cls(self.parent_view.owner_id))
+        def build(interaction: discord.Interaction) -> _TicketPickerView:
+            async def on_pick(pick_interaction: discord.Interaction, value: str) -> None:
+                await _dispatch_category_action(pick_interaction, parent, value)
+
+            async def on_home(home_interaction: discord.Interaction) -> None:
+                await _replace(home_interaction, embed=parent.embed(), view=parent)
+
+            return _TicketPickerView(
+                parent.owner_id,
+                choices=[
+                    make_choice("Sync Managed Catalog", "sync", emoji="\U0001f504", description="Repair/update built-in definitions; does not enable all"),
+                    make_choice("Create Custom Category", "create", emoji="\u2795"),
+                    make_choice("Edit Custom Category", "edit", emoji="\u270f\ufe0f"),
+                    make_choice("Delete Custom Category", "delete", emoji="\U0001f5d1\ufe0f"),
+                    make_choice("Set Custom Default", "set-default", emoji="\u2b50"),
+                    make_choice("Reorder Custom Category", "reorder", emoji="\u2195\ufe0f"),
+                    make_choice("Replace Custom Keywords", "keywords", emoji="\U0001f3f7\ufe0f"),
+                ],
+                on_pick=on_pick,
+                custom_id="dank:tickets:categories:action:v1",
+                placeholder="Choose a ticket-category action\u2026",
+                title="Ticket Category Manager",
+                on_home=on_home,
+            )
+
+        super().__init__(
+            label="Choose Category Action",
+            emoji="\U0001f5c2\ufe0f",
+            custom_id="dank:tickets:categories:action:open:v1",
+            row=0,
+            build=build,
+        )
 
 
 class TicketCategoryToolsView(_OwnedView):
     def __init__(self, owner_id: int) -> None:
         super().__init__(owner_id)
-        self.add_item(TicketCategoryActionSelect(self))
+        self.add_item(TicketCategoryActionOpenButton(self))
 
     def embed(self) -> discord.Embed:
         return discord.Embed(

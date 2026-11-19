@@ -747,20 +747,16 @@ def test_category_select_fallback_recovers_missed_temporary_view(monkeypatch, ca
         async def fake_load_rows(_guild):
             return rows, ""
 
-        class FakeSelect:
-            def __init__(self, loaded_rows, owner_id: int, loaded_session_id: str) -> None:
-                captured["rows"] = loaded_rows
-                captured["owner_id"] = owner_id
-                captured["session_id"] = loaded_session_id
-                self._values: list[str] = []
-
-            async def callback(self, interaction) -> None:
-                captured["interaction"] = interaction
-                captured["values"] = list(self._values)
+        async def fake_apply_pick(interaction, loaded_rows, owner_id: int, loaded_session_id: str, slug: str) -> None:
+            captured["rows"] = loaded_rows
+            captured["owner_id"] = owner_id
+            captured["session_id"] = loaded_session_id
+            captured["interaction"] = interaction
+            captured["values"] = [slug]
 
         monkeypatch.setattr(runtime.asyncio, "sleep", no_sleep)
         monkeypatch.setattr(panel, "_load_rows", fake_load_rows)
-        monkeypatch.setattr(panel, "TicketSelect", FakeSelect)
+        monkeypatch.setattr(panel, "_apply_ticket_type_pick", fake_apply_pick)
 
         response = Response()
         interaction = SimpleNamespace(
@@ -927,7 +923,7 @@ def test_runtime_delegates_to_canonical_owner_instead_of_creating_tickets() -> N
     assert "public_ticket_panel_clean as panel" in RUNTIME
     assert "panel.PublicCreateTicketPanelView()" in RUNTIME
     assert "panel.handle_public_ticket_panel_click(interaction)" in RUNTIME
-    assert "panel.TicketSelect(rows, user_id, session_id)" in RUNTIME
+    assert "panel._apply_ticket_type_pick(interaction, rows, user_id, session_id, slug)" in RUNTIME
     assert "create_text_channel" not in RUNTIME
     assert "_create_ticket" not in RUNTIME
 

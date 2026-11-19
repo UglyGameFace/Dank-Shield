@@ -12,6 +12,7 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional
 import discord
 
 from ..tickets_new import managed_category_service as service
+from ..ui.picker import DankMultiPickerView, make_choice
 
 _APPLIED = False
 
@@ -217,70 +218,129 @@ async def _save_selection(
         return None
 
 
-class ManagedCategorySelection(discord.ui.Select):
+class ManagedCategorySelectionView(DankMultiPickerView):
+    """House multi-picker for the built-in ticket category selection.
+
+    Keeps the old select's contract exactly: staff managers pick every
+    built-in ticket option this server should show (defaults mark the
+    current selection), and picking saves through the same
+    ``_save_selection`` path with the same manager gate.
+    """
+
+    def __init__(
+        self,
+        state: service.CategorySetupState,
+        *,
+        author_id: int,
+        context: str = _MANAGER_CONTEXT_SETUP,
+    ) -> None:
+        clean = str(context or _MANAGER_CONTEXT_SETUP).strip().lower()
+        self.context = clean if clean in _MANAGER_CONTEXTS else _MANAGER_CONTEXT_SETUP
+        self.state = state
+        choices = []
+        for row in _catalog_rows_from_state(state):
+            key = _catalog_key(row)
+            if not key:
+                continue
+            choices.append(make_choice(
+                _short(row.get("name") or key, 100),
+                key,
+                description=_short(row.get("description") or "Ticket choice", 100),
+                emoji="\U0001f3ab",
+                default=key in state.selected_keys,
+            ))
+
+        async def on_pick(interaction: discord.Interaction, values: List[str]) -> None:
+            from ..commands_ext import public_setup_solid as solid
+
+            if not await _manager_allowed(interaction, context=self.context):
+                return
+            saved = await _save_selection(
+                interaction,
+                values,
+                context=self.context,
+            )
+            if saved is None or interaction.guild is None:
+                return
+
+            embed, view = await _build_category_manager_payload(
+                interaction.guild,
+                title="\u2705 Ticket Choices Saved",
+                state=saved,
+                context=self.context,
+            )
+            embed.add_field(
+                name="Applied Everywhere",
+                value=(
+                    "The public Create Ticket menu, guided setup, routing, and future "
+                    "restarts now use this exact selection. Duplicate labels are removed."
+                ),
+                inline=False,
+            )
+            await solid._edit_or_followup(interaction, embed=embed, view=view)
+
+        async def on_home(interaction: discord.Interaction) -> None:
+            from ..commands_ext import public_setup_solid as solid
+
+            guild = interaction.guild
+            if guild is None:
+                return
+            embed, view = await _build_category_manager_payload(
+                guild,
+                state=state,
+                context=self.context,
+            )
+            await solid._edit_or_followup(interaction, embed=embed, view=view)
+
+        super().__init__(
+            author_id=int(author_id),
+            choices=choices,
+            on_pick=on_pick,
+            custom_id="dank_ticket_category_setup:managed_selection",
+            placeholder="Choose every built-in ticket option this server should show",
+            title="Built-in Ticket Options",
+            timeout=900,
+            on_home=on_home,
+            home_label="Back",
+            min_values=1,
+            max_values=max(1, min(25, len(choices))),
+        )
+
+
+class ManagedCategorySelectionOpenButton(discord.ui.Button):
+    """Opens the house multi-picker for built-in ticket choices."""
+
     def __init__(
         self,
         state: service.CategorySetupState,
         *,
         context: str = _MANAGER_CONTEXT_SETUP,
     ) -> None:
-        self.context = (
-            str(context or _MANAGER_CONTEXT_SETUP).strip().lower()
-            if str(context or _MANAGER_CONTEXT_SETUP).strip().lower() in _MANAGER_CONTEXTS
-            else _MANAGER_CONTEXT_SETUP
-        )
-        options: List[discord.SelectOption] = []
-        for row in _catalog_rows_from_state(state):
-            key = _catalog_key(row)
-            if not key:
-                continue
-            options.append(
-                discord.SelectOption(
-                    label=_short(row.get("name") or key, 100),
-                    value=key,
-                    description=_short(row.get("description") or "Ticket choice", 100),
-                    emoji="🎫",
-                    default=key in state.selected_keys,
-                )
-            )
-
         super().__init__(
-            placeholder="Choose every built-in ticket option this server should show",
-            min_values=1,
-            max_values=max(1, min(25, len(options))),
-            options=options[:25],
-            custom_id="dank_ticket_category_setup:managed_selection",
+            label="Choose Built-in Ticket Options",
+            emoji="\U0001f3ab",
+            style=discord.ButtonStyle.primary,
+            custom_id="dank_ticket_category_setup:managed_selection:open",
             row=0,
         )
+        self.state = state
+        clean = str(context or _MANAGER_CONTEXT_SETUP).strip().lower()
+        self.context = clean if clean in _MANAGER_CONTEXTS else _MANAGER_CONTEXT_SETUP
 
     async def callback(self, interaction: discord.Interaction) -> None:
-        from ..commands_ext import public_setup_solid as solid
-
         if not await _manager_allowed(interaction, context=self.context):
             return
-        state = await _save_selection(
-            interaction,
-            self.values,
+        picker = ManagedCategorySelectionView(
+            self.state,
+            author_id=int(interaction.user.id),
             context=self.context,
         )
-        if state is None or interaction.guild is None:
-            return
-
-        embed, view = await _build_category_manager_payload(
-            interaction.guild,
-            title="✅ Ticket Choices Saved",
-            state=state,
-            context=self.context,
+        message = getattr(interaction, "message", None)
+        embeds = getattr(message, "embeds", None) if message is not None else None
+        await interaction.response.edit_message(
+            embed=embeds[0] if embeds else None,
+            view=picker,
         )
-        embed.add_field(
-            name="Applied Everywhere",
-            value=(
-                "The public Create Ticket menu, guided setup, routing, and future "
-                "restarts now use this exact selection. Duplicate labels are removed."
-            ),
-            inline=False,
-        )
-        await solid._edit_or_followup(interaction, embed=embed, view=view)
 
 
 class CategorySetupManagerView(discord.ui.View):
@@ -305,7 +365,7 @@ class CategorySetupManagerView(discord.ui.View):
         custom_rows: List[Dict[str, Any]] = []
 
         if state is not None and not db_error:
-            self.add_item(ManagedCategorySelection(state, context=self.context))
+            self.add_item(ManagedCategorySelectionOpenButton(state, context=self.context))
 
             core = discord.ui.Button(
                 label="Community Core",
