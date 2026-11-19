@@ -28,14 +28,14 @@ class CleanupMembersCenterView(discord.ui.View):
 
         await browser._open_member_browser(interaction)
 
-    @discord.ui.button(label="Run 90d Review", emoji="🎯", style=discord.ButtonStyle.secondary, custom_id="dank_setup_members:scan90", row=0)
+    @discord.ui.button(label="Run 90d Inactive", emoji="🎯", style=discord.ButtonStyle.secondary, custom_id="dank_setup_members:scan90", row=0)
     async def scan_90(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         from stoney_verify.commands_ext import public_members_group as members
 
         await members._run_activity_scan(interaction, inactive_days=90, grace_days=14, include_low_confidence=True, use_audit_log_fallback=True, skip_locked_users=True)
 
-    @discord.ui.button(label="Run 30d Review", emoji="⚡", style=discord.ButtonStyle.secondary, custom_id="dank_setup_members:scan30", row=0)
+    @discord.ui.button(label="Run 30d Inactive", emoji="⚡", style=discord.ButtonStyle.secondary, custom_id="dank_setup_members:scan30", row=0)
     async def scan_30(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         from stoney_verify.commands_ext import public_members_group as members
@@ -53,7 +53,7 @@ class CleanupMembersCenterView(discord.ui.View):
             return
         report = members.get_last_scan(interaction.guild.id)
         if report is None:
-            return await _send_ephemeral(interaction, "No server-activity review has been run since the bot started. Press **Run 90d Review** first.")
+            return await _send_ephemeral(interaction, "No inactive-member scan has been run since the bot started. Press **Run 90d Inactive** first.")
         await _send_ephemeral(
             interaction,
             embed=members._build_report_embed(report, page=0),
@@ -120,7 +120,7 @@ async def open_cleanup_members_center(interaction: discord.Interaction) -> None:
             "Browse members by any server role, review inactive verified/resident members, "
             "manage scan locks, and check cleanup settings from one place.\n\n"
             "Role browsing is action-ready but private to the staff member who opens it. "
-            "Cleanup remains preview-first and keeps explicit confirmation gates."
+            "You always see the list first, and nobody is kicked until you confirm it."
         ),
         color=discord.Color.blurple(),
         timestamp=discord.utils.utcnow(),
@@ -139,11 +139,11 @@ async def open_cleanup_members_center(interaction: discord.Interaction) -> None:
             "• Every action re-checks staff permissions and role hierarchy.\n"
             "• Destructive actions require typed confirmation and a reason.\n"
             "• Bulk tools exclude mass kick, ban, and timeout.\n"
-            "• Inactivity cleanup still uses server activity evidence, not presence."
+            "• Inactivity cleanup counts messages and actions the bot actually saw — not just someone being online."
         ),
         inline=False,
     )
-    embed.add_field(name="Start here", value="Use **Browse by Role** for live moderation, or **Run 90d Review** for inactivity cleanup.", inline=False)
+    embed.add_field(name="Start here", value="Use **Browse by Role** for live moderation, or **Run 90d Inactive** for inactivity cleanup.", inline=False)
     embed.set_footer(text="/dank setup • Feature Centers • Cleanup + Members")
     await _send_ephemeral(interaction, embed=embed, view=CleanupMembersCenterView(), allowed_mentions=discord.AllowedMentions.none())
 
