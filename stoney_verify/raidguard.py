@@ -12,6 +12,7 @@ import discord
 
 from .globals import *
 from .member_risk_engine import enrich_member_risk_profile
+from .name_similarity import find_name_matches
 
 
 # ============================================================
@@ -268,6 +269,7 @@ def _pretty_signal(code: str) -> str:
         "join_burst": "Join burst",
         "shared_behavior_fingerprint": "Shared behavioral fingerprint",
         "similar_recent_username": "Similar recent usernames",
+        "guild_name_similarity": "Strong name match with an existing member",
         "age_bucket_cluster": "Age bucket cluster",
         "identity_fingerprint_match": "Verified identity fingerprint match",
         "manual_alt_link": "Manual confirmed duplicate link",
@@ -703,6 +705,156 @@ def _build_recent_cluster_matches(
     }
 
 
+# ============================================================
+# Guild-wide name-similarity scan (members / departed / banned)
+# ============================================================
+_NAME_SCAN_CACHE: Dict[int, Tuple[datetime, List[Dict[str, Any]]]] = {}
+_NAME_SCAN_CACHE_TTL_SECONDS = 900
+_NAME_SCAN_CACHE_MAX_GUILDS = 256
+
+
+def _load_departed_name_candidates_sync(guild_id: int) -> List[Dict[str, Any]]:
+    """Recently departed members from the guild_members store (fail-soft)."""
+    try:
+        sb = get_supabase()
+        if sb is None:
+            return []
+        res = (
+            sb.table("guild_members")
+            .select("user_id,name,username,display_name,bot,is_bot")
+            .eq("guild_id", str(int(guild_id)))
+            .eq("departed", True)
+            .limit(512)
+            .execute()
+        )
+        rows = getattr(res, "data", None) or []
+        out: List[Dict[str, Any]] = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            try:
+                uid = int(str(row.get("user_id") or "0") or 0)
+            except Exception:
+                continue
+            if uid <= 0:
+                continue
+            out.append(
+                {
+                    "user_id": uid,
+                    "username": row.get("name") or row.get("username"),
+                    "display_name": row.get("display_name"),
+                    "bot": bool(row.get("bot") or row.get("is_bot")),
+                    "source": "departed",
+                }
+            )
+        return out
+    except Exception:
+        return []
+
+
+async def _load_extra_name_candidates(guild: Any) -> List[Dict[str, Any]]:
+    """Departed + banned accounts a joiner could be an alt of (cached, fail-soft)."""
+    try:
+        guild_id = int(getattr(guild, "id", 0) or 0)
+    except Exception:
+        guild_id = 0
+    if guild_id <= 0:
+        return []
+
+    cached = _NAME_SCAN_CACHE.get(guild_id)
+    if cached and (_utcnow() - cached[0]).total_seconds() <= _NAME_SCAN_CACHE_TTL_SECONDS:
+        return list(cached[1])
+
+    candidates: List[Dict[str, Any]] = []
+    try:
+        candidates.extend(
+            await asyncio.to_thread(_load_departed_name_candidates_sync, guild_id)
+        )
+    except Exception:
+        pass
+
+    try:
+        bans_fn = getattr(guild, "bans", None)
+        if callable(bans_fn):
+            async for entry in bans_fn(limit=1000):
+                user = getattr(entry, "user", None)
+                if user is None:
+                    continue
+                try:
+                    uid = int(getattr(user, "id", 0) or 0)
+                except Exception:
+                    continue
+                if uid <= 0:
+                    continue
+                candidates.append(
+                    {
+                        "user_id": uid,
+                        "username": getattr(user, "name", None),
+                        "display_name": getattr(user, "global_name", None)
+                        or getattr(user, "display_name", None),
+                        "bot": bool(getattr(user, "bot", False)),
+                        "source": "banned",
+                    }
+                )
+    except Exception:
+        pass
+
+    if len(_NAME_SCAN_CACHE) >= _NAME_SCAN_CACHE_MAX_GUILDS:
+        _NAME_SCAN_CACHE.clear()
+    _NAME_SCAN_CACHE[guild_id] = (_utcnow(), list(candidates))
+    return candidates
+
+
+def _guild_member_name_candidates(member: discord.Member) -> List[Dict[str, Any]]:
+    """All current guild members from the local cache (fail-soft)."""
+    out: List[Dict[str, Any]] = []
+    try:
+        guild = getattr(member, "guild", None)
+        members = getattr(guild, "members", None) or []
+        for other in members:
+            try:
+                uid = int(getattr(other, "id", 0) or 0)
+            except Exception:
+                continue
+            if uid <= 0:
+                continue
+            out.append(
+                {
+                    "user_id": uid,
+                    "username": getattr(other, "name", None),
+                    "display_name": getattr(other, "display_name", None),
+                    "bot": bool(getattr(other, "bot", False)),
+                    "source": "member",
+                }
+            )
+    except Exception:
+        return []
+    return out
+
+
+def _name_match_reason(row: Dict[str, Any]) -> str:
+    label = str(row.get("username") or row.get("display_name") or f"user {row.get('user_id')}")
+    pct = int(round(float(row.get("similarity") or 0.0) * 100))
+    source = str(row.get("source") or "member")
+    if source == "banned":
+        return (
+            f"Name closely matches BANNED account {label} ({pct}% name similarity). "
+            "Possible ban evasion — review before granting access. "
+            "A similar name is review evidence, not identity proof."
+        )
+    if source == "departed":
+        return (
+            f"Name closely matches recently departed member {label} ({pct}% name similarity). "
+            "Possible returning alt — review. "
+            "A similar name is review evidence, not identity proof."
+        )
+    return (
+        f"Name closely matches existing member {label} ({pct}% name similarity). "
+        "Possible alt account — review. "
+        "A similar name is review evidence, not identity proof."
+    )
+
+
 def _record_join_profile(member: discord.Member, profile: Dict[str, Any]) -> None:
     try:
         if bool(getattr(member, "bot", False)) or bool(profile.get("is_bot_account")):
@@ -741,6 +893,7 @@ def build_member_risk_profile(
     join_context: Optional[Dict[str, Any]] = None,
     hard_identity_context: Optional[Dict[str, Any]] = None,
     behavior_context: Optional[Dict[str, Any]] = None,
+    extra_name_candidates: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
     guild_id = int(member.guild.id)
     user_id = int(member.id)
@@ -780,6 +933,8 @@ def build_member_risk_profile(
             "account_age_human": _humanize_age_days(age_days),
             "same_fingerprint_count": 0,
             "similar_name_count": 0,
+            "strong_name_match_count": 0,
+            "guild_name_matches": [],
             "same_age_bucket_count": 0,
             "identity_proof_match_count": 0,
             "manual_confirmed_match_count": 0,
@@ -854,6 +1009,26 @@ def build_member_risk_profile(
     similar_name_matches = _filter_not_linked_matches(cluster["similar_name_matches"], manual_not_linked_ids)
     same_fp_matches = _filter_not_linked_matches(cluster["same_fp_matches"], manual_not_linked_ids)
     same_age_bucket_matches = _filter_not_linked_matches(cluster["same_age_bucket_matches"], manual_not_linked_ids)
+
+    # --------------------------------------------------------
+    # Guild-wide name scan: unlike the recent-join cluster above, this
+    # compares against every current member (plus departed/banned rows
+    # the async caller loaded), so an alt of a long-standing member is
+    # visible at join instead of only during a 20-minute join window.
+    # --------------------------------------------------------
+    guild_name_matches: List[Dict[str, Any]] = []
+    try:
+        name_candidates = _guild_member_name_candidates(member)
+        if extra_name_candidates:
+            name_candidates.extend(dict(row) for row in extra_name_candidates if isinstance(row, dict))
+        if name_candidates:
+            guild_name_matches = find_name_matches(
+                [username, display_name],
+                name_candidates,
+                exclude_user_ids={user_id} | set(manual_not_linked_ids),
+            )
+    except Exception:
+        guild_name_matches = []
 
     weak_signals: List[str] = []
     strong_signals: List[str] = []
@@ -956,6 +1131,9 @@ def build_member_risk_profile(
         reasons.append(
             f"Joined inside an age-bucket cluster ({len(same_age_bucket_matches)} recent join(s) in bucket {age_bucket})."
         )
+
+    if guild_name_matches:
+        weak_signals.append("guild_name_similarity")
         weak_points += 3
 
     # --------------------------------------------------------
@@ -1020,6 +1198,13 @@ def build_member_risk_profile(
         evidence_tier = "clear"
         score = min(15, weak_points)
 
+    # A strong guild-wide name match is soft review evidence on its own:
+    # it can raise the join to "suspicious" (POSSIBLE ALT LINK — REVIEW)
+    # but never to a hard/strong tier and never to any automatic action.
+    if guild_name_matches and evidence_tier in {"clear", "suspicious"}:
+        evidence_tier = "suspicious"
+        score = max(score, 40)
+
     level = _tier_to_level(evidence_tier)
 
     cluster_members: List[Dict[str, Any]] = []
@@ -1067,6 +1252,25 @@ def build_member_risk_profile(
                 }
             )
 
+    for row in guild_name_matches[:4]:
+        try:
+            uid = int(row.get("user_id") or 0)
+        except Exception:
+            uid = 0
+        if uid <= 0 or uid == user_id:
+            continue
+        if uid not in existing_member_ids:
+            existing_member_ids.add(uid)
+            cluster_members.append(
+                {
+                    "user_id": row.get("user_id"),
+                    "username": row.get("username"),
+                    "display_name": row.get("display_name"),
+                    "reason": f"name_similarity:{float(row.get('similarity') or 0.0):.2f}",
+                    "source": str(row.get("source") or "member"),
+                }
+            )
+
     alt_cluster_key: Optional[str] = None
     alt_cluster_size = 0
 
@@ -1085,11 +1289,18 @@ def build_member_risk_profile(
     elif strong_signals and len(similar_name_matches) >= 1 and username_normalized:
         alt_cluster_key = f"name:{username_normalized[:48]}"
         alt_cluster_size = 1 + len(similar_name_matches)
+    elif guild_name_matches and username_normalized:
+        alt_cluster_key = f"name:{username_normalized[:48]}"
+        alt_cluster_size = 1 + len(guild_name_matches)
 
     flags = _dedupe_list(
         hard_signals + strong_signals + weak_signals,
         max_items=20,
     )
+
+    if guild_name_matches:
+        name_reasons = [_name_match_reason(row) for row in guild_name_matches[:2]]
+        reasons = name_reasons + [r for r in reasons if r not in name_reasons]
 
     profile = {
         "guild_id": guild_id,
@@ -1123,6 +1334,17 @@ def build_member_risk_profile(
         "account_age_human": _humanize_age_days(age_days),
         "same_fingerprint_count": len(same_fp_matches),
         "similar_name_count": len(similar_name_matches),
+        "strong_name_match_count": len(guild_name_matches),
+        "guild_name_matches": [
+            {
+                "user_id": row.get("user_id"),
+                "username": row.get("username"),
+                "display_name": row.get("display_name"),
+                "similarity": row.get("similarity"),
+                "source": str(row.get("source") or "member"),
+            }
+            for row in guild_name_matches[:8]
+        ],
         "same_age_bucket_count": len(same_age_bucket_matches),
         "identity_proof_match_count": len(proof_matches),
         "manual_confirmed_match_count": len(manual_confirmed),
@@ -1165,11 +1387,16 @@ async def assess_member_join_risk(
         int(member.guild.id),
         int(member.id),
     )
+    try:
+        extra_name_candidates = await _load_extra_name_candidates(member.guild)
+    except Exception:
+        extra_name_candidates = []
     profile = build_member_risk_profile(
         member,
         join_context=join_context,
         hard_identity_context=hard_context,
         behavior_context=behavior_context,
+        extra_name_candidates=extra_name_candidates,
     )
     if record and not bool(getattr(member, "bot", False)):
         _record_join_profile(member, profile)
@@ -1249,6 +1476,7 @@ def build_alt_detection_summary(member: discord.Member) -> str:
     likely = int(profile.get("manual_likely_match_count") or 0)
     fingerprint = int(profile.get("same_fingerprint_count") or 0)
     names = int(profile.get("similar_name_count") or 0)
+    guild_names = int(profile.get("strong_name_match_count") or 0)
     burst = int(profile.get("burst_count") or 0)
 
     evidence: List[str] = []
@@ -1262,6 +1490,8 @@ def build_alt_detection_summary(member: discord.Member) -> str:
         evidence.append(f"heuristic fingerprint matches={fingerprint}")
     if names:
         evidence.append(f"similar recent names={names}")
+    if guild_names:
+        evidence.append(f"strong guild name matches={guild_names}")
     if burst:
         evidence.append(f"join burst={burst}")
 

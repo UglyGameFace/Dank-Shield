@@ -221,6 +221,9 @@ def _derive_alt_evidence(profile: Mapping[str, Any]) -> tuple[str, int]:
     manual_likely = max(0, _safe_int(profile.get("manual_likely_match_count"), 0))
     fingerprint_matches = max(0, _safe_int(profile.get("same_fingerprint_count"), 0))
     similar_names = max(0, _safe_int(profile.get("similar_name_count"), 0))
+    strong_name_matches = max(
+        0, _safe_int(profile.get("strong_name_match_count"), 0)
+    )
     burst_count = max(
         0,
         _safe_int(
@@ -261,6 +264,13 @@ def _derive_alt_evidence(profile: Mapping[str, Any]) -> tuple[str, int]:
     )
     if correlated_pattern:
         return "suspicious", max(35, min(64, base_score or 35))
+
+    # A single strong guild-wide name match (raidguard's name scan, which
+    # already applied the false-positive bar) is soft review evidence on
+    # its own: enough for POSSIBLE ALT LINK — REVIEW, never for a hard or
+    # strong tier, and never for automatic action.
+    if strong_name_matches >= 1:
+        return "suspicious", max(40, min(64, base_score or 40))
 
     return "clear", 0
 
