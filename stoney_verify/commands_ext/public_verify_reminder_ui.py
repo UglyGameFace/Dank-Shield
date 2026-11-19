@@ -33,6 +33,7 @@ from ..verification_reminder_manual import (
     select_manual_group,
 )
 from .public_verify_command_center import _OwnedView, _private, _replace, _require_staff
+from ..ui.picker import DankMultiPickerView, DankPickerOpenButton, make_choice
 from ..ui.current_channel import current_text_channel
 from ..ui.resource_browser import DankGuildResourceBrowserView
 
@@ -455,31 +456,62 @@ class ManualPreviewView(_OwnedView):
         self.selected_ids = tuple(preview.candidates)
         self.confirm_manual.disabled = not bool(preview.candidates)
         self.next_page.disabled = not bool(preview.next_after)
+        self.recipient_selector: DankMultiPickerView | None = None
         if preview.candidates:
             name_by_id = dict(zip(preview.eligible_ids, preview.eligible_names))
-            self.recipient_selector = discord.ui.Select(
-                placeholder="Recipients: all selected (or choose fewer)",
-                min_values=1,
-                max_values=len(preview.candidates),
-                options=[
-                    discord.SelectOption(
-                        label=name_by_id.get(uid, str(uid))[:90],
-                        value=str(uid), description=f"Member ID: {uid}"[:100],
+            self.recipient_selector = DankMultiPickerView(
+                author_id=int(owner_id),
+                choices=[
+                    make_choice(
+                        name_by_id.get(uid, str(uid))[:90],
+                        str(uid),
+                        description=f"Member ID: {uid}"[:100],
                         default=True,
                     )
                     for uid in preview.candidates
                 ],
-                row=1,
+                on_pick=self._recipients_picked,
+                custom_id="dank:verify_reminders:manual_recipients:picker:v1",
+                placeholder="Recipients: all selected (or choose fewer)",
+                title="Choose Recipients",
+                timeout=180,
+                min_values=1,
+                max_values=len(preview.candidates),
+                on_home=self._recipients_home,
+                on_cancel=self._recipients_home,
             )
-            self.recipient_selector.callback = self.choose_recipients
-            self.add_item(self.recipient_selector)
+            self.add_item(
+                DankPickerOpenButton(
+                    label="Choose Recipients",
+                    emoji="👥",
+                    custom_id="dank:verify_reminders:manual_recipients:open",
+                    row=1,
+                    build=lambda interaction: self.recipient_selector,
+                )
+            )
+
+    async def _recipients_home(self, interaction: discord.Interaction) -> None:
+        guild = interaction.guild
+        embed = _manual_preview_embed(guild, self.preview) if guild is not None else None
+        if interaction.response.is_done():
+            await interaction.edit_original_response(embed=embed, view=self)
+        else:
+            await interaction.response.edit_message(embed=embed, view=self)
+
+    async def _recipients_picked(
+        self, interaction: discord.Interaction, values: list[str]
+    ) -> None:
+        self.recipient_selector.values = list(values)
+        await self.choose_recipients(interaction)
 
     async def choose_recipients(self, interaction: discord.Interaction) -> None:
         if not await _require_staff(interaction):
             return
         if self.used:
             return await _private(interaction, "This preview was already used.")
-        self.selected_ids = tuple(int(value) for value in self.recipient_selector.values)
+        picked = self.recipient_selector.values if self.recipient_selector is not None else []
+        self.selected_ids = tuple(int(value) for value in picked)
+        await self._recipients_home(interaction)
         await _private(
             interaction,
             f"✅ **{len(self.selected_ids)}** selected. "

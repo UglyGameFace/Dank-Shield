@@ -5,6 +5,8 @@ from typing import Any, Dict, Optional
 
 import discord
 
+from .ui.picker import DankPagedPickerView, DankPickerOpenButton, make_choice
+
 from .member_review_feedback import (
     feedback_display_value,
     record_member_review_feedback,
@@ -143,24 +145,35 @@ class AltReviewModal(discord.ui.Modal):
         )
 
 
-class MoreReviewActionsSelect(discord.ui.Select):
+class MoreReviewActionsSelect(DankPagedPickerView):
+    """House picker for the extra staff verdicts on a member review.
+
+    Was a raw ``discord.ui.Select`` inside MemberReviewView. The
+    host panel is a shared staff panel, so the picker is
+    ``allow_anyone`` and the staff gate runs inside the pick handler
+    through the host view's own ``interaction_check`` (same denial
+    wording), exactly as the host gated the raw select. Picking
+    dispatches to the same ``_open_alt`` / ``_open_reason`` flows.
+    Back/Close restores the review panel untouched.
+    """
+
     def __init__(self, parent_view: "MemberReviewView") -> None:
         self.parent_view = parent_view
 
-        options: list[discord.SelectOption] = []
+        choices = []
 
         if parent_view.target_is_bot:
-            options.extend(
+            choices.extend(
                 [
-                    discord.SelectOption(
-                        label="Approved Bot",
-                        value="approved_bot",
+                    make_choice(
+                        "Approved Bot",
+                        "approved_bot",
                         emoji="🤖",
                         description="Official bot is expected and approved.",
                     ),
-                    discord.SelectOption(
-                        label="Suspicious Bot",
-                        value="suspicious_bot",
+                    make_choice(
+                        "Suspicious Bot",
+                        "suspicious_bot",
                         emoji="⚠️",
                         description="Official bot needs staff investigation.",
                     ),
@@ -168,56 +181,76 @@ class MoreReviewActionsSelect(discord.ui.Select):
             )
 
         if parent_view.source_key:
-            options.extend(
+            choices.extend(
                 [
-                    discord.SelectOption(
-                        label="Bad Invite Source",
-                        value="bad_invite_source",
+                    make_choice(
+                        "Bad Invite Source",
+                        "bad_invite_source",
                         emoji="🚫",
                         description="This invite/source has concerning activity.",
                     ),
-                    discord.SelectOption(
-                        label="Clear Invite Source",
-                        value="clear_invite_source",
+                    make_choice(
+                        "Clear Invite Source",
+                        "clear_invite_source",
                         emoji="🧼",
                         description="Clear the current source concern.",
                     ),
                 ]
             )
 
-        options.extend(
+        choices.extend(
             [
-                discord.SelectOption(
-                    label="Likely Alt",
-                    value="likely_alt",
+                make_choice(
+                    "Likely Alt",
+                    "likely_alt",
                     emoji="🟠",
                     description="Link another account as likely the same person.",
                 ),
-                discord.SelectOption(
-                    label="Confirmed Alt",
-                    value="confirmed_alt",
+                make_choice(
+                    "Confirmed Alt",
+                    "confirmed_alt",
                     emoji="🔴",
                     description="Create a confirmed duplicate identity link.",
                 ),
-                discord.SelectOption(
-                    label="Reset Review Verdict",
-                    value="reset",
+                make_choice(
+                    "Reset Review Verdict",
+                    "reset",
                     emoji="↩️",
                     description="Resets verdict only; identity links stay active.",
                 ),
             ]
         )
 
+        async def on_pick(interaction: discord.Interaction, value: str) -> None:
+            if not await self.parent_view.interaction_check(interaction):
+                return
+            await self._apply_pick(interaction, value)
+
+        async def on_home(interaction: discord.Interaction) -> None:
+            if not await self.parent_view.interaction_check(interaction):
+                return
+            message = getattr(interaction, "message", None)
+            embeds = getattr(message, "embeds", None) if message is not None else None
+            embed = embeds[0] if embeds else None
+            if interaction.response.is_done():
+                await interaction.edit_original_response(embed=embed, view=self.parent_view)
+            else:
+                await interaction.response.edit_message(embed=embed, view=self.parent_view)
+
         super().__init__(
+            author_id=0,
+            choices=choices,
+            on_pick=on_pick,
+            custom_id="dank:member_review:more_actions:picker:v1",
             placeholder="More staff verdicts…",
-            min_values=1,
-            max_values=1,
-            options=options,
-            row=1,
+            title="More Staff Verdicts",
+            timeout=900,
+            allow_anyone=True,
+            on_home=on_home,
+            on_cancel=on_home,
         )
 
-    async def callback(self, interaction: discord.Interaction) -> None:
-        value = self.values[0]
+    async def _apply_pick(self, interaction: discord.Interaction, value: str) -> None:
 
         titles = {
             "approved_bot": "Approve Official Bot",
@@ -279,7 +312,15 @@ class MemberReviewView(discord.ui.View):
             ):
                 self.remove_item(item)
 
-        self.add_item(MoreReviewActionsSelect(self))
+        self.add_item(
+            DankPickerOpenButton(
+                label="More Staff Verdicts",
+                emoji="⚖️",
+                custom_id="dank:member_review:more_actions:open",
+                row=1,
+                build=lambda interaction: MoreReviewActionsSelect(self),
+            )
+        )
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if not await _staff_allowed(interaction):

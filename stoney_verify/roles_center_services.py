@@ -11,6 +11,7 @@ from typing import Any
 import discord
 
 from .ui.current_channel import current_text_channel
+from .ui.picker import DankChannelSelect
 
 
 async def _send_ephemeral(interaction: discord.Interaction, content: str = "", **kwargs: Any) -> None:
@@ -75,24 +76,32 @@ async def _post_default_panel(interaction: discord.Interaction, channel: discord
     await roles._send_creation_notes(interaction, created=created, reused=reused)
 
 
-class RolePanelChannelSelect(discord.ui.ChannelSelect):
+class RolePanelChannelSelect(DankChannelSelect):
+    """House channel picker for self-role panel placement (framework wrapper).
+
+    Was a raw ``discord.ui.ChannelSelect``; the setup-permission gate
+    stays inside the pick handler (its denial is unchanged), and a
+    pick posts the same default panel to the same channel.
+    """
+
     def __init__(self, *, kind: str) -> None:
         self.kind = kind
         label = "pronoun" if kind != "identity" else "optional identity"
         super().__init__(
+            author_id=0,
+            on_pick=self._post_panel,
             placeholder=f"Choose channel for {label} self-role panel...",
             min_values=1,
             max_values=1,
             channel_types=[discord.ChannelType.text],
-            custom_id=f"dank_setup_roles:{kind}:channel",
         )
+        self.custom_id = f"dank_setup_roles:{kind}:channel"
 
-    async def callback(self, interaction: discord.Interaction) -> None:  # type: ignore[override]
+    async def _post_panel(self, interaction: discord.Interaction, channel: object) -> None:
         from stoney_verify.commands_ext.public_setup_group import _require_setup_permission
 
         if not await _require_setup_permission(interaction):
             return
-        channel = self.values[0] if self.values else None
         if not isinstance(channel, discord.TextChannel):
             return await _send_ephemeral(interaction, "❌ Pick a normal text channel.")
         await _post_default_panel(interaction, channel, kind=self.kind)

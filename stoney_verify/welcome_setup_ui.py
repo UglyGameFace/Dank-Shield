@@ -8,6 +8,7 @@ import discord
 
 from .commands_ext.public_setup_group import _require_setup_permission, _upsert_config
 from .ui.current_channel import current_text_channel
+from .ui.picker import DankChannelSelect, DankPagedPickerView, DankPickerOpenButton, make_choice
 from .commands_ext.public_welcome_group import (
     _cfg_bool,
     _cfg_int,
@@ -179,35 +180,74 @@ async def _welcome_embed(
     return embed
 
 
-class _WelcomeSectionSelect(discord.ui.Select):
-    def __init__(self, owner_id: int, section: str) -> None:
+class _WelcomeSectionSelect(DankPagedPickerView):
+    """House picker for switching Welcome & Exit setup sections.
+
+    Was a raw ``discord.ui.Select``; the owner gate (with its exact
+    denial wording) and the setup-permission gate stay inside the
+    pick handler in the original order, and picking renders the
+    same WelcomeSetupView for the chosen section. Back/Close
+    restores the panel on the current section.
+    """
+
+    def __init__(
+        self,
+        owner_id: int,
+        section: str,
+        *,
+        host_view: Optional["WelcomeSetupView"] = None,
+    ) -> None:
         self.owner_id = int(owner_id)
+        self.section = section
+        self.host_view = host_view
+
+        async def _gate(interaction: discord.Interaction) -> bool:
+            if int(interaction.user.id) != self.owner_id:
+                await _send_private(interaction, content="Open your own Welcome & Exit panel.")
+                return False
+            if not await _require_setup_permission(interaction):
+                return False
+            if interaction.guild is None:
+                await _send_private(interaction, content="Use this inside a server.")
+                return False
+            return True
+
+        async def _render(interaction: discord.Interaction, target_section: str) -> None:
+            guild = interaction.guild
+            if guild is None:
+                return
+            from .commands_ext import public_setup_solid as solid
+
+            await solid._safe_defer_update(interaction)
+            config = await get_guild_config(int(guild.id), refresh=True)
+            await solid._edit_or_followup(
+                interaction, embed=await _welcome_embed(guild, config, section=target_section),
+                view=WelcomeSetupView(owner_id=self.owner_id, config=config, section=target_section),
+            )
+
+        async def on_pick(interaction: discord.Interaction, value: str) -> None:
+            if not await _gate(interaction):
+                return
+            await _render(interaction, value)
+
+        async def on_home(interaction: discord.Interaction) -> None:
+            if not await _gate(interaction):
+                return
+            await _render(interaction, self.section)
+
         super().__init__(
-            placeholder="Choose welcome or exit settings",
-            options=[
-                discord.SelectOption(
-                    label=label, value=key, default=section == key,
-                )
+            author_id=0,
+            choices=[
+                make_choice(label, key, default=section == key)
                 for key, label in _WELCOME_SECTION_LABELS.items()
             ],
-            row=0, custom_id="dank:welcome:settings:section:v2",
-        )
-
-    async def callback(self, interaction: discord.Interaction) -> None:
-        if int(interaction.user.id) != self.owner_id:
-            return await _send_private(interaction, content="Open your own Welcome & Exit panel.")
-        if not await _require_setup_permission(interaction):
-            return
-        guild = interaction.guild
-        if guild is None:
-            return await _send_private(interaction, content="Use this inside a server.")
-        from .commands_ext import public_setup_solid as solid
-        await solid._safe_defer_update(interaction)
-        config = await get_guild_config(int(guild.id), refresh=True)
-        section = self.values[0]
-        await solid._edit_or_followup(
-            interaction, embed=await _welcome_embed(guild, config, section=section),
-            view=WelcomeSetupView(owner_id=self.owner_id, config=config, section=section),
+            on_pick=on_pick,
+            custom_id="dank:welcome:settings:section:v2",
+            placeholder="Choose welcome or exit settings",
+            title="Welcome & Exit",
+            timeout=900,
+            on_home=on_home,
+            on_cancel=on_home,
         )
 
 
@@ -246,30 +286,32 @@ class WelcomeTemplateModal(discord.ui.Modal):
         )
 
 
-class WelcomeChannelSelect(discord.ui.ChannelSelect):
+class WelcomeChannelSelect(DankChannelSelect):
+    """House channel picker for the static welcome channel (framework wrapper).
+
+    Was a raw ``discord.ui.ChannelSelect``; the host view's owner
+    check still runs first inside the pick handler, and picking
+    saves the same channel through ``save_welcome_channel``.
+    """
+
     def __init__(self) -> None:
         super().__init__(
+            author_id=0,
+            on_pick=self._save,
             placeholder="Choose the static welcome/start-here channel…",
             min_values=1,
             max_values=1,
             channel_types=[discord.ChannelType.text],
-            custom_id="dank_setup_welcome:channel",
             row=0,
         )
+        self.custom_id = "dank_setup_welcome:channel"
 
-    async def callback(self, interaction: discord.Interaction) -> None:
+    async def _save(self, interaction: discord.Interaction, channel: object) -> None:
         view = self.view
         if not isinstance(view, WelcomeSetupView) or not await view.interaction_check(
             interaction
         ):
             return
-        guild = interaction.guild
-        selected = self.values[0] if self.values else None
-        channel = (
-            guild.get_channel(int(selected.id))
-            if guild is not None and selected is not None
-            else None
-        )
         if not isinstance(channel, discord.TextChannel):
             return await _send_private(
                 interaction,
@@ -286,7 +328,16 @@ class WelcomeSetupView(discord.ui.View):
         self.section = section if section in _WELCOME_SECTIONS else "static"
         original = {str(getattr(item, "label", "")): item for item in self.children}
         self.clear_items()
-        self.add_item(_WelcomeSectionSelect(self.owner_id, self.section))
+        self.add_item(
+            DankPickerOpenButton(
+                label="Choose Section",
+                custom_id="dank:welcome:settings:section:open",
+                row=0,
+                build=lambda interaction: _WelcomeSectionSelect(
+                    self.owner_id, self.section, host_view=self
+                ),
+            )
+        )
         if self.section == "static":
             picker = WelcomeChannelSelect()
             picker.row = 1

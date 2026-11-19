@@ -546,17 +546,15 @@ RECENT_UPDATES: tuple[RecentFeatureUpdate, ...] = (
     # the ghost entry in Edit Posted forever. Post Builder now explains it
     # plainly, clears the stale entry, and lets the draft publish fresh.
     # Same day: every studio picker moved to the house picker framework
-    # (Felix's standing rule) — the detail sentence covers that too.
+    # (Felix's standing rule) — picker coverage is noted in the "help"
+    # entry below, which tracks the whole migration.
     RecentFeatureUpdate(
         "embed_studio", "Scheduled and recurring posts are in Post Builder",
         "Announcements in 4 steps: schedule for later, repeat daily or "
         "weekly, run a campaign, add a form or a live-updating post — "
         "plus JSON backups, all in Post Builder. If a post you are "
         "editing was deleted, Post Builder now says so, clears the stale "
-        "entry, and lets you publish your draft as a new post. Every "
-        "picker in Post Builder and the Welcome and Exit Card Studios "
-        "now uses the standard Dank Shield picker, paged so every "
-        "channel stays reachable in big servers.", "2026-11-19",
+        "entry, and lets you publish your draft as a new post.", "2026-11-19",
     ),
     RecentFeatureUpdate(
         "share_router", "Share videos from regular channels",
@@ -598,25 +596,28 @@ RECENT_UPDATES: tuple[RecentFeatureUpdate, ...] = (
         "Save categories, channels, roles and permissions, then restore from a reviewed plan.",
         "2026-11-18",
     ),
-    # Picker migration slices 2 + 6 + 7 + 8 (2026-11-19): the /dank
-    # home and Help pickers, the section pickers in Protection Center,
-    # Member Setup and the Action Center (slice 2), the remaining
-    # Protection Center, SpamGuard, Safety Network and Dead Server
-    # Clapbacks pickers (slice 6), the Design Studio pickers
-    # (slice 7), and the Community Hub, Community Pings/Tools,
-    # profile, Share Router, Soundboard, Server Stats, Toke and
-    # Trusted Ads pickers (slice 8) moved to the house picker
-    # framework, like the studios did in slice 1.
+    # Picker migration (2026-11-19, slices 1–9 complete): every
+    # picker in Dank Shield moved to the house picker framework —
+    # the studios (slice 1), /dank home, Help and section pickers
+    # (slice 2), setup flows (slice 3), tickets (slice 4), members
+    # and moderation (slice 5), Protection, SpamGuard, Safety
+    # Network and Clapbacks (slice 6), Design Studio (slice 7),
+    # Community and member-facing panels (slice 8), and finally
+    # server backups, config history, cleanup, verification,
+    # captions, modlog, roles, welcome and the reminder recipient
+    # picker (slice 9). Only two internal non-panel selects stay
+    # raw by design (a modal-internal duration select and a
+    # disabled preview replica); neither is a user-facing picker.
     RecentFeatureUpdate(
-        "help", "Home, Help and panel pickers use the standard picker",
+        "help", "Every Dank Shield picker now uses the standard picker",
         "Every picker in Dank Shield now uses the standard picker "
-        "— the one Post Builder uses — including /dank home, Help, "
-        "the studios, Design, Protection, SpamGuard, Safety "
-        "Network, Member Setup, Action Center, Clapbacks, the "
-        "Community Hub, Community Pings and Tools, profiles, Share "
-        "Router, Soundboard, Server Stats, Toke and Trusted Ads, "
-        "with fixed IDs that survive restarts and paging for long "
-        "lists.",
+        "— the one Post Builder uses — with fixed IDs that survive "
+        "restarts and paging for long lists: /dank home, Help, the "
+        "studios, setup, tickets, members, Design, Protection, "
+        "SpamGuard, Safety Network, Action Center, Clapbacks, the "
+        "Community Hub, profiles, Share Router, server backups, "
+        "settings history, cleanup, verification, captions, modlog, "
+        "roles and welcome.",
         "2026-11-19",
     ),
 )

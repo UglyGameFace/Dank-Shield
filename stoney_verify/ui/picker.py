@@ -311,7 +311,23 @@ class DankMultiPickerView(discord.ui.View):
 
     async def handle_pick(self, interaction: discord.Interaction, values: list[str]) -> None:
         clean = [str(value) for value in values if str(value or "") not in {"", "__dank_empty__"}]
+        self.values = clean
         await self.on_pick(interaction, clean)
+
+    @property
+    def options(self) -> list[discord.SelectOption]:
+        for child in getattr(self, "children", []):
+            if isinstance(child, discord.ui.Select):
+                return list(child.options)
+        return []
+
+    @property
+    def values(self) -> list[str]:
+        return list(self.__dict__.get("_values") or [])
+
+    @values.setter
+    def values(self, new_values: Any) -> None:
+        self.__dict__["_values"] = [str(value) for value in (new_values or [])]
 
     async def close(self, interaction: discord.Interaction) -> None:
         if self.on_cancel is not None:
@@ -488,12 +504,229 @@ class DankMentionableSelect(discord.ui.MentionableSelect):
         await self.on_pick(interaction, value)
 
 
+class DankPagedPickerView(DankPickerView):
+    """House picker that pages long choice lists with ``chunk_choices``.
+
+    Every choice stays reachable past Discord's 25-option select limit:
+    pages carry page-suffixed stable custom_ids and Prev/Next buttons.
+    Also keeps the legacy select-shaped surface (``options`` / ``values``
+    / ``callback``) that older callers and tests used to drive the raw
+    selects this replaces, so a migrated picker can be driven exactly
+    like the select it superseded.
+    """
+
+    def __init__(
+        self,
+        *,
+        author_id: int,
+        choices: Sequence[DankChoice],
+        on_pick: PickerAction,
+        custom_id: str,
+        placeholder: str = "Choose an option…",
+        timeout: Optional[float] = _DEFAULT_TIMEOUT_SECONDS,
+        title: str = "Dank Shield Picker",
+        home_label: str = "Back",
+        cancel_label: str = "Close",
+        allow_anyone: bool = False,
+        include_cancel: bool = True,
+        on_home: Optional[Callable[[discord.Interaction], Awaitable[None]]] = None,
+        on_cancel: Optional[Callable[[discord.Interaction], Awaitable[None]]] = None,
+        page: int = 0,
+    ) -> None:
+        all_choices = list(choices or [])
+        pages = chunk_choices(all_choices) or [[]]
+        page = max(0, min(int(page), len(pages) - 1))
+        base_custom_id = _clip(custom_id, 96) or "dank:picker"
+        super().__init__(
+            author_id=int(author_id or 0),
+            choices=pages[page],
+            on_pick=on_pick,
+            custom_id=f"{base_custom_id}:{page}" if len(pages) > 1 else base_custom_id,
+            placeholder=(
+                f"{placeholder} • Page {page + 1}/{len(pages)}"
+                if len(pages) > 1
+                else placeholder
+            ),
+            timeout=timeout,
+            title=title,
+            home_label=home_label,
+            cancel_label=cancel_label,
+            allow_anyone=allow_anyone,
+            include_cancel=include_cancel,
+            on_home=on_home,
+            on_cancel=on_cancel,
+        )
+        self.all_choices = all_choices
+        self.page = page
+        self.pages = len(pages)
+        self._paged_kwargs: dict[str, Any] = {
+            "author_id": int(author_id or 0),
+            "choices": all_choices,
+            "on_pick": on_pick,
+            "custom_id": base_custom_id,
+            "placeholder": placeholder,
+            "timeout": timeout,
+            "title": title,
+            "home_label": home_label,
+            "cancel_label": cancel_label,
+            "allow_anyone": allow_anyone,
+            "include_cancel": include_cancel,
+            "on_home": on_home,
+            "on_cancel": on_cancel,
+        }
+        self._base_custom_id = base_custom_id
+        if len(pages) > 1:
+            self.add_item(_PagedPickerPageButton(delta=-1, disabled=page <= 0, base_custom_id=base_custom_id))
+            self.add_item(_PagedPickerPageButton(delta=1, disabled=page >= len(pages) - 1, base_custom_id=base_custom_id))
+
+    def _for_page(self, page: int) -> "DankPagedPickerView":
+        return DankPagedPickerView(**self._paged_kwargs, page=page)
+
+    @property
+    def options(self) -> list[discord.SelectOption]:
+        for child in getattr(self, "children", []):
+            if isinstance(child, discord.ui.Select):
+                return list(child.options)
+        return []
+
+    @property
+    def values(self) -> list[str]:
+        return list(self.__dict__.get("_values") or [])
+
+    @values.setter
+    def values(self, new_values: Any) -> None:
+        self.__dict__["_values"] = [str(value) for value in (new_values or [])]
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        vals = self.values
+        if vals:
+            await self.handle_pick(interaction, str(vals[0]))
+
+
+class _PagedPickerPageButton(discord.ui.Button):
+    def __init__(self, *, delta: int, disabled: bool, base_custom_id: str) -> None:
+        super().__init__(
+            label="Previous" if delta < 0 else "Next",
+            emoji="◀️" if delta < 0 else "▶️",
+            style=discord.ButtonStyle.secondary,
+            custom_id=f"{base_custom_id}:prev" if delta < 0 else f"{base_custom_id}:next",
+            row=2,
+            disabled=bool(disabled),
+        )
+        self.delta = int(delta)
+
+    async def callback(self, interaction: discord.Interaction) -> None:  # type: ignore[override]
+        view = self.view
+        if not isinstance(view, DankPagedPickerView):
+            return
+        if not await view.interaction_check(interaction):
+            return
+        page = max(0, min(view.page + self.delta, view.pages - 1))
+        if interaction.response.is_done():
+            await interaction.edit_original_response(view=view._for_page(page))
+        else:
+            await interaction.response.edit_message(view=view._for_page(page))
+
+
+class DankPickerOpenButton(discord.ui.Button):
+    """Opener that swaps a host panel for its house picker on the same message.
+
+    Replaces an embedded raw select 1-for-1 on the host view: the host
+    view's own interaction check still gates the press, the current
+    embed is preserved unless an explicit one is supplied, and the
+    picker is built fresh at press time so it always reflects live
+    host state. ``build`` may be a plain callable returning the picker
+    view.
+    """
+
+    def __init__(
+        self,
+        *,
+        label: str,
+        custom_id: str,
+        build: Callable[[discord.Interaction], discord.ui.View],
+        emoji: Optional[str] = None,
+        style: discord.ButtonStyle = discord.ButtonStyle.secondary,
+        row: int = 0,
+        embed: Optional[discord.Embed] = None,
+        disabled: bool = False,
+    ) -> None:
+        super().__init__(
+            label=_clip(label, 80),
+            emoji=emoji,
+            style=style,
+            custom_id=_clip(custom_id, 100),
+            row=row,
+            disabled=bool(disabled),
+        )
+        self._build = build
+        self._embed = embed
+
+    async def callback(self, interaction: discord.Interaction) -> None:  # type: ignore[override]
+        host = self.view
+        check = getattr(host, "interaction_check", None)
+        if callable(check):
+            try:
+                allowed = await check(interaction)
+            except Exception:
+                allowed = True
+            if not allowed:
+                return
+        picker = self._build(interaction)
+        embed = self._embed
+        if embed is None:
+            message = getattr(interaction, "message", None)
+            embeds = getattr(message, "embeds", None) if message is not None else None
+            embed = embeds[0] if embeds else None
+        if interaction.response.is_done():
+            await interaction.edit_original_response(embed=embed, view=picker)
+        else:
+            await interaction.response.edit_message(embed=embed, view=picker)
+
+
+class DankPersistentSelect(discord.ui.Select):
+    """Framework select item for persistent, globally-resolved components.
+
+    Some published components (e.g. Embed Studio self-role posts) live
+    on messages with ``timeout=None`` views and are resolved by a
+    global interaction listener keyed on a stable custom_id, not by a
+    live view callback. Those cannot become an ephemeral picker view
+    without breaking already-posted panels, so the framework owns the
+    raw component here: callers must supply the stable custom_id and
+    the exact options, and the component keeps no callback of its own.
+    """
+
+    def __init__(
+        self,
+        *,
+        custom_id: str,
+        placeholder: str,
+        options: list[discord.SelectOption],
+        min_values: int = 1,
+        max_values: int = 1,
+        row: Optional[int] = None,
+        disabled: bool = False,
+    ) -> None:
+        super().__init__(
+            custom_id=_clip(custom_id, 100),
+            placeholder=_clip(placeholder, 150),
+            min_values=int(min_values),
+            max_values=int(max_values),
+            options=options,
+            row=row,
+            disabled=bool(disabled),
+        )
+
+
 __all__ = [
     "ChannelPickAction",
     "DankChannelSelect",
     "DankChoice",
     "DankMentionableSelect",
     "DankMultiPickerView",
+    "DankPagedPickerView",
+    "DankPersistentSelect",
+    "DankPickerOpenButton",
     "DankPickerView",
     "DankRoleSelect",
     "DankUserSelect",

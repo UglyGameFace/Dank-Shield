@@ -46,7 +46,7 @@ from .profile_signature_style import (
     server_profile_style,
     theme_style_updates,
 )
-from .ui.picker import DankPickerView, make_choice
+from .ui.picker import DankPagedPickerView, DankPickerOpenButton, DankPickerView, make_choice
 from .welcome_card_service import (
     configured_color_mode,
     configured_custom_colors,
@@ -1320,31 +1320,54 @@ class PlatformDetailView(discord.ui.View):
         await open_platform_manager(interaction, replace=True)
 
 
-class PlatformSelect(discord.ui.Select):
-    def __init__(self) -> None:
+class PlatformSelect(DankPagedPickerView):
+    """House picker for choosing a gaming/social platform.
+
+    Was a raw ``discord.ui.Select``; the host manager's owner check
+    runs inside the pick handler (same silent return on a foreign
+    press), and picking opens the same platform detail view.
+    Back/Close returns to the platform manager panel.
+    """
+
+    def __init__(self, *, author_id: int = 0) -> None:
+        self.manager_author_id = int(author_id)
+
+        async def on_pick(interaction: discord.Interaction, value: str) -> None:
+            await self._apply_pick(interaction, value)
+
+        async def on_home(interaction: discord.Interaction) -> None:
+            await open_platform_manager(interaction, replace=True)
+
         super().__init__(
-            placeholder="Choose a gaming or social platform…",
-            min_values=1,
-            max_values=1,
-            options=[
-                discord.SelectOption(label=spec.label, value=key, emoji=spec.emoji)
+            author_id=0,
+            choices=[
+                make_choice(spec.label, key, emoji=spec.emoji)
                 for key, spec in PLATFORM_SPECS.items()
             ],
+            on_pick=on_pick,
             custom_id="dank:profile:platform_picker:v1",
+            placeholder="Choose a gaming or social platform…",
+            title="Platforms & Accounts",
+            timeout=600,
+            on_home=on_home,
+            on_cancel=on_home,
         )
 
-    async def callback(self, interaction: discord.Interaction) -> None:
-        view = self.view
-        if not isinstance(view, PlatformManagerView) or not await view.interaction_check(interaction):
+    async def _apply_pick(self, interaction: discord.Interaction, platform: str) -> None:
+        view = getattr(self, "host_view", None)
+        author_id = int(getattr(view, "author_id", 0) or 0) or self.manager_author_id
+        if author_id <= 0:
             return
-        platform = str(self.values[0])
-        user = await get_profile_user(view.author_id, refresh=True)
+        if int(interaction.user.id) != author_id:
+            await _private(interaction, content="❌ Only the person who opened this manager can use it.")
+            return
+        user = await get_profile_user(author_id, refresh=True)
         raw = dict(user.get("platforms") or {}).get(platform)
         entry = dict(raw) if isinstance(raw, Mapping) else {}
         await _edit_private(
             interaction,
             embed=_platform_detail_embed(platform, entry),
-            view=PlatformDetailView(author_id=view.author_id, platform=platform, entry=entry),
+            view=PlatformDetailView(author_id=author_id, platform=platform, entry=entry),
         )
 
 
@@ -1352,7 +1375,15 @@ class PlatformManagerView(discord.ui.View):
     def __init__(self, *, author_id: int) -> None:
         super().__init__(timeout=600)
         self.author_id = int(author_id)
-        self.add_item(PlatformSelect())
+        self.add_item(
+            DankPickerOpenButton(
+                label="Choose a Platform",
+                emoji="🎮",
+                custom_id="dank:profile:platform_picker:open",
+                row=0,
+                build=lambda interaction: PlatformSelect(author_id=self.author_id),
+            )
+        )
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if int(interaction.user.id) != self.author_id:

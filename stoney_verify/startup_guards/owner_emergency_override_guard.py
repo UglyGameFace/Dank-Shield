@@ -7,6 +7,7 @@ from typing import Any, Optional
 
 import discord
 
+from ..ui.picker import DankPagedPickerView, DankPickerOpenButton, make_choice
 from ..tickets_new.owner_emergency_override import (
     available_owner_emergency_actions,
     execute_owner_emergency_override,
@@ -218,7 +219,17 @@ class OwnerEmergencyOverrideModal(discord.ui.Modal):
         await _reply(interaction, f"{prefix} {result.message}\n`{result.code}`")
 
 
-class OwnerEmergencyActionSelect(discord.ui.Select):
+class OwnerEmergencyActionSelect(DankPagedPickerView):
+    """House picker for the owner Emergency Override action.
+
+    Was a raw ``discord.ui.Select``; every validation from the raw
+    callback (live ticket channel, actual guild owner, action still
+    available for the ticket state) stays inside the pick handler
+    in the original order with the original wording, and picking
+    opens the same confirmation modal. Back/Close restores the
+    emergency menu untouched.
+    """
+
     def __init__(
         self,
         *,
@@ -228,24 +239,46 @@ class OwnerEmergencyActionSelect(discord.ui.Select):
     ):
         self.channel_id = int(channel_id)
         self.owner_id = int(owner_id)
-        options = [
-            discord.SelectOption(
-                label=_ACTION_LABELS[action],
-                value=action,
-                description=_ACTION_DESCRIPTIONS[action][:100],
-                emoji=_ACTION_EMOJIS[action],
+        self.actions = tuple(actions)
+
+        async def on_pick(interaction: discord.Interaction, value: str) -> None:
+            await self._apply_pick(interaction, value)
+
+        async def on_home(interaction: discord.Interaction) -> None:
+            message = getattr(interaction, "message", None)
+            embeds = getattr(message, "embeds", None) if message is not None else None
+            embed = embeds[0] if embeds else None
+            view = OwnerEmergencyActionView(
+                channel_id=self.channel_id,
+                owner_id=self.owner_id,
+                actions=self.actions,
             )
-            for action in actions
-        ]
+            if interaction.response.is_done():
+                await interaction.edit_original_response(embed=embed, view=view)
+            else:
+                await interaction.response.edit_message(embed=embed, view=view)
+
         super().__init__(
-            placeholder="Choose an emergency action…",
-            min_values=1,
-            max_values=1,
-            options=options,
+            author_id=0,
+            choices=[
+                make_choice(
+                    _ACTION_LABELS[action],
+                    action,
+                    description=_ACTION_DESCRIPTIONS[action][:100],
+                    emoji=_ACTION_EMOJIS[action],
+                )
+                for action in self.actions
+            ],
+            on_pick=on_pick,
             custom_id=f"ticket_owner_emergency_action:{self.channel_id}",
+            placeholder="Choose an emergency action…",
+            title="Emergency Override",
+            timeout=180,
+            on_home=on_home,
+            on_cancel=on_home,
         )
 
-    async def callback(self, interaction: discord.Interaction) -> None:
+    async def _apply_pick(self, interaction: discord.Interaction, picked: str) -> None:
         channel = interaction.channel
         guild = interaction.guild
         actor = _resolve_member(interaction)
@@ -261,7 +294,7 @@ class OwnerEmergencyActionSelect(discord.ui.Select):
         if int(actor.id) != self.owner_id or not is_actual_guild_owner(guild, actor):
             return await _reply(interaction, "❌ Only the actual Discord server owner can use this menu.")
 
-        action = str(self.values[0] if self.values else "").strip().lower()
+        action = str(picked or "").strip().lower()
         row = await _ticket_row(channel.id)
         if action not in available_owner_emergency_actions(row):
             return await _reply(
@@ -292,10 +325,16 @@ class OwnerEmergencyActionView(discord.ui.View):
     ):
         super().__init__(timeout=180)
         self.add_item(
-            OwnerEmergencyActionSelect(
-                channel_id=channel_id,
-                owner_id=owner_id,
-                actions=actions,
+            DankPickerOpenButton(
+                label="Choose Emergency Action",
+                emoji="🚨",
+                custom_id=f"ticket_owner_emergency_action:{int(channel_id)}:open",
+                row=0,
+                build=lambda interaction: OwnerEmergencyActionSelect(
+                    channel_id=channel_id,
+                    owner_id=owner_id,
+                    actions=actions,
+                ),
             )
         )
 

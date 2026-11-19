@@ -12,6 +12,7 @@ from typing import Any, Optional
 import discord
 
 from ..ui.current_channel import current_text_channel
+from ..ui.picker import DankChannelSelect, DankUserSelect
 
 from ..panel_lifecycle import PRIVATE_MENU_TTL_SECONDS
 from discord import app_commands
@@ -212,21 +213,28 @@ class CleanupRunModal(discord.ui.Modal, title="Run Configured Cleanup"):
         )
 
 
-class CleanupChannelSelect(discord.ui.ChannelSelect):
+class CleanupChannelSelect(DankChannelSelect):
+    """House channel picker for Cleanup panels (framework wrapper).
+
+    Was a raw ``discord.ui.ChannelSelect``; picking still stores the
+    chosen text channel on the parent view and re-renders it, with
+    the same rejection for a non-text selection.
+    """
+
     def __init__(self, parent: "_ChannelStateView", *, custom_id: str, placeholder: str) -> None:
         self.parent_view = parent
         super().__init__(
+            author_id=int(getattr(parent, "owner_id", 0) or 0),
+            on_pick=self._store_channel,
             placeholder=placeholder,
             min_values=1,
             max_values=1,
             channel_types=[discord.ChannelType.text],
-            custom_id=custom_id,
             row=0,
         )
+        self.custom_id = custom_id
 
-    async def callback(self, interaction: discord.Interaction) -> None:
-        selected = self.values[0] if self.values else None
-        channel = interaction.guild.get_channel(int(getattr(selected, "id", 0) or 0)) if interaction.guild else None
+    async def _store_channel(self, interaction: discord.Interaction, channel: object) -> None:
         if not isinstance(channel, discord.TextChannel):
             return await _private(interaction, "❌ Choose a text channel from this server.")
         self.parent_view.channel_id = int(channel.id)
@@ -340,19 +348,22 @@ class ChannelPurgeModal(discord.ui.Modal, title="Channel Purge Options"):
         )
 
 
-class CleanupUserSelect(discord.ui.UserSelect):
+class CleanupUserSelect(DankUserSelect):
+    """House user picker for the User Purge panel (framework wrapper)."""
+
     def __init__(self, parent: "UserPurgeView") -> None:
         self.parent_view = parent
         super().__init__(
+            author_id=int(getattr(parent, "owner_id", 0) or 0),
+            on_pick=self._store_user,
             placeholder="Optional: choose a current member…",
             min_values=1,
             max_values=1,
-            custom_id="dank:cleanup:user_purge:user:v1",
             row=0,
         )
+        self.custom_id = "dank:cleanup:user_purge:user:v1"
 
-    async def callback(self, interaction: discord.Interaction) -> None:
-        selected = self.values[0] if self.values else None
+    async def _store_user(self, interaction: discord.Interaction, selected: object) -> None:
         self.parent_view.user_id = int(getattr(selected, "id", 0) or 0)
         await interaction.response.edit_message(
             embed=self.parent_view.embed(interaction),
@@ -361,21 +372,23 @@ class CleanupUserSelect(discord.ui.UserSelect):
         )
 
 
-class UserPurgeChannelSelect(discord.ui.ChannelSelect):
+class UserPurgeChannelSelect(DankChannelSelect):
+    """House channel picker for the User Purge panel (framework wrapper)."""
+
     def __init__(self, parent: "UserPurgeView") -> None:
         self.parent_view = parent
         super().__init__(
+            author_id=int(getattr(parent, "owner_id", 0) or 0),
+            on_pick=self._store_channel,
             placeholder="Optional channel target when scope=CHANNEL…",
             min_values=1,
             max_values=1,
             channel_types=[discord.ChannelType.text],
-            custom_id="dank:cleanup:user_purge:channel:v1",
             row=1,
         )
+        self.custom_id = "dank:cleanup:user_purge:channel:v1"
 
-    async def callback(self, interaction: discord.Interaction) -> None:
-        selected = self.values[0] if self.values else None
-        channel = interaction.guild.get_channel(int(getattr(selected, "id", 0) or 0)) if interaction.guild else None
+    async def _store_channel(self, interaction: discord.Interaction, channel: object) -> None:
         if not isinstance(channel, discord.TextChannel):
             return await _private(interaction, "❌ Choose a text channel from this server.")
         self.parent_view.channel_id = int(channel.id)

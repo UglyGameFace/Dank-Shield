@@ -9,6 +9,7 @@ from ..guild_action_guard import decide_guild_action
 from ..guild_config import get_guild_config, invalidate_guild_config
 from ..guild_context import get_guild_context
 from ..interaction_guard import safe_send_error, safe_send_interaction
+from ..ui.picker import DankPagedPickerView, DankPickerOpenButton, make_choice
 from .public_setup_group import _require_setup_permission, _upsert_config, dank_group
 
 _ATTACHED = False
@@ -222,49 +223,101 @@ async def _save_modlog_channel_config(interaction: discord.Interaction, channel:
     )
 
 
-class ModlogChannelSelect(discord.ui.Select):
-    def __init__(self, channels: list[discord.TextChannel]) -> None:
-        options = [
-            discord.SelectOption(
-                label=_select_label(channel),
-                description=_select_description(channel),
-                value=str(int(channel.id)),
+class ModlogChannelSelect(DankPagedPickerView):
+    """House picker for choosing the modlog text channel.
+
+    Was a raw ``discord.ui.Select`` that silently truncated the
+    channel list with ``channels[:25]`` — on a large server most
+    channels could not be chosen. The picker pages the full list
+    with ``chunk_choices``; picking resolves and saves exactly the
+    same channel through ``_save_modlog_channel_config`` and then
+    disables the host picker view, exactly as the raw callback did.
+    Back/Close restores the host picker view untouched.
+    """
+
+    def __init__(
+        self,
+        channels: list[discord.TextChannel],
+        *,
+        author_id: int = 0,
+        host_view: Optional[discord.ui.View] = None,
+    ) -> None:
+        self.channels = list(channels)
+        self.author_id_value = int(author_id)
+        self.host_view = host_view
+
+        async def on_pick(interaction: discord.Interaction, value: str) -> None:
+            guild = interaction.guild
+            if guild is None:
+                await safe_send_interaction(interaction, content="❌ This must be used inside a server.", ephemeral=True)
+                return
+            channel, error = await _resolve_text_channel_by_id(guild, value)
+            if channel is None:
+                await safe_send_interaction(interaction, content=error, ephemeral=True)
+                return
+            await _defer(interaction)
+            await _save_modlog_channel_config(interaction, channel)
+            try:
+                host = self.host_view
+                if isinstance(host, discord.ui.View):
+                    for child in host.children:
+                        child.disabled = True
+                    await interaction.edit_original_response(view=host)
+            except Exception:
+                pass
+
+        async def on_home(interaction: discord.Interaction) -> None:
+            host = self.host_view or ModlogChannelPickerView(
+                author_id=self.author_id_value, channels=self.channels
             )
-            for channel in channels[:25]
-        ]
+            message = getattr(interaction, "message", None)
+            embeds = getattr(message, "embeds", None) if message is not None else None
+            embed = embeds[0] if embeds else None
+            if interaction.response.is_done():
+                await interaction.edit_original_response(embed=embed, view=host)
+            else:
+                await interaction.response.edit_message(embed=embed, view=host)
+
         super().__init__(
+            author_id=0,
+            choices=[
+                make_choice(
+                    _select_label(channel),
+                    str(int(channel.id)),
+                    description=_select_description(channel) or "",
+                )
+                for channel in self.channels
+            ],
+            on_pick=on_pick,
+            custom_id="dank:modlog:channel:picker:v1",
             placeholder="Choose the modlog text channel…",
-            min_values=1,
-            max_values=1,
-            options=options,
+            title="Modlog Channel",
+            timeout=300,
+            on_home=on_home,
+            on_cancel=on_home,
         )
 
-    async def callback(self, interaction: discord.Interaction) -> None:
-        guild = interaction.guild
-        if guild is None:
-            await safe_send_interaction(interaction, content="❌ This must be used inside a server.", ephemeral=True)
-            return
-        channel_id = self.values[0] if self.values else ""
-        channel, error = await _resolve_text_channel_by_id(guild, channel_id)
-        if channel is None:
-            await safe_send_interaction(interaction, content=error, ephemeral=True)
-            return
-        await _defer(interaction)
-        await _save_modlog_channel_config(interaction, channel)
-        try:
-            if isinstance(self.view, discord.ui.View):
-                for child in self.view.children:
-                    child.disabled = True
-                await interaction.edit_original_response(view=self.view)
-        except Exception:
-            pass
+    # Page turns reuse the stored pick/home closures (they capture
+    # this instance's channels and host view), so the framework's
+    # default ``_for_page`` reconstruction is exact.
 
 
 class ModlogChannelPickerView(discord.ui.View):
     def __init__(self, *, author_id: int, channels: list[discord.TextChannel]) -> None:
         super().__init__(timeout=300)
         self.author_id = int(author_id)
-        self.add_item(ModlogChannelSelect(channels))
+        self.channels = list(channels)
+        self.add_item(
+            DankPickerOpenButton(
+                label="Choose Channel",
+                emoji="#️⃣",
+                custom_id="dank:modlog:channel:open",
+                row=0,
+                build=lambda interaction: ModlogChannelSelect(
+                    self.channels, author_id=self.author_id, host_view=self
+                ),
+            )
+        )
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if int(interaction.user.id) != self.author_id:

@@ -15,9 +15,10 @@ from .embed_studio_campaigns import (
     parse_campaign, enqueue, list_campaigns, cancel,
 )
 from .embed_studio_ui import (
-    StudioSession, _StudioView, _staff, _say, _menu, _target_channel,
+    StudioSession, _StudioPickerView, _StudioView, _staff, _say, _menu, _target_channel,
     _post_blockers, _home,
 )
+from .ui.picker import make_choice
 
 
 class StudioCampaignModal(discord.ui.Modal, title="Repeat This Announcement"):
@@ -98,29 +99,81 @@ class StudioCampaignModal(discord.ui.Modal, title="Repeat This Announcement"):
         ))
 
 
-class StudioCampaignSelect(discord.ui.Select):
-    def __init__(self, session: StudioSession, rows: list[dict[str, Any]]) -> None:
-        self.session = session
-        options = [
-            discord.SelectOption(
-                label=f"{row['frequency']} • #{str(row['channel_id'])[:18]} • {str(row['next_fire_at'])[:18]}",
-                value=str(row["id"]),
-            ) for row in rows
-        ] or [discord.SelectOption(label="No active recurring campaigns", value="none")]
-        super().__init__(placeholder="Select a campaign to stop", options=options, row=0)
+_CAMPAIGNS_HEADING = "🔁 Recurring Campaigns"
+_CAMPAIGNS_DESCRIPTION = (
+    "Up to 20 active campaigns per server. "
+    "Each send rechecks staff and channel permissions. "
+    "Missed occurrences are never posted late."
+)
 
-    async def callback(self, interaction: discord.Interaction) -> None:
-        if self.values[0] == "none":
-            return await _say(interaction, "No active recurring campaigns.")
-        await _menu(interaction, heading="Stop this recurring campaign?",
-                    description="Future sends will stop; posts already published remain.",
-                    view=StopStudioCampaignView(self.session, self.values[0]))
+
+class StudioCampaignSelect(_StudioPickerView):
+    """House picker for choosing a recurring campaign to stop.
+
+    Was a raw ``discord.ui.Select`` inside StudioCampaignsMenu;
+    picking a campaign opens the same stop-confirmation menu, and
+    Back returns to the campaigns menu. Campaign lists page with
+    the studio picker's chunking instead of truncating.
+    """
+
+    def __init__(self, session: StudioSession, rows: list[dict[str, Any]]) -> None:
+        self.rows = list(rows)
+
+        async def on_pick(interaction: discord.Interaction, value: str) -> None:
+            if value == "none":
+                return await _say(interaction, "No active recurring campaigns.")
+            await _menu(interaction, heading="Stop this recurring campaign?",
+                        description="Future sends will stop; posts already published remain.",
+                        view=StopStudioCampaignView(session, value))
+
+        async def on_home(interaction: discord.Interaction) -> None:
+            await _menu(interaction, heading=_CAMPAIGNS_HEADING,
+                        description=_CAMPAIGNS_DESCRIPTION,
+                        view=StudioCampaignsMenu(session, self.rows))
+
+        choices = [
+            make_choice(
+                f"{row['frequency']} • #{str(row['channel_id'])[:18]} • {str(row['next_fire_at'])[:18]}",
+                str(row["id"]),
+            ) for row in self.rows
+        ] or [make_choice("No active recurring campaigns", "none")]
+        super().__init__(
+            session,
+            choices=choices,
+            on_pick=on_pick,
+            custom_id="dank:embed_studio:campaign:picker:v1",
+            placeholder="Select a campaign to stop",
+            title="Recurring Campaigns",
+            on_home=on_home,
+            home_label="Back",
+        )
+
+
+class _CampaignPickerOpenButton(discord.ui.Button):
+    """Swaps the campaigns menu for its house picker via _menu."""
+
+    def __init__(self, session: StudioSession, rows: list[dict[str, Any]]) -> None:
+        super().__init__(
+            label="Select a Campaign", emoji="🔁",
+            style=discord.ButtonStyle.primary,
+            custom_id="dank:embed_studio:campaign:open", row=0,
+        )
+        self.session = session
+        self.rows = list(rows)
+
+    async def callback(self, interaction: discord.Interaction) -> None:  # type: ignore[override]
+        view = self.view
+        if isinstance(view, _StudioView) and not await view.interaction_check(interaction):
+            return
+        await _menu(interaction, heading=_CAMPAIGNS_HEADING,
+                    description=_CAMPAIGNS_DESCRIPTION,
+                    view=StudioCampaignSelect(self.session, self.rows))
 
 
 class StudioCampaignsMenu(_StudioView):
     def __init__(self, session: StudioSession, rows: list[dict[str, Any]]) -> None:
         super().__init__(session)
-        self.add_item(StudioCampaignSelect(session, rows))
+        self.add_item(_CampaignPickerOpenButton(session, rows))
 
     @discord.ui.button(label="Back to Studio", emoji="🏠", style=discord.ButtonStyle.secondary, row=1)
     async def back(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:

@@ -143,6 +143,9 @@ def test_history_view_has_focused_controls_and_mobile_rows() -> None:
     view = ui.ConfigHistoryView(versions)
 
     assert button_labels(view) == {
+        # Picker migration slice 9: the version select is a house
+        # picker opened from this button.
+        "Choose a Version",
         "Choose Backup Contents",
         # Phase 3 slice 3a: entry point into Server Structure Backups.
         "Server Structure Backups",
@@ -153,10 +156,11 @@ def test_history_view_has_focused_controls_and_mobile_rows() -> None:
         "Setup Home",
         "Close",
     }
-    selects = [child for child in view.children if isinstance(child, discord.ui.Select)]
-    assert len(selects) == 1
-    assert selects[0].options[0].value == "8"
-    assert "Core Settings" in selects[0].options[0].label
+    # No raw select stays embedded; the house picker carries the options.
+    assert not [child for child in view.children if isinstance(child, discord.ui.Select)]
+    picker = ui.ConfigHistorySelect(versions, 0, host_view=view)
+    assert picker.options[0].value == "8"
+    assert "Core Settings" in picker.options[0].label
 
     rows: dict[int, int] = {}
     for child in view.children:
@@ -172,8 +176,10 @@ def test_history_pages_cover_all_retained_versions_without_truncation() -> None:
     ]
     first = ui.ConfigHistoryView(versions, page=0)
     second = ui.ConfigHistoryView(versions, page=1)
-    first_select = next(child for child in first.children if isinstance(child, discord.ui.Select))
-    second_select = next(child for child in second.children if isinstance(child, discord.ui.Select))
+    # Picker migration slice 9: versions are chosen from the house
+    # picker; its pages cover all retained versions without truncation.
+    first_select = ui.ConfigHistorySelect(versions, 0, host_view=first)
+    second_select = ui.ConfigHistorySelect(versions, 1, host_view=second)
 
     assert len(first_select.options) == 25
     assert len(second_select.options) == 25
@@ -191,14 +197,16 @@ def test_history_pages_cover_all_retained_versions_without_truncation() -> None:
 
 def test_backup_contents_defaults_to_both_domains_and_explains_them() -> None:
     view = ui.BackupContentsView()
-    selects = [child for child in view.children if isinstance(child, ui.BackupDomainSelect)]
-    assert len(selects) == 1
+    # Picker migration slice 9: the domain multi-select is a house
+    # multi-picker opened from the panel; it carries the same options.
+    assert not [child for child in view.children if isinstance(child, ui.BackupDomainSelect)]
+    picker = ui.BackupDomainSelect(view.selected_domains, host_view=view)
     assert view.selected_domains == {CORE_DOMAIN, TICKET_CHOICES_DOMAIN}
-    assert {option.value for option in selects[0].options} == {
+    assert {option.value for option in picker.options} == {
         CORE_DOMAIN,
         TICKET_CHOICES_DOMAIN,
     }
-    assert all(option.default for option in selects[0].options)
+    assert all(option.default for option in picker.options)
 
     embed = ui._backup_contents_embed(view.selected_domains)
     rendered = "\n".join(str(field.value) for field in embed.fields)
@@ -348,11 +356,14 @@ def test_exact_change_picker_tracks_individual_selections() -> None:
     )
 
     assert view.selected_items == {"partnerships"}
-    selects = [child for child in view.children if isinstance(child, ui.RestoreItemSelect)]
-    assert len(selects) == 1
-    defaults = {option.value for option in selects[0].options if option.default}
+    # Picker migration slice 9: the item multi-select is a house
+    # multi-picker opened from the panel; it carries the same options.
+    assert not [child for child in view.children if isinstance(child, ui.RestoreItemSelect)]
+    picker = ui.RestoreItemSelect(plan, view.selected_items, page=0, host_view=view)
+    defaults = {option.value for option in picker.options if option.default}
     assert defaults == {"partnerships"}
     assert button_labels(view) == {
+        "Choose Changes",
         "Previous",
         "Next",
         "Review Selected",

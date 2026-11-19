@@ -60,7 +60,10 @@ def test_mobile_review_controls_are_compact() -> None:
     assert 'placeholder="More staff verdicts…"' in UI
     assert "Reset Review Verdict" in UI
     assert "identity links stay active" in UI
-    assert "self.add_item(MoreReviewActionsSelect(self))" in UI
+    # Slice 9: the select is a house-framework picker reached through
+    # an opener button on the review panel, not added raw.
+    assert "MoreReviewActionsSelect(self)" in UI
+    assert '"dank:member_review:more_actions:open"' in UI
 
 
 def test_command_permission_accepts_configured_staff_roles() -> None:

@@ -32,6 +32,7 @@ from typing import Any, Mapping, Optional
 import discord
 
 from .discord_time import discord_timestamp_pair
+from .ui.picker import DankPagedPickerView, DankPickerOpenButton, make_choice
 from .services import membership_gate
 from .services import server_backup_restore as restore_engine
 from .services import server_backup_service as backup_service
@@ -736,36 +737,70 @@ class _UnavailableView(discord.ui.View):
         await _edit(interaction, embed=_closed_embed(), view=None)
 
 
-class BackupSelect(discord.ui.Select):
-    def __init__(self, backups: list[Mapping[str, Any]], *, selected_id: int = 0) -> None:
-        options: list[discord.SelectOption] = []
-        for row in backups[:25]:
+class BackupSelect(DankPagedPickerView):
+    """House picker for choosing a backup on the Server Backups panel.
+
+    Was a raw ``discord.ui.Select`` that silently truncated the list
+    with ``backups[:25]`` — backups past the first 25 could never be
+    chosen. The picker pages the full list with ``chunk_choices``
+    (page-suffixed custom_ids, Prev/Next), and picking a backup runs
+    the exact flow the raw select used: the setup-permission gate,
+    then ``_render_panel`` with the picked ``backup_id`` — so a pick
+    selects exactly the same backup record as before. Back/Close
+    re-renders the panel with the previous selection untouched.
+    """
+
+    def __init__(
+        self,
+        backups: list[Mapping[str, Any]],
+        *,
+        selected_id: int = 0,
+        page: int = 0,
+    ) -> None:
+        self.backups = list(backups)
+        self.selected_id = int(selected_id or 0)
+        choices = []
+        for row in self.backups:
             backup_id = _safe_int(row.get("backup_id"))
             created = _parse_iso(row.get("created_at"))
             when = created.strftime("%Y-%m-%d %H:%M UTC") if created else "Unknown time"
-            options.append(
-                discord.SelectOption(
-                    label=_backup_title(row)[:100],
-                    value=str(backup_id),
+            choices.append(
+                make_choice(
+                    _backup_title(row)[:100],
+                    str(backup_id),
                     description=f"{when} • {_format_size(row.get('snapshot_bytes'))}"[:100],
-                    default=backup_id == int(selected_id or 0),
                     emoji="🗂️",
+                    default=backup_id == self.selected_id,
                 )
             )
+
+        async def on_pick(interaction: discord.Interaction, value: str) -> None:
+            if not await _require_setup_permission(interaction):
+                return
+            await _safe_defer_update(interaction)
+            await _render_panel(interaction, selected_id=_safe_int(value))
+
+        async def on_home(interaction: discord.Interaction) -> None:
+            if not await _require_setup_permission(interaction):
+                return
+            await _safe_defer_update(interaction)
+            await _render_panel(interaction, selected_id=self.selected_id)
+
         super().__init__(
+            author_id=0,
+            choices=choices,
+            on_pick=on_pick,
+            custom_id="dank:server_backups:backup:picker:v1",
             placeholder="Choose a backup to restore or delete…",
-            min_values=1,
-            max_values=1,
-            options=options,
-            row=0,
+            title="Server Backups",
+            timeout=900,
+            on_home=on_home,
+            on_cancel=on_home,
+            page=page,
         )
 
-    async def callback(self, interaction: discord.Interaction) -> None:
-        if not await _require_setup_permission(interaction):
-            return
-        await _safe_defer_update(interaction)
-        selected = _safe_int(self.values[0] if self.values else 0)
-        await _render_panel(interaction, selected_id=selected)
+    def _for_page(self, page: int) -> "BackupSelect":
+        return BackupSelect(self.backups, selected_id=self.selected_id, page=page)
 
 
 class ServerBackupsView(discord.ui.View):
@@ -781,7 +816,17 @@ class ServerBackupsView(discord.ui.View):
         self.selected_id = int(selected_id or 0)
         self.locked = bool(locked)
         if self.backups:
-            self.add_item(BackupSelect(self.backups, selected_id=self.selected_id))
+            self.add_item(
+                DankPickerOpenButton(
+                    label="Choose Backup",
+                    emoji="🗂️",
+                    custom_id="dank:server_backups:backup:open",
+                    row=0,
+                    build=lambda interaction: BackupSelect(
+                        self.backups, selected_id=self.selected_id
+                    ),
+                )
+            )
         selected = self._selected_row()
         self.restore.disabled = selected is None
         self.delete_backup.disabled = selected is None
@@ -1027,46 +1072,79 @@ async def _open_restore_flow(
     await _edit(interaction, embed=_mode_embed(row, resume=resume), view=view)
 
 
-class RestoreModeSelect(discord.ui.Select):
-    def __init__(self, *, default_mode: str = "all") -> None:
-        options = [
-            discord.SelectOption(
-                label="Everything — match the backup",
-                value="all",
-                description="Create what's missing and update what changed.",
-                emoji="♻️",
-                default=default_mode == "all",
-            ),
-            discord.SelectOption(
-                label="Missing only — safest recovery",
-                value="missing",
-                description="Recreate what's gone; update and delete nothing.",
-                emoji="🛡️",
-                default=default_mode == "missing",
-            ),
-        ]
-        super().__init__(
-            placeholder="Choose a restore mode…",
-            min_values=1,
-            max_values=1,
-            options=options,
-            row=0,
-        )
+class RestoreModeSelect(DankPagedPickerView):
+    """House picker for the restore mode (Everything / Missing only).
 
-    async def callback(self, interaction: discord.Interaction) -> None:
-        if not await _require_setup_permission(interaction):
-            return
-        view = self.view
-        if isinstance(view, RestoreModeView):
-            view.mode = _safe_str(self.values[0] if self.values else "all", "all")
-        await _safe_defer_update(interaction)
-        # Re-render so the select shows the new default.
-        if isinstance(view, RestoreModeView) and interaction.guild is not None:
-            await _edit(
-                interaction,
-                embed=_mode_embed(view.backup, resume=view.resume),
-                view=RestoreModeView(view.backup, resume=view.resume, mode=view.mode),
-            )
+    Was a raw ``discord.ui.Select`` inside RestoreModeView. Picking
+    runs the same flow: setup-permission gate, record the mode, then
+    re-render RestoreModeView so the panel shows the new default.
+    Back/Close re-renders the panel with the previous mode untouched.
+    """
+
+    def __init__(
+        self,
+        *,
+        default_mode: str = "all",
+        backup: Optional[Mapping[str, Any]] = None,
+        resume: bool = False,
+    ) -> None:
+        self.default_mode = default_mode if default_mode in ("all", "missing") else "all"
+        self.mode = self.default_mode
+        self.backup = dict(backup) if isinstance(backup, Mapping) else None
+        self.resume = bool(resume)
+
+        async def on_pick(interaction: discord.Interaction, value: str) -> None:
+            if not await _require_setup_permission(interaction):
+                return
+            self.mode = _safe_str(value, "all")
+            await _safe_defer_update(interaction)
+            # Re-render so the panel shows the new default.
+            if self.backup is not None and interaction.guild is not None:
+                await _edit(
+                    interaction,
+                    embed=_mode_embed(self.backup, resume=self.resume),
+                    view=RestoreModeView(self.backup, resume=self.resume, mode=self.mode),
+                )
+
+        async def on_home(interaction: discord.Interaction) -> None:
+            if not await _require_setup_permission(interaction):
+                return
+            await _safe_defer_update(interaction)
+            if self.backup is not None and interaction.guild is not None:
+                await _edit(
+                    interaction,
+                    embed=_mode_embed(self.backup, resume=self.resume),
+                    view=RestoreModeView(
+                        self.backup, resume=self.resume, mode=self.default_mode
+                    ),
+                )
+
+        super().__init__(
+            author_id=0,
+            choices=[
+                make_choice(
+                    "Everything — match the backup",
+                    "all",
+                    description="Create what's missing and update what changed.",
+                    emoji="♻️",
+                    default=self.default_mode == "all",
+                ),
+                make_choice(
+                    "Missing only — safest recovery",
+                    "missing",
+                    description="Recreate what's gone; update and delete nothing.",
+                    emoji="🛡️",
+                    default=self.default_mode == "missing",
+                ),
+            ],
+            on_pick=on_pick,
+            custom_id="dank:server_backups:mode:picker:v1",
+            placeholder="Choose a restore mode…",
+            title="Restore Mode",
+            timeout=600,
+            on_home=on_home,
+            on_cancel=on_home,
+        )
 
 
 class RestoreModeView(discord.ui.View):
@@ -1084,7 +1162,17 @@ class RestoreModeView(discord.ui.View):
         cursor_mode = _safe_str(state.get("plan_mode"))
         chosen = mode or (cursor_mode if self.resume and cursor_mode in ("all", "missing") else "all")
         self.mode = chosen if chosen in ("all", "missing") else "all"
-        self.add_item(RestoreModeSelect(default_mode=self.mode))
+        self.add_item(
+            DankPickerOpenButton(
+                label="Choose Restore Mode",
+                emoji="♻️",
+                custom_id="dank:server_backups:mode:open",
+                row=0,
+                build=lambda interaction: RestoreModeSelect(
+                    default_mode=self.mode, backup=self.backup, resume=self.resume
+                ),
+            )
+        )
 
     @discord.ui.button(
         label="Preview Restore Plan",

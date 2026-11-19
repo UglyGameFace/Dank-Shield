@@ -300,8 +300,13 @@ def test_panel_renders_backup_list_with_selection(panel):
     assert "Backup #6" in text
     assert "last restore finished" in text
     assert "Selected: Before redesign" in text
-    selects = [c for c in view.children if isinstance(c, discord.ui.Select)]
-    assert len(selects) == 1 and len(selects[0].options) == 2
+    # Picker migration slice 9: backups are chosen from the house
+    # picker opened from the panel; it carries the same options.
+    assert not [c for c in view.children if isinstance(c, discord.ui.Select)]
+    assert find_button(view, "Choose Backup") is not None
+    picker = ui.BackupSelect(view.backups, selected_id=5)
+    assert len(picker.options) == 2
+    assert {option.value for option in picker.options} == {"5", "6"}
     assert find_button(view, "Restore").disabled is False
 
 

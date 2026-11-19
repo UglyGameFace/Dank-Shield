@@ -12,7 +12,7 @@ from typing import Any, Optional
 import discord
 
 from ..guild_config import get_guild_config, invalidate_guild_config, upsert_guild_config
-from ..ui.picker import DankChannelSelect
+from ..ui.picker import DankChannelSelect, DankPagedPickerView, DankPickerOpenButton, make_choice
 from ..ui.current_channel import current_text_channel
 from ..community_voice_caption_runtime import (
     ensure_community_voice_caption_manager,
@@ -936,47 +936,74 @@ async def build_server_live_captions_embed(
 
 
 
-class CaptionLanguageGroupSelect(discord.ui.Select):
+class CaptionLanguageGroupSelect(DankPagedPickerView):
+    """House picker for the Live Captions language group.
+
+    Was a raw ``discord.ui.Select``; the owner gate (exact wording)
+    stays inside the pick handler, and picking runs the same flows:
+    Auto saves the empty hint and returns to the captions panel, a
+    group opens the same language-choice panel. Back/Close restores
+    the language-group panel untouched.
+    """
+
     def __init__(self, owner_id: int, current_hint: str) -> None:
         self.owner_id = int(owner_id)
         self.current_hint = str(current_hint or "")
         current_group = _caption_language_group_for_code(self.current_hint)
-        options = [
-            discord.SelectOption(
-                label="Auto · All Supported Languages",
-                value="__auto__",
+        choices = [
+            make_choice(
+                "Auto · All Supported Languages",
+                "__auto__",
                 description="Automatic detection + code-switching across Gemini's supported languages.",
                 emoji="✨",
                 default=not bool(self.current_hint),
             )
         ]
         for key, group in _CAPTION_LANGUAGE_GROUPS.items():
-            options.append(
-                discord.SelectOption(
-                    label=str(group["label"]),
-                    value=key,
+            choices.append(
+                make_choice(
+                    str(group["label"]),
+                    key,
                     description=str(group["description"])[:100],
                     emoji=str(group["emoji"]),
                     default=key == current_group,
                 )
             )
+
+        async def on_pick(interaction: discord.Interaction, value: str) -> None:
+            await self._apply_pick(interaction, value)
+
+        async def on_home(interaction: discord.Interaction) -> None:
+            if int(interaction.user.id) != self.owner_id:
+                return await interaction.response.send_message(
+                    "Open your own /captions panel to set your spoken language.",
+                    ephemeral=True,
+                )
+            await _defer_update(interaction)
+            await _edit_original(
+                interaction,
+                embed=_caption_language_picker_embed(current_hint=self.current_hint),
+                view=CaptionLanguageGroupView(self.owner_id, self.current_hint),
+            )
+
         super().__init__(
-            placeholder="Choose Auto or a language group",
-            min_values=1,
-            max_values=1,
-            options=options,
+            author_id=0,
+            choices=choices,
+            on_pick=on_pick,
             custom_id="dank:captions:server:language_group:v1",
-            row=0,
+            placeholder="Choose Auto or a language group",
+            title="Caption Language",
+            timeout=PRIVATE_MENU_TTL_SECONDS,
+            on_home=on_home,
+            on_cancel=on_home,
         )
 
-    async def callback(self, interaction: discord.Interaction) -> None:
+    async def _apply_pick(self, interaction: discord.Interaction, selected: str) -> None:
         if int(interaction.user.id) != self.owner_id:
             return await interaction.response.send_message(
                 "Open your own /captions panel to set your spoken language.",
                 ephemeral=True,
             )
-
-        selected = str(self.values[0])
         manager = ensure_community_voice_caption_manager(interaction.client)
         if selected == "__auto__":
             await _defer_update(interaction)
@@ -1021,7 +1048,15 @@ class CaptionLanguageGroupSelect(discord.ui.Select):
 class CaptionLanguageGroupView(_OwnedView):
     def __init__(self, owner_id: int, current_hint: str) -> None:
         super().__init__(owner_id)
-        self.add_item(CaptionLanguageGroupSelect(owner_id, current_hint))
+        self.add_item(
+            DankPickerOpenButton(
+                label="Choose Language Group",
+                emoji="🌐",
+                custom_id="dank:captions:server:language_group:open",
+                row=0,
+                build=lambda interaction: CaptionLanguageGroupSelect(owner_id, current_hint),
+            )
+        )
 
     @discord.ui.button(
         label="Back",
@@ -1044,7 +1079,16 @@ class CaptionLanguageGroupView(_OwnedView):
         )
 
 
-class CaptionLanguageChoiceSelect(discord.ui.Select):
+class CaptionLanguageChoiceSelect(DankPagedPickerView):
+    """House picker for one Live Captions language in a group.
+
+    Was a raw ``discord.ui.Select``; the owner gate (exact wording)
+    stays inside the pick handler, and picking saves the same
+    language hint and returns to the same captions panel. Groups
+    with more than 25 languages page instead of truncating.
+    Back/Close restores the language-choice panel untouched.
+    """
+
     def __init__(
         self,
         owner_id: int,
@@ -1053,33 +1097,58 @@ class CaptionLanguageChoiceSelect(discord.ui.Select):
     ) -> None:
         self.owner_id = int(owner_id)
         self.group_key = str(group_key)
+        self.current_hint = str(current_hint or "")
         group = _CAPTION_LANGUAGE_GROUPS[self.group_key]
-        options = [
-            discord.SelectOption(
-                label=label,
-                value=code,
-                description=f"Use {code} as your personal Gemini recognition hint.",
-                default=str(current_hint or "") == code,
+
+        async def on_pick(interaction: discord.Interaction, value: str) -> None:
+            await self._apply_pick(interaction, value)
+
+        async def on_home(interaction: discord.Interaction) -> None:
+            if int(interaction.user.id) != self.owner_id:
+                return await interaction.response.send_message(
+                    "Open your own /captions panel to set your spoken language.",
+                    ephemeral=True,
+                )
+            await _defer_update(interaction)
+            await _edit_original(
+                interaction,
+                embed=_caption_language_picker_embed(
+                    current_hint=self.current_hint,
+                    group_key=self.group_key,
+                ),
+                view=CaptionLanguageChoiceView(
+                    self.owner_id,
+                    self.group_key,
+                    self.current_hint,
+                ),
             )
-            for label, code in group["options"]
-        ]
+
         super().__init__(
-            placeholder=f"Choose from {group['label']}",
-            min_values=1,
-            max_values=1,
-            options=options,
+            author_id=0,
+            choices=[
+                make_choice(
+                    label,
+                    code,
+                    description=f"Use {code} as your personal Gemini recognition hint.",
+                    default=str(current_hint or "") == code,
+                )
+                for label, code in group["options"]
+            ],
+            on_pick=on_pick,
             custom_id=f"dank:captions:server:language_choice:{self.group_key}:v1"[:100],
-            row=0,
+            placeholder=f"Choose from {group['label']}",
+            title="Caption Language",
+            timeout=PRIVATE_MENU_TTL_SECONDS,
+            on_home=on_home,
+            on_cancel=on_home,
         )
 
-    async def callback(self, interaction: discord.Interaction) -> None:
+    async def _apply_pick(self, interaction: discord.Interaction, code: str) -> None:
         if int(interaction.user.id) != self.owner_id:
             return await interaction.response.send_message(
                 "Open your own /captions panel to set your spoken language.",
                 ephemeral=True,
             )
-
-        code = str(self.values[0])
         if code not in _SUPPORTED_CAPTION_LANGUAGE_CODES:
             return await interaction.response.send_message(
                 "❌ That language is no longer in the supported transcription list.",
@@ -1119,10 +1188,16 @@ class CaptionLanguageChoiceView(_OwnedView):
         super().__init__(owner_id)
         self.current_hint = str(current_hint or "")
         self.add_item(
-            CaptionLanguageChoiceSelect(
-                owner_id,
-                group_key,
-                current_hint,
+            DankPickerOpenButton(
+                label="Choose Language",
+                emoji="🌐",
+                custom_id="dank:captions:server:language_choice:open",
+                row=0,
+                build=lambda interaction: CaptionLanguageChoiceSelect(
+                    owner_id,
+                    group_key,
+                    current_hint,
+                ),
             )
         )
 
@@ -1682,43 +1757,83 @@ class CaptionVoiceRulePickerView(_OwnedView):
         )
 
 
-class CaptionLanguageOutputSelect(discord.ui.Select):
+def _caption_language_output_embed() -> discord.Embed:
+    return discord.Embed(
+        title="🌐 Live Captions Language & Translation",
+        description=(
+            "Gemini Live automatically detects **85+ supported languages** and can handle code-switching. "
+            "Choose how finalized captions are displayed. English translation uses the finalized transcript text only; "
+            "the original audio is not sent through another translation pass."
+        ),
+        color=discord.Color.blurple(),
+    )
+
+
+class CaptionLanguageOutputSelect(DankPagedPickerView):
+    """House picker for the Live Captions output mode.
+
+    Was a raw ``discord.ui.Select``; the owner and staff gates
+    (exact wording, original order) stay inside the pick handler,
+    and picking saves the same output-mode config and returns to
+    the same setup panel. Back/Close restores the output panel.
+    """
+
     def __init__(self, owner_id: int, current_mode: str) -> None:
         self.owner_id = int(owner_id)
+        self.current_mode = str(current_mode or "original")
         mode = _caption_output_mode_label(current_mode)
-        options = [
-            discord.SelectOption(
-                label="Original language",
-                value="original",
-                description="Show Gemini's finalized transcript in the language spoken.",
-                emoji="🗣️",
-                default=current_mode == "original",
-            ),
-            discord.SelectOption(
-                label="English",
-                value="english",
-                description="Translate non-English finalized text to English only.",
-                emoji="🇺🇸",
-                default=current_mode == "english",
-            ),
-            discord.SelectOption(
-                label="Original + English",
-                value="bilingual",
-                description="Show the original transcript plus an English translation.",
-                emoji="🌐",
-                default=current_mode == "bilingual",
-            ),
-        ]
+
+        async def on_pick(interaction: discord.Interaction, value: str) -> None:
+            await self._apply_pick(interaction, value)
+
+        async def on_home(interaction: discord.Interaction) -> None:
+            if int(interaction.user.id) != self.owner_id:
+                return await interaction.response.send_message(
+                    "Open your own Live Captions setup panel.",
+                    ephemeral=True,
+                )
+            await _defer_update(interaction)
+            await _edit_original(
+                interaction,
+                embed=_caption_language_output_embed(),
+                view=CaptionLanguageOutputView(self.owner_id, self.current_mode),
+            )
+
         super().__init__(
-            placeholder=f"Caption text output: {mode}",
-            min_values=1,
-            max_values=1,
-            options=options,
+            author_id=0,
+            choices=[
+                make_choice(
+                    "Original language",
+                    "original",
+                    description="Show Gemini's finalized transcript in the language spoken.",
+                    emoji="🗣️",
+                    default=current_mode == "original",
+                ),
+                make_choice(
+                    "English",
+                    "english",
+                    description="Translate non-English finalized text to English only.",
+                    emoji="🇺🇸",
+                    default=current_mode == "english",
+                ),
+                make_choice(
+                    "Original + English",
+                    "bilingual",
+                    description="Show the original transcript plus an English translation.",
+                    emoji="🌐",
+                    default=current_mode == "bilingual",
+                ),
+            ],
+            on_pick=on_pick,
             custom_id="dank:captions:setup:language_output:v1",
-            row=0,
+            placeholder=f"Caption text output: {mode}",
+            title="Caption Language Output",
+            timeout=PRIVATE_MENU_TTL_SECONDS,
+            on_home=on_home,
+            on_cancel=on_home,
         )
 
-    async def callback(self, interaction: discord.Interaction) -> None:
+    async def _apply_pick(self, interaction: discord.Interaction, selected: str) -> None:
         if int(interaction.user.id) != self.owner_id:
             return await interaction.response.send_message(
                 "Open your own Live Captions setup panel.",
@@ -1730,7 +1845,7 @@ class CaptionLanguageOutputSelect(discord.ui.Select):
                 ephemeral=True,
             )
         await _defer_update(interaction)
-        selected = str(self.values[0] if self.values else "original")
+        selected = str(selected or "original")
         try:
             await _save_caption_config(
                 interaction,
@@ -1760,7 +1875,15 @@ class CaptionLanguageOutputSelect(discord.ui.Select):
 class CaptionLanguageOutputView(_OwnedView):
     def __init__(self, owner_id: int, current_mode: str) -> None:
         super().__init__(owner_id)
-        self.add_item(CaptionLanguageOutputSelect(owner_id, current_mode))
+        self.add_item(
+            DankPickerOpenButton(
+                label="Choose Output Mode",
+                emoji="🌐",
+                custom_id="dank:captions:setup:language_output:open",
+                row=0,
+                build=lambda interaction: CaptionLanguageOutputSelect(owner_id, current_mode),
+            )
+        )
 
     @discord.ui.button(
         label="Back to Setup",

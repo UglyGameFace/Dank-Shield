@@ -16,6 +16,7 @@ from stoney_verify.action_notification_status import (
     NotificationPolicyStatus, inspect_saved_notification_status,
 )
 from stoney_verify.panel_lifecycle import PRIVATE_MENU_TTL_SECONDS
+from stoney_verify.ui.picker import DankPagedPickerView, DankPickerOpenButton, make_choice
 from .public_action_builder import _defer, _msg, _replace
 from .public_staff_scope import scoped_interaction_is_staff
 
@@ -73,24 +74,48 @@ async def open_existing_notification_owner(interaction: discord.Interaction, key
     await _route_feature(interaction, item.feature_route)
 
 
-class NotificationOwnerPicker(discord.ui.Select):
-    def __init__(self) -> None:
+class NotificationOwnerPicker(DankPagedPickerView):
+    """House picker for opening an existing notification system.
+
+    Was a raw ``discord.ui.Select`` with no custom_id embedded in the
+    directory view. Picking routes through the same
+    ``open_existing_notification_owner`` (staff gate inside, same
+    denial wording). Back/Close restores the directory view.
+    """
+
+    def __init__(self, user_id: int = 0, guild_id: int = 0) -> None:
+        self.user_id = int(user_id)
+        self.guild_id = int(guild_id)
+
+        async def on_pick(interaction: discord.Interaction, value: str) -> None:
+            await open_existing_notification_owner(interaction, value)
+
+        async def on_home(interaction: discord.Interaction) -> None:
+            await _replace(
+                interaction,
+                embed=_directory_embed(),
+                view=NotificationOwnerDirectoryView(self.user_id, self.guild_id),
+            )
+
         super().__init__(
-            placeholder="Choose an existing notification system…",
-            min_values=1, max_values=1, row=0,
-            options=[
-                discord.SelectOption(
-                    label=item.label,
-                    value=item.key,
+            author_id=self.user_id,
+            choices=[
+                make_choice(
+                    item.label,
+                    item.key,
                     description=item.description[:100],
                     emoji=item.emoji,
                 )
                 for item in NOTIFICATION_OWNERS
             ],
+            on_pick=on_pick,
+            custom_id="dank:action_notification:owner:picker:v1",
+            placeholder="Choose an existing notification system…",
+            title="Notification Systems",
+            timeout=PRIVATE_MENU_TTL_SECONDS,
+            on_home=on_home,
+            on_cancel=on_home,
         )
-
-    async def callback(self, interaction: discord.Interaction) -> None:
-        await open_existing_notification_owner(interaction, self.values[0])
 
 
 class NotificationOwnerDirectoryView(discord.ui.View):
@@ -98,7 +123,15 @@ class NotificationOwnerDirectoryView(discord.ui.View):
         super().__init__(timeout=PRIVATE_MENU_TTL_SECONDS)
         self.user_id = int(user_id)
         self.guild_id = int(guild_id)
-        self.add_item(NotificationOwnerPicker())
+        self.add_item(
+            DankPickerOpenButton(
+                label="Choose a System",
+                emoji="🧭",
+                custom_id="dank:action_notification:owner:open",
+                row=0,
+                build=lambda interaction: NotificationOwnerPicker(self.user_id, self.guild_id),
+            )
+        )
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if (
