@@ -1662,7 +1662,11 @@ class TargetPermissionRepairView(discord.ui.View):
         self.add_item(_TargetChannelSelect(state))
         self.add_item(
             DankPickerOpenButton(
-                label="Choose Feature",
+                # The old embedded select's placeholder showed the
+                # current feature ("Feature: Tickets"); the opener
+                # label carries it now so the panel still visibly
+                # preserves the selection before a target is picked.
+                label=f"Feature: {_feature_label(state.feature)}"[:80],
                 custom_id="dank_permission_repair:feature:open",
                 row=1,
                 build=lambda interaction: _FeatureSelect(state),
@@ -1670,7 +1674,9 @@ class TargetPermissionRepairView(discord.ui.View):
         )
         self.add_item(
             DankPickerOpenButton(
-                label="Choose Repair Mode",
+                # Same visible-preservation as the feature opener:
+                # the old select placeholder showed the current mode.
+                label=f"Repair mode: {_mode_label(state.mode)}"[:80],
                 custom_id="dank_permission_repair:mode:open",
                 row=2,
                 build=lambda interaction: _ModeSelect(state),

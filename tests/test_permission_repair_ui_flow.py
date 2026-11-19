@@ -39,15 +39,23 @@ def test_selected_target_screen_visibly_preserves_feature_and_mode_before_target
 
     view = permission_repair.TargetPermissionRepairView(state)
     target = _component(view, "dank_permission_repair:target")
-    feature = _component(view, "dank_permission_repair:feature")
-    mode = _component(view, "dank_permission_repair:mode")
     children = _component(view, "dank_permission_repair:children")
 
     assert "Choose a channel or category" in str(target.placeholder)
-    assert str(feature.placeholder) == "Feature: Tickets"
-    assert str(mode.placeholder) == "Repair mode: Full Dank Shield control"
-    assert [option.value for option in feature.options if option.default] == ["tickets"]
-    assert [option.value for option in mode.options if option.default] == ["full"]
+    # Slice 9: feature/mode are house pickers behind opener buttons.
+    # The opener labels visibly preserve the current selection (the
+    # old embedded selects showed it in their placeholders), and the
+    # pickers keep the exact placeholders and defaults.
+    feature_opener = _component(view, "dank_permission_repair:feature:open")
+    mode_opener = _component(view, "dank_permission_repair:mode:open")
+    assert str(feature_opener.label) == "Feature: Tickets"
+    assert str(mode_opener.label) == "Repair mode: Full Dank Shield control"
+    feature_picker = feature_opener._build(SimpleNamespace())
+    mode_picker = mode_opener._build(SimpleNamespace())
+    assert str(feature_picker.placeholder) == "Feature: Tickets"
+    assert str(mode_picker.placeholder) == "Repair mode: Full Dank Shield control"
+    assert [option.value for option in feature_picker.options if option.default] == ["tickets"]
+    assert [option.value for option in mode_picker.options if option.default] == ["full"]
     assert children.disabled is True
     assert str(children.label) == "Include Category Children: OFF"
 
