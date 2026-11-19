@@ -587,7 +587,10 @@ async def _recover_unowned_private_component(
             or custom_id.startswith("dank:cinema:")
             or _message_looks_like_dank_cinema(interaction)
         )
-        is_known_private_surface = is_private_community_hub or is_private_movie_night
+        is_private_member_review = custom_id.startswith("dank:members_review:")
+        is_known_private_surface = (
+            is_private_community_hub or is_private_movie_night or is_private_member_review
+        )
 
         # Definitely-unowned feature-scoped controls have no alternate business
         # listener. Claim them immediately so an expired panel does not burn the
@@ -618,6 +621,18 @@ async def _recover_unowned_private_component(
                     recovery_notice=(
                         "♻️ That Community Hub panel expired or belonged to an older bot session. "
                         "I refreshed Community Hub in place; the stale action was not executed."
+                    ),
+                )
+            elif is_private_member_review and interaction.guild is not None:
+                from .commands_ext.public_members_group import (
+                    reopen_member_activity_review,
+                )
+
+                await reopen_member_activity_review(
+                    interaction,
+                    recovery_notice=(
+                        "♻️ That member activity review expired or belonged to an older bot session. "
+                        "I reopened it in place; the stale action was not executed."
                     ),
                 )
             elif is_private_movie_night:

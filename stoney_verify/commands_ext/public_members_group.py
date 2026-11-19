@@ -48,6 +48,14 @@ members_group = app_commands.Group(
 )
 
 _REGISTERED = False
+# Stable component-id namespace for the member activity review family
+# (review screen, locked-users screen, per-user detail screen). These views
+# are process-local sessions: when one dies (15-minute timeout or a bot
+# restart/redeploy) the Discord message keeps rendering its buttons, so the
+# ids must stay recognisable for the component runtime to reopen the feature
+# instead of dumping the user at the generic Control Center. Never mint
+# per-instance ids here; dispatch stays message-scoped while a view is alive.
+MEMBER_REVIEW_CUSTOM_ID_PREFIX = "dank:members_review:"
 _FIELD_LIMIT = 1024
 _SAFE_FIELD_LIMIT = 950
 _PAGE_SIZE = 4
@@ -321,17 +329,17 @@ def _build_report_embed(report: InactiveScanReport, *, page: int = 0) -> discord
     embed = discord.Embed(
         title="🧹 Member Activity Review",
         description=(
-            "Preview only. No action is taken here.\n"
-            "Reviews all current member types using server activity, with explicit safety and evidence checks."
+            "Preview only — nobody is kicked or messaged from this screen.\n"
+            "These are the members who have gone quiet, based on activity Dank Shield actually saw in this server — not just someone being online."
         ),
         color=color,
         timestamp=report.scanned_at,
     )
     embed.add_field(name="Status Snapshot", value=_build_status_snapshot(report), inline=False)
     embed.add_field(name=f"Users Found — Page {page + 1}/{pages}", value=_build_page_users_text(report, page=page), inline=False)
-    embed.add_field(name="Controls", value="Select a user for details, lock/skip after review, manage locked users, or rescan with 30d/90d/180d.", inline=False)
+    embed.add_field(name="Controls", value="Pick a member in the list to see what they did and to lock or skip them. Locked Users shows everyone being skipped. The 30d/90d/180d buttons run the scan again with a different quiet period.", inline=False)
     embed.add_field(name="Settings", value=_build_settings_line(report), inline=False)
-    embed.set_footer(text="Post-verification activity only • See Data Notes for details.")
+    embed.set_footer(text="Only activity after verification counts • Data Notes explains what the scan can see.")
     return embed
 
 
@@ -1274,11 +1282,13 @@ class UserDetailLockView(discord.ui.View):
             label="Unlock / Show in Scans" if self.locked else "Lock / Skip in Scans",
             emoji="🔓" if self.locked else "🔒",
             style=discord.ButtonStyle.success if self.locked else discord.ButtonStyle.secondary,
+            custom_id=f"{MEMBER_REVIEW_CUSTOM_ID_PREFIX}detail_lock",
         )
         notice_button = discord.ui.Button(
             label="Notice This User",
             emoji="📩",
             style=discord.ButtonStyle.primary,
+            custom_id=f"{MEMBER_REVIEW_CUSTOM_ID_PREFIX}detail_notice",
         )
         lock_button.callback = self._toggle_lock  # type: ignore[assignment]
         notice_button.callback = self._notice_this_user  # type: ignore[assignment]
@@ -1358,6 +1368,7 @@ class LockedUserSelect(discord.ui.Select):
 
         super().__init__(
             placeholder="Select a locked user to review",
+            custom_id=f"{MEMBER_REVIEW_CUSTOM_ID_PREFIX}locked_select",
             min_values=1,
             max_values=1,
             options=options,
@@ -1425,6 +1436,7 @@ class LockedUsersReviewView(discord.ui.View):
             label="Previous",
             emoji="⬅️",
             style=discord.ButtonStyle.secondary,
+            custom_id=f"{MEMBER_REVIEW_CUSTOM_ID_PREFIX}locked_prev",
             disabled=self.page <= 0,
             row=1,
         )
@@ -1432,15 +1444,17 @@ class LockedUsersReviewView(discord.ui.View):
             label="Next",
             emoji="➡️",
             style=discord.ButtonStyle.secondary,
+            custom_id=f"{MEMBER_REVIEW_CUSTOM_ID_PREFIX}locked_next",
             disabled=self.page >= _locked_page_count(self.records) - 1,
             row=1,
         )
-        refresh_button = discord.ui.Button(label="Refresh", emoji="🔄", style=discord.ButtonStyle.primary, row=1)
+        refresh_button = discord.ui.Button(label="Refresh", emoji="🔄", style=discord.ButtonStyle.primary, custom_id=f"{MEMBER_REVIEW_CUSTOM_ID_PREFIX}locked_refresh", row=1)
 
         confirm_button = discord.ui.Button(
             label="Confirm Unlock",
             emoji="🔓",
             style=discord.ButtonStyle.danger,
+            custom_id=f"{MEMBER_REVIEW_CUSTOM_ID_PREFIX}locked_confirm",
             disabled=not (self.confirm_unlock_ready and self.selected_user_id is not None),
             row=2,
         )
@@ -1448,10 +1462,11 @@ class LockedUsersReviewView(discord.ui.View):
             label="Relock Last User",
             emoji="🔒",
             style=discord.ButtonStyle.secondary,
+            custom_id=f"{MEMBER_REVIEW_CUSTOM_ID_PREFIX}locked_relock",
             disabled=self.last_unlocked_user_id is None,
             row=2,
         )
-        back_button = discord.ui.Button(label="Back to Scan", emoji="↩️", style=discord.ButtonStyle.secondary, row=3)
+        back_button = discord.ui.Button(label="Back to Scan", emoji="↩️", style=discord.ButtonStyle.secondary, custom_id=f"{MEMBER_REVIEW_CUSTOM_ID_PREFIX}locked_back", row=3)
 
         previous_button.callback = self._previous_page  # type: ignore[assignment]
         next_button.callback = self._next_page  # type: ignore[assignment]
@@ -1631,7 +1646,7 @@ class MemberSelect(discord.ui.Select):
             )
         if not options:
             options.append(discord.SelectOption(label="No users found", description="Nothing to inspect on this scan.", value="none", emoji="✅"))
-        super().__init__(placeholder="Select a user to inspect manually", min_values=1, max_values=1, options=options, row=0, disabled=not report.candidates)
+        super().__init__(placeholder="Select a user to inspect manually", custom_id=f"{MEMBER_REVIEW_CUSTOM_ID_PREFIX}select", min_values=1, max_values=1, options=options, row=0, disabled=not report.candidates)
 
     async def callback(self, interaction: discord.Interaction) -> None:
         if not await _require_review_permission(interaction):
@@ -1663,20 +1678,20 @@ class MemberActivityReviewView(discord.ui.View):
     def _rebuild_items(self) -> None:
         self.clear_items()
         self.add_item(MemberSelect(self))
-        previous_button = discord.ui.Button(label="Previous", emoji="⬅️", style=discord.ButtonStyle.secondary, disabled=self.page <= 0, row=1)
-        next_button = discord.ui.Button(label="Next", emoji="➡️", style=discord.ButtonStyle.secondary, disabled=self.page >= _page_count(self.report) - 1, row=1)
-        refresh_button = discord.ui.Button(label="Refresh", emoji="🔄", style=discord.ButtonStyle.primary, row=1)
-        data_button = discord.ui.Button(label="Data Notes", emoji="📊", style=discord.ButtonStyle.secondary, row=2)
-        safety_button = discord.ui.Button(label="Safety", emoji="🛡️", style=discord.ButtonStyle.secondary, row=2)
-        ids_button = discord.ui.Button(label="Page IDs", emoji="🆔", style=discord.ButtonStyle.secondary, row=2)
-        locked_button = discord.ui.Button(label="Locked Users", emoji="🔒", style=discord.ButtonStyle.secondary, row=2)
-        preset_30_button = discord.ui.Button(label="30d", emoji="⚡", style=discord.ButtonStyle.secondary, row=3)
-        preset_90_button = discord.ui.Button(label="90d", emoji="🎯", style=discord.ButtonStyle.secondary, row=3)
-        preset_180_button = discord.ui.Button(label="180d", emoji="🧊", style=discord.ButtonStyle.secondary, row=3)
-        notice_review_button = discord.ui.Button(label="Notice Review", emoji="📣", style=discord.ButtonStyle.primary, row=4)
-        notice_purge_button = discord.ui.Button(label="Notice Purge-Safe", emoji="⚠️", style=discord.ButtonStyle.secondary, row=4)
-        notice_manual_button = discord.ui.Button(label="Notice Manual", emoji="📩", style=discord.ButtonStyle.secondary, row=4)
-        notice_results_button = discord.ui.Button(label="Notice Results", emoji="📊", style=discord.ButtonStyle.secondary, row=4)
+        previous_button = discord.ui.Button(label="Previous", emoji="⬅️", style=discord.ButtonStyle.secondary, custom_id=f"{MEMBER_REVIEW_CUSTOM_ID_PREFIX}prev", disabled=self.page <= 0, row=1)
+        next_button = discord.ui.Button(label="Next", emoji="➡️", style=discord.ButtonStyle.secondary, custom_id=f"{MEMBER_REVIEW_CUSTOM_ID_PREFIX}next", disabled=self.page >= _page_count(self.report) - 1, row=1)
+        refresh_button = discord.ui.Button(label="Refresh", emoji="🔄", style=discord.ButtonStyle.primary, custom_id=f"{MEMBER_REVIEW_CUSTOM_ID_PREFIX}refresh", row=1)
+        data_button = discord.ui.Button(label="Data Notes", emoji="📊", style=discord.ButtonStyle.secondary, custom_id=f"{MEMBER_REVIEW_CUSTOM_ID_PREFIX}data", row=2)
+        safety_button = discord.ui.Button(label="Safety", emoji="🛡️", style=discord.ButtonStyle.secondary, custom_id=f"{MEMBER_REVIEW_CUSTOM_ID_PREFIX}safety", row=2)
+        ids_button = discord.ui.Button(label="Page IDs", emoji="🆔", style=discord.ButtonStyle.secondary, custom_id=f"{MEMBER_REVIEW_CUSTOM_ID_PREFIX}ids", row=2)
+        locked_button = discord.ui.Button(label="Locked Users", emoji="🔒", style=discord.ButtonStyle.secondary, custom_id=f"{MEMBER_REVIEW_CUSTOM_ID_PREFIX}locked", row=2)
+        preset_30_button = discord.ui.Button(label="30d", emoji="⚡", style=discord.ButtonStyle.secondary, custom_id=f"{MEMBER_REVIEW_CUSTOM_ID_PREFIX}p30", row=3)
+        preset_90_button = discord.ui.Button(label="90d", emoji="🎯", style=discord.ButtonStyle.secondary, custom_id=f"{MEMBER_REVIEW_CUSTOM_ID_PREFIX}p90", row=3)
+        preset_180_button = discord.ui.Button(label="180d", emoji="🧊", style=discord.ButtonStyle.secondary, custom_id=f"{MEMBER_REVIEW_CUSTOM_ID_PREFIX}p180", row=3)
+        notice_review_button = discord.ui.Button(label="Notice Review", emoji="📣", style=discord.ButtonStyle.primary, custom_id=f"{MEMBER_REVIEW_CUSTOM_ID_PREFIX}notice_review", row=4)
+        notice_purge_button = discord.ui.Button(label="Notice Purge-Safe", emoji="⚠️", style=discord.ButtonStyle.secondary, custom_id=f"{MEMBER_REVIEW_CUSTOM_ID_PREFIX}notice_purge", row=4)
+        notice_manual_button = discord.ui.Button(label="Notice Manual", emoji="📩", style=discord.ButtonStyle.secondary, custom_id=f"{MEMBER_REVIEW_CUSTOM_ID_PREFIX}notice_manual", row=4)
+        notice_results_button = discord.ui.Button(label="Notice Results", emoji="📊", style=discord.ButtonStyle.secondary, custom_id=f"{MEMBER_REVIEW_CUSTOM_ID_PREFIX}notice_results", row=4)
 
         previous_button.callback = self._previous_page  # type: ignore[assignment]
         next_button.callback = self._next_page  # type: ignore[assignment]
@@ -1849,6 +1864,44 @@ class MemberActivityReviewView(discord.ui.View):
             return await reply_once(interaction, {"content": "No users on this page.", "ephemeral": True})
         lines = [f"{idx}. {c.display_name}: `{c.user_id}`" for idx, c in enumerate(candidates, start=start + 1)]
         await reply_once(interaction, {"content": _trim("🆔 **User IDs on this page**\n" + "\n".join(lines), 1900), "ephemeral": True})
+
+
+async def reopen_member_activity_review(
+    interaction: discord.Interaction,
+    *,
+    recovery_notice: Optional[str] = None,
+) -> None:
+    """Reopen the member activity review on a stale private message.
+
+    Called by the component runtime when a press lands on a review-family
+    control whose live view is gone (15-minute timeout or a bot restart /
+    redeploy). The stale action is never replayed: when this process still
+    holds the guild's last scan, the review reopens fresh on that report;
+    otherwise the feature's entry surface (Activity & Cleanup) replaces the
+    dead screen so the staff member can run a new scan.
+    """
+    report: Optional[InactiveScanReport] = None
+    if interaction.guild is not None:
+        try:
+            report = get_last_scan(int(interaction.guild.id))
+        except Exception:
+            report = None
+    if report is not None:
+        await interaction.response.edit_message(
+            content=recovery_notice,
+            embed=_build_report_embed(report, page=0),
+            view=MemberActivityReviewView(report, page=0),
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+        return
+    from .member_command_center import ActivityCleanupMenuView, _activity_embed
+
+    await interaction.response.edit_message(
+        content=recovery_notice,
+        embed=_activity_embed(),
+        view=ActivityCleanupMenuView(int(interaction.user.id)),
+        allowed_mentions=discord.AllowedMentions.none(),
+    )
 
 
 async def _run_activity_scan(
