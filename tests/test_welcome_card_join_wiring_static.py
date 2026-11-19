@@ -42,7 +42,7 @@ def test_staff_join_audit_remains_separate_from_public_card() -> None:
 
 def test_studio_panel_survives_preview_failure_and_controls_live_state() -> None:
     assert "class WelcomeCardStudioView(discord.ui.View)" in STUDIO
-    assert "WelcomeCardChannelSelect" in STUDIO
+    assert "WelcomeChannelPickerView" in STUDIO
     assert '"join_welcome_channel_id": str(channel.id)' in STUDIO
     assert '"welcome_card_enabled": True' in STUDIO
     assert "Preview needs repair" in STUDIO

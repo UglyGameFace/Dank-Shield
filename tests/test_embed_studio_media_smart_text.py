@@ -15,9 +15,10 @@ from stoney_verify.embed_studio_core import (
     resolve_smart_text, validate_media_item,
 )
 from stoney_verify.embed_studio_ui import (
-    ConfirmMediaRemoval, MediaLibraryMenu, MediaLinkSelect,
+    ConfirmMediaRemoval, MediaLibraryMenu,
     MediaPlacementMenu, MediaSaveModal, SmartTextHelp, StudioHomeView,
     StudioReviewView, StudioSession,
+    _StudioPickerOpenButton, _media_picker_view,
 )
 
 
@@ -96,9 +97,10 @@ def test_media_mobile_control_rows_and_confirmation_are_safe():
     lib = parse_library(None)
     lib["media"]["saved"] = {"name": "Banner", "url": "https://example.com/banner.png"}
     media = MediaLibraryMenu(session, lib)
-    selects = [item for item in media.children if isinstance(item, MediaLinkSelect)]
-    assert len(selects) == 1
-    assert selects[0].options[0].label == "Banner"
+    openers = [item for item in media.children if isinstance(item, _StudioPickerOpenButton)]
+    assert len(openers) == 1
+    assert openers[0].row == 0
+    assert _media_picker_view(session, lib).children[0].options[0].label == "Banner"
     assert len(MediaSaveModal(session).children) == 2
     place = MediaPlacementMenu(session, "saved")
     assert {"Large Image", "Thumbnail", "Author Icon", "Footer Icon", "Remove Saved Link"} <= {
@@ -122,11 +124,12 @@ def test_media_picker_paginates_fifty_links_without_ever_exceeding_discord_limit
     labels = []
     for page, expected in ((0, 20), (1, 20), (2, 10)):
         view = MediaLibraryMenu(session, lib, page=page)
-        pickers = [child for child in view.children if isinstance(child, MediaLinkSelect)]
-        assert len(pickers) == 1
-        assert pickers[0].row == 0
-        assert len(pickers[0].options) == expected
-        labels.extend(option.label for option in pickers[0].options)
+        openers = [child for child in view.children if isinstance(child, _StudioPickerOpenButton)]
+        assert len(openers) == 1
+        assert openers[0].row == 0
+        picker = _media_picker_view(session, lib, page=page)
+        assert len(picker.children[0].options) == expected
+        labels.extend(option.label for option in picker.children[0].options)
         assert view.pages == 3 and view.page == page
         assert view.previous.disabled == (page == 0)
         assert view.next.disabled == (page == 2)

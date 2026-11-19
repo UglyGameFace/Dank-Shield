@@ -119,7 +119,7 @@ def test_json_modal_stale_snapshot_and_no_publish_without_staff_confirmation():
     session.apply(lambda project: project["embeds"][0].update(title="Newer"))
     assert session.project != modal.opened_project
     text = Path("stoney_verify/embed_studio_ui.py").read_text()
-    block = text[text.index("class StudioJsonUploadModal("):text.index("class StarterSelect(")]
+    block = text[text.index("class StudioJsonUploadModal("):text.index("def _starter_picker_view(")]
     assert "self.session.project != self.opened_project" in block
     assert "self.session.post_key = \"\"" in block
     assert "self.session.apply(replace_draft)" in block

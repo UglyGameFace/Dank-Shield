@@ -14,7 +14,7 @@ from stoney_verify import embed_studio_schedules as schedules
 from stoney_verify import embed_studio_schedule_runtime as worker
 from stoney_verify.embed_studio_ui import (
     StudioHomeView, StudioReviewView, StudioScheduleModal,
-    StudioSchedulesMenu, StudioSession,
+    StudioSession,
 )
 
 

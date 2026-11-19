@@ -52,7 +52,7 @@ def test_image_text_adapter_preserves_unicode_for_join_and_exit_bitmap_paths() -
 
 def test_exit_studio_exposes_complete_button_first_controls() -> None:
     assert "class ExitCardStudioView(_OwnedView)" in STUDIO
-    assert "ExitCardChannelSelect" in STUDIO
+    assert "ExitChannelPickerView" in STUDIO
     for label in (
         'label="Enable / Disable"',
         'label="Edit Text"',

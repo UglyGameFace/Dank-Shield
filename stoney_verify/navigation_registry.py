@@ -545,13 +545,18 @@ RECENT_UPDATES: tuple[RecentFeatureUpdate, ...] = (
     # used to strand the user on a raw "Publish failed: NotFound" and keep
     # the ghost entry in Edit Posted forever. Post Builder now explains it
     # plainly, clears the stale entry, and lets the draft publish fresh.
+    # Same day: every studio picker moved to the house picker framework
+    # (Felix's standing rule) — the detail sentence covers that too.
     RecentFeatureUpdate(
         "embed_studio", "Scheduled and recurring posts are in Post Builder",
         "Announcements in 4 steps: schedule for later, repeat daily or "
         "weekly, run a campaign, add a form or a live-updating post — "
         "plus JSON backups, all in Post Builder. If a post you are "
         "editing was deleted, Post Builder now says so, clears the stale "
-        "entry, and lets you publish your draft as a new post.", "2026-11-19",
+        "entry, and lets you publish your draft as a new post. Every "
+        "picker in Post Builder and the Welcome and Exit Card Studios "
+        "now uses the standard Dank Shield picker, paged so every "
+        "channel stays reachable in big servers.", "2026-11-19",
     ),
     RecentFeatureUpdate(
         "share_router", "Share videos from regular channels",

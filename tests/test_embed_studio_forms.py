@@ -16,7 +16,7 @@ from stoney_verify.embed_studio_core import (
 from stoney_verify import embed_studio_forms as forms
 from stoney_verify.embed_studio_ui import (
     StudioHomeView,StudioSession,StudioFormBuilderMenu,StudioFormBasicsModal,
-    StudioFormQuestionModal,StudioFormQuestionMenu,StudioFormInboxView,StudioReviewView,
+    StudioFormQuestionModal,StudioReviewView,_form_question_picker_view,
 )
 from stoney_verify.embed_studio_schedules import StudioScheduleError,safe_scheduled_project
 
@@ -116,7 +116,7 @@ def test_studio_ui_forms_are_in_private_editor_and_preview_disabled():
     session.project=validate_project(_project())
     assert len(StudioFormBasicsModal(session).children)==2
     assert len(StudioFormQuestionModal(session).children)==4
-    assert len(StudioFormQuestionMenu(session).children)>0
+    assert len(_form_question_picker_view(session).children)>0
     assert len(StudioFormBuilderMenu(session).children)<=6
     review=StudioReviewView(session)
     form_buttons=[c for c in review.children if getattr(c,"label",None)=="Send Feedback"]
