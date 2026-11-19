@@ -29,6 +29,7 @@ from stoney_verify.member_setup_service import (
     normalize_sections,
     publish_revision,
 )
+from stoney_verify.ui.picker import DankPickerView, make_choice
 from stoney_verify.ui.resource_browser import DankGuildResourceBrowserView
 from .public_setup_group import _require_setup_permission
 
@@ -1318,33 +1319,87 @@ _MEMBER_SETUP_SECTIONS = {
 }
 
 
-class _MemberSetupSectionSelect(discord.ui.Select):
-    def __init__(self, current: str):
-        labels = {
-            "roles": "Channels & Roles",
-            "categories": "Protected Categories",
-            "publish": "Publish & Public Panel",
-            "gate": "Strict Gate",
-        }
+_MEMBER_SETUP_SECTION_LABELS = {
+    "roles": "Channels & Roles",
+    "categories": "Protected Categories",
+    "publish": "Publish & Public Panel",
+    "gate": "Strict Gate",
+}
+
+
+async def _switch_member_setup_section(interaction: discord.Interaction, section: str) -> None:
+    if not await _staff_authorized(interaction):
+        return
+    await _defer_panel_update(interaction)
+    state = await load_guild_setup_state(int(interaction.guild_id), refresh=True)
+    await _replace(
+        interaction,
+        embed=_admin_embed(interaction.guild, state, section=section),
+        view=MemberSetupAdminView(int(interaction.user.id), section=section),
+    )
+
+
+class _MemberSetupSectionPickerView(DankPickerView):
+    """House picker for switching Member Setup admin areas.
+
+    Keeps the old section select's behavior: staff authorization is
+    re-checked on every switch, and picking re-renders the admin panel
+    at the chosen area.
+    """
+
+    def __init__(self, owner_id: int, current: str) -> None:
+        self.owner_id = int(owner_id)
+        self.current = current if current in _MEMBER_SETUP_SECTION_LABELS else "roles"
+
+        async def on_pick(interaction: discord.Interaction, value: str) -> None:
+            await _switch_member_setup_section(interaction, value)
+
+        async def on_home(interaction: discord.Interaction) -> None:
+            await _switch_member_setup_section(interaction, self.current)
+
         super().__init__(
-            placeholder="Choose Member Setup area",
-            options=[
-                discord.SelectOption(label=label, value=key, default=current == key)
-                for key, label in labels.items()
+            author_id=self.owner_id,
+            choices=[
+                make_choice(label, key, default=self.current == key)
+                for key, label in _MEMBER_SETUP_SECTION_LABELS.items()
             ],
-            row=0,
+            on_pick=on_pick,
             custom_id="dank:member_setup:admin:section:v2",
+            placeholder="Choose Member Setup area",
+            title="Member Setup",
+            timeout=900,
+            on_home=on_home,
+            home_label="Back",
         )
 
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if int(interaction.user.id) != self.owner_id:
+            await _reply(interaction, "Only the manager who opened this setup panel can use it.", ok=False)
+            return False
+        return True
+
+
+class _MemberSetupSectionOpenButton(discord.ui.Button):
+    """Swaps the Member Setup admin panel for the area picker on the same message."""
+
+    def __init__(self, owner_id: int, section: str) -> None:
+        super().__init__(
+            label="Switch Section", emoji="🧭",
+            style=discord.ButtonStyle.secondary,
+            custom_id="dank:member_setup:admin:section:open:v1", row=0,
+        )
+        self.owner_id = int(owner_id)
+        self.section = section
+
     async def callback(self, interaction: discord.Interaction) -> None:
-        if not await _staff_authorized(interaction):
+        view = self.view
+        if not isinstance(view, MemberSetupAdminView) or not await view.interaction_check(interaction):
             return
-        await _defer_panel_update(interaction)
-        state = await load_guild_setup_state(int(interaction.guild_id), refresh=True)
-        await _replace(
-            interaction,
-            embed=_admin_embed(interaction.guild, state, section=self.values[0]),
-            view=MemberSetupAdminView(int(interaction.user.id), section=self.values[0]),
+        message = getattr(interaction, "message", None)
+        embeds = getattr(message, "embeds", None) if message is not None else None
+        await interaction.response.edit_message(
+            embed=embeds[0] if embeds else None,
+            view=_MemberSetupSectionPickerView(self.owner_id, self.section),
         )
 
 
@@ -1355,7 +1410,7 @@ class MemberSetupAdminView(discord.ui.View):
         self.section = section if section in _MEMBER_SETUP_SECTIONS else "roles"
         all_items = {str(getattr(item, "label", "")): item for item in self.children}
         self.clear_items()
-        self.add_item(_MemberSetupSectionSelect(self.section))
+        self.add_item(_MemberSetupSectionOpenButton(self.owner_id, self.section))
         labels = (*_MEMBER_SETUP_SECTIONS[self.section], "Refresh", "Close")
         for index, label in enumerate(labels):
             item = all_items[label]

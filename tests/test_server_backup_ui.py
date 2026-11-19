@@ -623,7 +623,9 @@ def test_recent_update_entry_appended_after_pinned_eight():
         "verification", "embed_studio", "share_router", "share_downloads",
         "action_safety_schedule",
     ]
-    assert keys[-1] == "server_backups"
+    # server_backups was appended after the pinned eight; later merged
+    # entries (e.g. the 2026-11-19 picker note) may follow it.
+    assert "server_backups" in keys[8:]
     assert len(keys) == len(set(keys))
 
 

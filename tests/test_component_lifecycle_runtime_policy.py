@@ -63,7 +63,7 @@ def test_control_center_navigation_has_stable_semantic_component_ids() -> None:
     home_ids = _custom_ids(CompactDankHomeView(1))
     assert len(home_ids) == len(set(home_ids))
     assert set(home_ids) == {
-        "dank:home:sections:v1",
+        "dank:home:sections:open:v1",
         "dank:navigation:find:v1",
         "dank:navigation:all:v1",
         "dank:navigation:help:v1",
@@ -73,7 +73,7 @@ def test_control_center_navigation_has_stable_semantic_component_ids() -> None:
 
     help_ids = _custom_ids(CompactHelpView(1))
     asset_ids = _custom_ids(CardAssetView(1))
-    assert "dank:help:topics:v2" in help_ids
+    assert "dank:help:topics:open:v1" in help_ids
     assert all(
         custom_id.startswith(("dank:help:", "dank:navigation:"))
         for custom_id in help_ids

@@ -46,7 +46,7 @@ def test_home_navigation_uses_registry_instead_of_flat_feature_buttons() -> None
     )
     registry = (ROOT / "stoney_verify/navigation_registry.py").read_text(encoding="utf-8")
 
-    assert "class _HomeSectionSelect(discord.ui.Select):" in surface
+    assert "class _NavigationPickerView(DankPickerView):" in surface
     assert "for category in CATEGORIES" in surface
     assert 'custom_id="dank:home:sections:v1"' in surface
     assert "FeatureCategoryView" in surface

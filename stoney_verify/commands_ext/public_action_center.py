@@ -7,6 +7,7 @@ import discord
 from stoney_verify.action_center_service import ActionSnapshot, load_member_actions
 from stoney_verify.guild_config import get_guild_config
 from stoney_verify.panel_lifecycle import PRIVATE_MENU_TTL_SECONDS
+from ..ui.picker import DankPickerView, make_choice
 from .public_staff_scope import scoped_interaction_is_staff
 
 
@@ -69,25 +70,73 @@ def _embed(snapshot: ActionSnapshot, *, section: str = "my") -> discord.Embed:
     return embed
 
 
-class _ActionSectionSelect(discord.ui.Select):
+class _ActionSectionPickerView(DankPickerView):
+    """House picker for switching between My Actions and Staff Tools.
+
+    Keeps the old section select's gate exactly: only the panel owner,
+    in the same guild, with staff scope, may switch sections.
+    """
+
     def __init__(self, owner_id: int, guild_id: int, section: str) -> None:
         self.owner_id = int(owner_id)
         self.guild_id = int(guild_id)
+        self.section = section
+
+        async def on_pick(interaction: discord.Interaction, value: str) -> None:
+            await open_action_center(interaction, section=value)
+
+        async def on_home(interaction: discord.Interaction) -> None:
+            await open_action_center(interaction, section=self.section)
+
         super().__init__(
-            placeholder="Choose member or staff actions",
-            options=[
-                discord.SelectOption(label="My Actions", value="my", default=section == "my"),
-                discord.SelectOption(label="Staff Tools", value="staff", default=section == "staff"),
+            author_id=self.owner_id,
+            choices=[
+                make_choice("My Actions", "my", default=section == "my"),
+                make_choice("Staff Tools", "staff", default=section == "staff"),
             ],
-            row=0, custom_id="dank:actions:section:v2",
+            on_pick=on_pick,
+            custom_id="dank:actions:section:v2",
+            placeholder="Choose member or staff actions",
+            title="Action Center",
+            timeout=PRIVATE_MENU_TTL_SECONDS,
+            on_home=on_home,
+            home_label="Back",
         )
 
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if (
+            int(interaction.user.id) != self.owner_id
+            or int(interaction.guild_id or 0) != self.guild_id
+            or not scoped_interaction_is_staff(interaction)
+        ):
+            await _feedback(interaction, "Open your own staff Action Center.")
+            return False
+        return True
+
+
+class _ActionSectionOpenButton(discord.ui.Button):
+    """Swaps the Action Center panel for the section picker on the same message."""
+
+    def __init__(self, owner_id: int, guild_id: int, section: str) -> None:
+        super().__init__(
+            label="Switch Section", emoji="🧭",
+            style=discord.ButtonStyle.secondary,
+            custom_id="dank:actions:section:open:v1", row=0,
+        )
+        self.owner_id = int(owner_id)
+        self.guild_id = int(guild_id)
+        self.section = section
+
     async def callback(self, interaction: discord.Interaction) -> None:
-        if (int(interaction.user.id) != self.owner_id
-                or int(interaction.guild_id or 0) != self.guild_id
-                or not scoped_interaction_is_staff(interaction)):
-            return await _feedback(interaction, "Open your own staff Action Center.")
-        await open_action_center(interaction, section=self.values[0])
+        view = self.view
+        if not isinstance(view, ActionCenterView) or not await view.interaction_check(interaction):
+            return
+        message = getattr(interaction, "message", None)
+        embeds = getattr(message, "embeds", None) if message is not None else None
+        await interaction.response.edit_message(
+            embed=embeds[0] if embeds else None,
+            view=_ActionSectionPickerView(self.owner_id, self.guild_id, self.section),
+        )
 
 
 class ActionCenterView(discord.ui.View):
@@ -112,7 +161,7 @@ class ActionCenterView(discord.ui.View):
         existing = {str(getattr(item, "label", "")): item for item in self.children}
         self.clear_items()
         if is_staff:
-            self.add_item(_ActionSectionSelect(self.owner_id, self.guild_id, self.section))
+            self.add_item(_ActionSectionOpenButton(self.owner_id, self.guild_id, self.section))
         for index, name in enumerate((*_ACTION_SECTIONS[self.section], *_ACTION_COMMON)):
             item = existing.get(name)
             if item is None:

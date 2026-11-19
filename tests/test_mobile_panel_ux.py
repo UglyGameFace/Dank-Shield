@@ -19,7 +19,7 @@ def test_every_protection_action_remains_in_a_short_section():
         view = protection.ProtectionCenterView(author_id=123, cfg={}, spam={}, section=section)
         child_ids = {str(getattr(item, "custom_id", "")) for item in view.children}
         assert child_ids == {
-            "dank_protection:section:v2",
+            "dank_protection:section:open:v1",
             "dank_protection:refresh",
             "dank_protection:close",
             *(f"dank_protection:{label}" for label in labels),
@@ -64,9 +64,8 @@ def test_protection_section_picker_switches_without_mutating(monkeypatch):
 
     monkeypatch.setattr(protection, "_require_setup_permission", allowed)
     monkeypatch.setattr(protection, "_refresh_panel", refresh)
-    picker = protection._ProtectionSectionSelect("overview")
-    picker._values = ["antinuke"]
-    asyncio.run(picker.callback(SimpleNamespace(user=SimpleNamespace(id=1))))
+    picker = protection._ProtectionSectionPickerView(author_id=1, current="overview")
+    asyncio.run(picker.handle_pick(SimpleNamespace(user=SimpleNamespace(id=1)), "antinuke"))
     assert events == ["antinuke"]
 
 
@@ -110,9 +109,9 @@ def test_no_laundry_list_on_reworked_core_screen_sources():
     for name in sources:
         assert (root / name).is_file()
     protection_source = (root / sources[0]).read_text()
-    assert "class _ProtectionSectionSelect" in protection_source
+    assert "class _ProtectionSectionPickerView" in protection_source
     assert "self.clear_items()" in protection_source
-    assert "self.add_item(_ProtectionSectionSelect(self.section))" in protection_source
+    assert "self.add_item(_ProtectionSectionOpenButton(author_id=self.author_id, section=self.section))" in protection_source
     # Direct callbacks still belong to the original source, with stable IDs.
     assert 'custom_id="dank_protection:antinuke_restore_member"' in protection_source
     assert 'custom_id="dank_protection:import_pack"' in protection_source
@@ -128,7 +127,7 @@ def test_member_setup_every_admin_action_is_visible_in_exactly_one_section():
             item.label for item in view.children
             if isinstance(item, __import__("discord").ui.Button)
         ]
-        assert set(buttons) == set(names) | {"Refresh", "Close"}
+        assert set(buttons) == set(names) | {"Refresh", "Close", "Switch Section"}
         assert len(view.children) <= 9
         assert all((getattr(item, "row", 0) or 0) < 5 for item in view.children)
     assert setup.MemberSetupAdminView(123).section == "roles"
@@ -216,9 +215,8 @@ def test_all_section_selectors_are_read_only_navigation(monkeypatch):
         user=SimpleNamespace(id=123),
         guild_id=77, guild=SimpleNamespace(id=77),
     )
-    select = setup._MemberSetupSectionSelect("roles")
-    select._values = ["gate"]
-    asyncio.run(select.callback(interaction))
+    picker = setup._MemberSetupSectionPickerView(123, "roles")
+    asyncio.run(picker.handle_pick(interaction, "gate"))
     assert isinstance(events[-1], setup.MemberSetupAdminView)
     assert events[-1].section == "gate"
     assert selected_sections == ["gate"]
@@ -410,12 +408,12 @@ def test_action_center_member_and_staff_actions_have_distinct_pages():
     regular = actions.ActionCenterView(7, snap, is_staff=False, section="staff")
     assert regular.section == "my"
     assert _buttons(regular) == {"My Reminder Preferences", "Refresh", "Home", "Close"}
-    assert not any(isinstance(item, actions._ActionSectionSelect) for item in regular.children)
+    assert not any(isinstance(item, actions._ActionSectionOpenButton) for item in regular.children)
     _assert_compact(regular)
 
     for section, names in actions._ACTION_SECTIONS.items():
         staff = actions.ActionCenterView(7, snap, is_staff=True, section=section)
-        assert _buttons(staff) <= set(names) | set(actions._ACTION_COMMON)
+        assert _buttons(staff) <= set(names) | set(actions._ACTION_COMMON) | {"Switch Section"}
         assert set(actions._ACTION_COMMON) <= _buttons(staff)
         assert len(staff.children) <= 9
         embed = actions._embed(snap, section=section)

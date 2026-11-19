@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import discord
 
 from stoney_verify import navigation_registry as registry
@@ -36,12 +38,14 @@ def test_every_registered_category_and_feature_is_reachable_from_navigation() ->
     home_labels = _labels(home)
     assert {"Find Feature", "Directory", "Help", "Close"} <= home_labels
 
-    section_select = next(
+    section_opener = next(
         item
         for item in home.children
-        if isinstance(item, discord.ui.Select)
-        and str(getattr(item, "custom_id", "")) == "dank:home:sections:v1"
+        if str(getattr(item, "custom_id", "")) == "dank:home:sections:open:v1"
     )
+    section_picker = section_opener._build(SimpleNamespace(user=SimpleNamespace(id=100)))
+    section_select = section_picker.children[0]
+    assert str(getattr(section_select, "custom_id", "")) == "dank:home:sections:v1"
     assert [str(option.label) for option in section_select.options] == [
         category.label for category in registry.CATEGORIES
     ]
@@ -246,13 +250,15 @@ def test_home_is_mobile_compact_full_name_section_picker() -> None:
     view = surface.CompactDankHomeView(100)
     assert len(view.children) == 6
 
-    section_select = next(
+    section_opener = next(
         item
         for item in view.children
-        if isinstance(item, discord.ui.Select)
-        and str(getattr(item, "custom_id", "")) == "dank:home:sections:v1"
+        if str(getattr(item, "custom_id", "")) == "dank:home:sections:open:v1"
     )
-    assert int(getattr(section_select, "row", 0) or 0) == 0
+    assert int(getattr(section_opener, "row", 0) or 0) == 0
+    section_picker = section_opener._build(SimpleNamespace(user=SimpleNamespace(id=100)))
+    section_select = section_picker.children[0]
+    assert str(getattr(section_select, "custom_id", "")) == "dank:home:sections:v1"
     assert str(section_select.placeholder) == "🧭 Choose a section…"
     assert [str(option.label) for option in section_select.options] == [
         category.label for category in registry.CATEGORIES
@@ -263,7 +269,9 @@ def test_home_is_mobile_compact_full_name_section_picker() -> None:
         for item in view.children
         if isinstance(item, discord.ui.Button)
     ]
-    assert button_labels == ["Find Feature", "Directory", "Help", "Close", "New & Updated"]
+    assert button_labels == [
+        "Choose a Section", "Find Feature", "Directory", "Help", "Close", "New & Updated",
+    ]
     assert all(int(getattr(item, "row", 0) or 0) <= 2 for item in view.children if isinstance(item, discord.ui.Button))
 
 
