@@ -363,12 +363,19 @@ def _fake_interaction(guild: SimpleNamespace) -> SimpleNamespace:
     )
 
 
-def _select(view: object, placeholder_part: str) -> object:
+def _opener(view: object, custom_id: str) -> object:
     return next(
         item
         for item in getattr(view, "children", [])
-        if placeholder_part in str(getattr(item, "placeholder", "") or "")
+        if getattr(item, "custom_id", "") == custom_id
     )
+
+
+async def _open_picker(view: object, custom_id: str, interaction: object) -> object:
+    """Drive a host view's picker opener and return the house picker."""
+    opener = _opener(view, custom_id)
+    await opener.callback(interaction)  # type: ignore[attr-defined]
+    return interaction.response.edit_message.await_args.kwargs["view"]  # type: ignore[attr-defined]
 
 
 def _button(view: object, label: str) -> object:
@@ -392,23 +399,24 @@ def test_frame_view_opens_category_styles_screen(monkeypatch) -> None:
 
 def test_template_stamp_and_font_override_update_the_draft(monkeypatch) -> None:
     monkeypatch.setattr(design, "_require_design_permission", AsyncMock(return_value=True))
+    # The picker opener buttons live in the legacy module (v2 aliases the
+    # same function), so the shared gate must be patched there too.
+    monkeypatch.setattr(legacy, "_require_design_permission", AsyncMock(return_value=True))
     guild = _fake_guild()
     interaction = _fake_interaction(guild)
 
     async def check() -> None:
         view = design.DesignCategoryStylesView(guild, {})
-        template_select = _select(view, "zone template")
-        template_select._values = ["garden"]  # type: ignore[attr-defined]
-        await template_select.callback(interaction)  # type: ignore[attr-defined]
+        template_picker = await _open_picker(view, "dank_design_v2:category_style_template:open", interaction)
+        await template_picker.handle_pick(interaction, "garden")  # type: ignore[attr-defined]
         stamped = interaction.response.edit_message.await_args.kwargs["view"]
         assert stamped.template_id == "garden"
         assert stamped.draft["category_font"] == "serif_bold_italic"
         assert stamped.draft["font"] == "italic_sans"
 
         interaction.response.edit_message.reset_mock()
-        font_select = _select(stamped, "channel font")
-        font_select._values = ["monospace"]  # type: ignore[attr-defined]
-        await font_select.callback(interaction)  # type: ignore[attr-defined]
+        font_picker = await _open_picker(stamped, "dank_design_v2:category_style_font:open", interaction)
+        await font_picker.handle_pick(interaction, "monospace")  # type: ignore[attr-defined]
         customised = interaction.response.edit_message.await_args.kwargs["view"]
         assert customised.draft["font"] == "monospace"
         assert customised.draft["category_font"] == "serif_bold_italic"

@@ -25,6 +25,7 @@ from stoney_verify.services import server_design_plan_service as plans
 from stoney_verify.services import server_design_style_zones as style_zones
 from stoney_verify.services import server_design_repair_confidence as repair_confidence
 from stoney_verify.services import server_design_rule_service as rule_service
+from stoney_verify.ui.picker import DankPickerView, chunk_choices, make_choice
 
 studio = legacy.studio
 _COMPATIBILITY_BRIDGE_INSTALLED = False
@@ -262,46 +263,122 @@ def _decorate_server_preview(embed: discord.Embed, options: Mapping[str, Any]) -
     return embed
 
 
-class DesignServerThemeSelect(discord.ui.Select):
+async def _restore_design_server(interaction: discord.Interaction) -> None:
+    """Put Style All Names back on a message a house picker borrowed."""
+    if not await _require_design_permission(interaction):
+        return
+    guild = interaction.guild
+    assert guild is not None
+    await interaction.response.defer(ephemeral=True, thinking=False)
+    options = await _load_design_options(int(guild.id))
+    await interaction.edit_original_response(embed=_design_server_embed(guild, options), view=DesignServerView(options))
+
+
+async def _restore_category_frame_picker(interaction: discord.Interaction) -> None:
+    """Put Frame / Icons back on a message a house picker borrowed."""
+    if not await _require_design_permission(interaction):
+        return
+    guild = interaction.guild
+    assert guild is not None
+    await interaction.response.defer(ephemeral=True, thinking=False)
+    options = await _load_design_options(int(guild.id))
+    page = _category_frame_page_for(options)
+    await interaction.edit_original_response(
+        embed=_category_frame_picker_embed(guild, options, page=page),
+        view=DesignServerCategoryFrameView(options, page=page),
+    )
+
+
+class DesignServerThemeSelect(DankPickerView):
+    """House picker for the server theme.
+
+    Picking saves the same theme change the raw select saved (theme
+    set, font override cleared, global lock synced); Back/Close
+    restores Style All Names untouched.
+    """
+
     def __init__(self, current: str) -> None:
-        choices: list[discord.SelectOption] = []
+        async def on_pick(interaction: discord.Interaction, value: str) -> None:
+            if not await _require_design_permission(interaction):
+                return
+            guild = interaction.guild
+            assert guild is not None
+            await interaction.response.defer(ephemeral=True, thinking=False)
+            options = await _load_design_options(int(guild.id))
+            options["theme_id"] = value
+            options.pop("font", None)
+            legacy._sync_enabled_global_lock(options)  # type: ignore[attr-defined]
+            await legacy._save_options(interaction, options)  # type: ignore[attr-defined]
+            await interaction.edit_original_response(embed=_design_server_embed(guild, options), view=DesignServerView(options))
+
+        async def on_home(interaction: discord.Interaction) -> None:
+            await _restore_design_server(interaction)
+
+        choices = []
         for theme in studio.THEMES[:25]:
             font = studio.font_label(getattr(theme, "font", "normal"))
             frame = legacy._category_frame_choice_label(getattr(theme, "category_frame", "plain"))  # type: ignore[attr-defined]
             choices.append(
-                discord.SelectOption(
-                    label=theme.label[:100],
-                    value=theme.id,
+                make_choice(
+                    theme.label,
+                    theme.id,
+                    description=f"{studio.font_preview(getattr(theme, 'font', 'normal'))} • {font} • {frame}",
                     default=theme.id == current,
-                    description=f"{studio.font_preview(getattr(theme, 'font', 'normal'))} • {font} • {frame}"[:100],
                 )
             )
-        super().__init__(placeholder="1) Choose the server theme", min_values=1, max_values=1, options=choices, row=0)
-
-    async def callback(self, interaction: discord.Interaction) -> None:
-        if not await _require_design_permission(interaction):
-            return
-        guild = interaction.guild
-        assert guild is not None
-        await interaction.response.defer(ephemeral=True, thinking=False)
-        options = await _load_design_options(int(guild.id))
-        options["theme_id"] = self.values[0]
-        options.pop("font", None)
-        legacy._sync_enabled_global_lock(options)  # type: ignore[attr-defined]
-        await legacy._save_options(interaction, options)  # type: ignore[attr-defined]
-        await interaction.edit_original_response(embed=_design_server_embed(guild, options), view=DesignServerView(options))
+        super().__init__(
+            author_id=0,
+            choices=choices,
+            on_pick=on_pick,
+            custom_id="dank_design_v2:server_theme:picker:v1",
+            placeholder="1) Choose the server theme",
+            title="Style All Names",
+            timeout=900,
+            on_home=on_home,
+            on_cancel=on_home,
+            home_label="Back",
+        )
 
 
-class DesignServerFontSelect(discord.ui.Select):
+class DesignServerFontSelect(DankPickerView):
+    """House picker for the server font.
+
+    Picking saves the same font change the raw select saved
+    ("__theme__" still clears the override); Back/Close restores
+    Style All Names untouched.
+    """
+
     def __init__(self, options: Mapping[str, Any]) -> None:
         theme = legacy._theme_from_options(options)  # type: ignore[attr-defined]
         theme_font = _safe_str(getattr(theme, "font", "normal"), "normal").lower().replace("-", "_")
         explicit = _safe_str(options.get("font"), "").lower().replace("-", "_")
-        choices: list[discord.SelectOption] = [
-            discord.SelectOption(
-                label=f"Theme Default · {studio.font_label(theme_font)}"[:100],
+
+        async def on_pick(interaction: discord.Interaction, value: str) -> None:
+            if not await _require_design_permission(interaction):
+                return
+            guild = interaction.guild
+            assert guild is not None
+            await interaction.response.defer(ephemeral=True, thinking=False)
+            options = await _load_design_options(int(guild.id))
+            selected = _safe_str(value, "__theme__").lower().replace("-", "_")
+            if selected == "__theme__":
+                options.pop("font", None)
+            elif selected in studio.DESIGN_FONT_STYLES:
+                options["font"] = selected
+            else:
+                raise ValueError("Unsupported Dank Design font selection.")
+            legacy._sync_enabled_global_lock(options)  # type: ignore[attr-defined]
+            await legacy._save_options(interaction, options)  # type: ignore[attr-defined]
+            await interaction.edit_original_response(embed=_design_server_embed(guild, options), view=DesignServerView(options))
+
+        async def on_home(interaction: discord.Interaction) -> None:
+            await _restore_design_server(interaction)
+
+        choices = [
+            make_choice(
+                f"Theme Default · {studio.font_label(theme_font)}",
                 value="__theme__",
-                description=f"{studio.font_preview(theme_font)} · follows the selected theme"[:100],
+                description=f"{studio.font_preview(theme_font)} · follows the selected theme",
                 default=explicit not in studio.DESIGN_FONT_STYLES,
             )
         ]
@@ -309,40 +386,34 @@ class DesignServerFontSelect(discord.ui.Select):
             decorative = style in getattr(studio, "RISKY_FONTS", set())
             note = "Decorative · preview recommended" if decorative else "Readable"
             choices.append(
-                discord.SelectOption(
-                    label=(f"⚠️ {studio.font_label(style)}" if decorative else studio.font_label(style))[:100],
-                    value=style,
-                    description=f"{studio.font_preview(style)} · {note}"[:100],
+                make_choice(
+                    (f"⚠️ {studio.font_label(style)}" if decorative else studio.font_label(style)),
+                    style,
+                    description=f"{studio.font_preview(style)} · {note}",
                     default=explicit == style,
                 )
             )
         super().__init__(
+            author_id=0,
+            choices=choices,
+            on_pick=on_pick,
+            custom_id="dank_design_v2:server_font:picker:v1",
             placeholder="2) Choose the server font",
-            min_values=1,
-            max_values=1,
-            options=choices[:25],
-            row=1,
+            title="Style All Names",
+            timeout=900,
+            on_home=on_home,
+            on_cancel=on_home,
+            home_label="Back",
         )
 
-    async def callback(self, interaction: discord.Interaction) -> None:
-        if not await _require_design_permission(interaction):
-            return
-        guild = interaction.guild
-        assert guild is not None
-        await interaction.response.defer(ephemeral=True, thinking=False)
-        options = await _load_design_options(int(guild.id))
-        selected = _safe_str(self.values[0], "__theme__").lower().replace("-", "_")
-        if selected == "__theme__":
-            options.pop("font", None)
-        elif selected in studio.DESIGN_FONT_STYLES:
-            options["font"] = selected
-        else:
-            raise ValueError("Unsupported Dank Design font selection.")
-        legacy._sync_enabled_global_lock(options)  # type: ignore[attr-defined]
-        await legacy._save_options(interaction, options)  # type: ignore[attr-defined]
-        await interaction.edit_original_response(embed=_design_server_embed(guild, options), view=DesignServerView(options))
 
-class DesignServerStrengthSelect(discord.ui.Select):
+class DesignServerStrengthSelect(DankPickerView):
+    """House picker for how much server styling to use.
+
+    Picking saves the same strength change the raw select saved;
+    Back/Close restores Style All Names untouched.
+    """
+
     LABELS = {
         1: ("1 — Icons only", "Icon/base cleanup only."),
         2: ("2 — Layout", "Adds the selected channel separator."),
@@ -352,26 +423,46 @@ class DesignServerStrengthSelect(discord.ui.Select):
     }
 
     def __init__(self, current: int) -> None:
-        choices = [
-            discord.SelectOption(label=label, value=str(value), default=value == current, description=description)
-            for value, (label, description) in self.LABELS.items()
-        ]
-        super().__init__(placeholder="3) Choose how much styling to use", min_values=1, max_values=1, options=choices, row=2)
+        async def on_pick(interaction: discord.Interaction, value: str) -> None:
+            if not await _require_design_permission(interaction):
+                return
+            guild = interaction.guild
+            assert guild is not None
+            await interaction.response.defer(ephemeral=True, thinking=False)
+            options = await _load_design_options(int(guild.id))
+            options["strength"] = max(1, min(5, _safe_int(value, 4)))
+            legacy._sync_enabled_global_lock(options)  # type: ignore[attr-defined]
+            await legacy._save_options(interaction, options)  # type: ignore[attr-defined]
+            await interaction.edit_original_response(embed=_design_server_embed(guild, options), view=DesignServerView(options))
 
-    async def callback(self, interaction: discord.Interaction) -> None:
-        if not await _require_design_permission(interaction):
-            return
-        guild = interaction.guild
-        assert guild is not None
-        await interaction.response.defer(ephemeral=True, thinking=False)
-        options = await _load_design_options(int(guild.id))
-        options["strength"] = max(1, min(5, _safe_int(self.values[0], 4)))
-        legacy._sync_enabled_global_lock(options)  # type: ignore[attr-defined]
-        await legacy._save_options(interaction, options)  # type: ignore[attr-defined]
-        await interaction.edit_original_response(embed=_design_server_embed(guild, options), view=DesignServerView(options))
+        async def on_home(interaction: discord.Interaction) -> None:
+            await _restore_design_server(interaction)
+
+        super().__init__(
+            author_id=0,
+            choices=[
+                make_choice(label, str(value), description=description, default=value == current)
+                for value, (label, description) in self.LABELS.items()
+            ],
+            on_pick=on_pick,
+            custom_id="dank_design_v2:server_strength:picker:v1",
+            placeholder="3) Choose how much styling to use",
+            title="Style All Names",
+            timeout=900,
+            on_home=on_home,
+            on_cancel=on_home,
+            home_label="Back",
+        )
 
 
-class DesignServerSeparatorSelect(discord.ui.Select):
+class DesignServerSeparatorSelect(DankPickerView):
+    """House picker for the server channel separator.
+
+    Picking saves the same separator change the raw select saved
+    ("__theme__" still clears the override); Back/Close restores
+    Style All Names untouched.
+    """
+
     def __init__(self, options: Mapping[str, Any]) -> None:
         theme = legacy._theme_from_options(options)  # type: ignore[attr-defined]
         theme_options = dict(options)
@@ -379,43 +470,57 @@ class DesignServerSeparatorSelect(discord.ui.Select):
         theme_separator = plans.theme_default_separator_id(theme_options)
         explicit = _safe_str(options.get("separator_id"), "")
         selected = _design_server_separator(options)
-        choices: list[discord.SelectOption] = [
-            discord.SelectOption(
-                label=f"Theme Default · {legacy._separator_choice_label(theme_separator)}"[:100],  # type: ignore[attr-defined]
+
+        async def on_pick(interaction: discord.Interaction, value: str) -> None:
+            if not await _require_design_permission(interaction):
+                return
+            guild = interaction.guild
+            assert guild is not None
+            await interaction.response.defer(ephemeral=True, thinking=False)
+            options = await _load_design_options(int(guild.id))
+            selected = _safe_str(value, "__theme__")
+            if selected == "__theme__":
+                options.pop("separator_id", None)
+            else:
+                if selected not in studio.SEPARATORS_BY_ID:
+                    raise ValueError("Unsupported Dank Design separator selection.")
+                options["separator_id"] = selected
+            legacy._sync_enabled_global_lock(options)  # type: ignore[attr-defined]
+            await legacy._save_options(interaction, options)  # type: ignore[attr-defined]
+            await interaction.edit_original_response(embed=_design_server_embed(guild, options), view=DesignServerView(options))
+
+        async def on_home(interaction: discord.Interaction) -> None:
+            await _restore_design_server(interaction)
+
+        choices = [
+            make_choice(
+                f"Theme Default · {legacy._separator_choice_label(theme_separator)}",  # type: ignore[attr-defined]
                 value="__theme__",
-                description=f"{studio.separator_preview(theme_separator)} · follows the selected theme"[:100],
+                description=f"{studio.separator_preview(theme_separator)} · follows the selected theme",
                 default=not bool(explicit),
             )
         ]
         for option in legacy._style_change_separator_options(selected):  # type: ignore[attr-defined]
-            option.default = bool(explicit and str(option.value) == selected)
-            choices.append(option)
-
+            choices.append(
+                make_choice(
+                    str(option.label),
+                    str(option.value),
+                    description=str(option.description or ""),
+                    default=bool(explicit and str(option.value) == selected),
+                )
+            )
         super().__init__(
+            author_id=0,
+            choices=choices,
+            on_pick=on_pick,
+            custom_id="dank_design_v2:server_separator:picker:v1",
             placeholder="4) Choose the channel separator",
-            min_values=1,
-            max_values=1,
-            options=choices[:25],
-            row=3,
+            title="Style All Names",
+            timeout=900,
+            on_home=on_home,
+            on_cancel=on_home,
+            home_label="Back",
         )
-
-    async def callback(self, interaction: discord.Interaction) -> None:
-        if not await _require_design_permission(interaction):
-            return
-        guild = interaction.guild
-        assert guild is not None
-        await interaction.response.defer(ephemeral=True, thinking=False)
-        options = await _load_design_options(int(guild.id))
-        selected = _safe_str(self.values[0], "__theme__")
-        if selected == "__theme__":
-            options.pop("separator_id", None)
-        else:
-            if selected not in studio.SEPARATORS_BY_ID:
-                raise ValueError("Unsupported Dank Design separator selection.")
-            options["separator_id"] = selected
-        legacy._sync_enabled_global_lock(options)  # type: ignore[attr-defined]
-        await legacy._save_options(interaction, options)  # type: ignore[attr-defined]
-        await interaction.edit_original_response(embed=_design_server_embed(guild, options), view=DesignServerView(options))
 
 
 def _design_server_separator(options: Mapping[str, Any]) -> str:
@@ -490,48 +595,65 @@ def _design_server_icon_mode_label(options: Mapping[str, Any]) -> str:
     )
 
 
-class DesignServerIconModeSelect(discord.ui.Select):
+class DesignServerIconModeSelect(DankPickerView):
+    """House picker for server-wide icon behavior.
+
+    Picking saves the same icon-mode change the raw select saved and
+    returns to Frame / Icons; Back/Close restores Frame / Icons
+    untouched.
+    """
+
     def __init__(self, options: Mapping[str, Any]) -> None:
         current = _design_server_icon_mode(options)
-        choices = [
-            discord.SelectOption(
-                label=label,
-                value=mode,
-                description=description[:100],
-                default=mode == current,
+
+        async def on_pick(interaction: discord.Interaction, value: str) -> None:
+            if not await _require_design_permission(interaction):
+                return
+            guild = interaction.guild
+            assert guild is not None
+            await interaction.response.defer(ephemeral=True, thinking=False)
+            options = await _load_design_options(int(guild.id))
+            selected = _safe_str(value, "replace_missing")
+            valid = {mode for mode, _label, _description in SERVER_ICON_MODES}
+            if selected not in valid:
+                raise ValueError("Unsupported Dank Design icon behavior selection.")
+            options["icon_mode"] = selected
+            legacy._sync_enabled_global_lock(options)  # type: ignore[attr-defined]
+            await legacy._save_options(interaction, options)  # type: ignore[attr-defined]
+            page = _category_frame_page_for(options)
+            await interaction.edit_original_response(
+                embed=_category_frame_picker_embed(guild, options, page=page),
+                view=DesignServerCategoryFrameView(options, page=page),
             )
-            for mode, label, description in SERVER_ICON_MODES
-        ]
+
+        async def on_home(interaction: discord.Interaction) -> None:
+            await _restore_category_frame_picker(interaction)
+
         super().__init__(
+            author_id=0,
+            choices=[
+                make_choice(label, mode, description=description[:100], default=mode == current)
+                for mode, label, description in SERVER_ICON_MODES
+            ],
+            on_pick=on_pick,
+            custom_id="dank_design_v2:icon_mode:picker:v1",
             placeholder="Choose server-wide icon behavior",
-            min_values=1,
-            max_values=1,
-            options=choices,
-            row=1,
-        )
-
-    async def callback(self, interaction: discord.Interaction) -> None:
-        if not await _require_design_permission(interaction):
-            return
-        guild = interaction.guild
-        assert guild is not None
-        await interaction.response.defer(ephemeral=True, thinking=False)
-        options = await _load_design_options(int(guild.id))
-        selected = _safe_str(self.values[0], "replace_missing")
-        valid = {mode for mode, _label, _description in SERVER_ICON_MODES}
-        if selected not in valid:
-            raise ValueError("Unsupported Dank Design icon behavior selection.")
-        options["icon_mode"] = selected
-        legacy._sync_enabled_global_lock(options)  # type: ignore[attr-defined]
-        await legacy._save_options(interaction, options)  # type: ignore[attr-defined]
-        page = _category_frame_page_for(options)
-        await interaction.edit_original_response(
-            embed=_category_frame_picker_embed(guild, options, page=page),
-            view=DesignServerCategoryFrameView(options, page=page),
+            title="Frame / Icons",
+            timeout=900,
+            on_home=on_home,
+            on_cancel=on_home,
+            home_label="Back",
         )
 
 
-class DesignServerCategoryFrameSelect(discord.ui.Select):
+class DesignServerCategoryFrameSelect(DankPickerView):
+    """House picker for the server category frame (one style group).
+
+    Picking saves the same frame change the raw select saved
+    ("__theme__" still clears the override) and returns to Style All
+    Names; Back/Close restores Frame / Icons untouched.
+    """
+
     def __init__(self, options: Mapping[str, Any], *, page: int = 0) -> None:
         groups = _category_frame_groups()
         page = max(0, min(int(page), max(0, len(groups) - 1)))
@@ -543,56 +665,64 @@ class DesignServerCategoryFrameSelect(discord.ui.Select):
         explicit = _safe_str(options.get("category_frame_id"), "")
         override_active = _category_frame_override_active(options)
         selected = _design_server_category_frame(options)
-        choices: list[discord.SelectOption] = [
-            discord.SelectOption(
-                label=f"Theme Default · {legacy._category_frame_choice_label(theme_frame)}"[:100],  # type: ignore[attr-defined]
+        self.page = page
+
+        async def on_pick(interaction: discord.Interaction, value: str) -> None:
+            if not await _require_design_permission(interaction):
+                return
+            guild = interaction.guild
+            assert guild is not None
+            await interaction.response.defer(ephemeral=True, thinking=False)
+            options = await _load_design_options(int(guild.id))
+            selected = _safe_str(value, "__theme__")
+            if selected == "__theme__":
+                options.pop("category_frame_id", None)
+            else:
+                if selected not in studio.CATEGORY_FRAMES_BY_ID:
+                    raise ValueError("Unsupported Dank Design category frame selection.")
+                options["category_frame_id"] = selected
+            legacy._sync_enabled_global_lock(options)  # type: ignore[attr-defined]
+            await legacy._save_options(interaction, options)  # type: ignore[attr-defined]
+            await interaction.edit_original_response(embed=_design_server_embed(guild, options), view=DesignServerView(options))
+
+        async def on_home(interaction: discord.Interaction) -> None:
+            await _restore_category_frame_picker(interaction)
+
+        choices = [
+            make_choice(
+                f"Theme Default · {legacy._category_frame_choice_label(theme_frame)}",  # type: ignore[attr-defined]
                 value="__theme__",
                 description=(
                     f"{studio.category_frame_preview(theme_frame, emoji='🗂️', name='category-name')} · "
                     "follows the selected theme"
-                )[:100],
+                ),
                 default=not override_active,
             )
         ]
         for frame_id in frame_ids:
             frame = studio.CATEGORY_FRAMES_BY_ID[frame_id]
             choices.append(
-                discord.SelectOption(
-                    label=legacy._category_frame_choice_label(frame.id)[:100],  # type: ignore[attr-defined]
-                    value=frame.id,
+                make_choice(
+                    legacy._category_frame_choice_label(frame.id),  # type: ignore[attr-defined]
+                    frame.id,
                     description=(
                         f"Result: {studio.category_frame_preview(frame.id, emoji='🗂️', name='category-name')}"
-                    )[:100],
+                    ),
                     default=bool(override_active and explicit and frame.id == selected),
                 )
             )
-
         super().__init__(
+            author_id=0,
+            choices=choices,
+            on_pick=on_pick,
+            custom_id="dank_design_v2:category_frame:picker:v1",
             placeholder="Choose the server category frame",
-            min_values=1,
-            max_values=1,
-            options=choices[:25],
-            row=0,
+            title="Frame / Icons",
+            timeout=900,
+            on_home=on_home,
+            on_cancel=on_home,
+            home_label="Back",
         )
-        self.page = page
-
-    async def callback(self, interaction: discord.Interaction) -> None:
-        if not await _require_design_permission(interaction):
-            return
-        guild = interaction.guild
-        assert guild is not None
-        await interaction.response.defer(ephemeral=True, thinking=False)
-        options = await _load_design_options(int(guild.id))
-        selected = _safe_str(self.values[0], "__theme__")
-        if selected == "__theme__":
-            options.pop("category_frame_id", None)
-        else:
-            if selected not in studio.CATEGORY_FRAMES_BY_ID:
-                raise ValueError("Unsupported Dank Design category frame selection.")
-            options["category_frame_id"] = selected
-        legacy._sync_enabled_global_lock(options)  # type: ignore[attr-defined]
-        await legacy._save_options(interaction, options)  # type: ignore[attr-defined]
-        await interaction.edit_original_response(embed=_design_server_embed(guild, options), view=DesignServerView(options))
 
 
 def _design_server_embed(guild: discord.Guild, options: Mapping[str, Any]) -> discord.Embed:
@@ -704,8 +834,22 @@ class DesignServerCategoryFrameView(DesignView):
         groups = _category_frame_groups()
         self.total_pages = max(1, len(groups))
         self.page = max(0, min(int(page), self.total_pages - 1))
-        self.add_item(DesignServerCategoryFrameSelect(options, page=self.page))
-        self.add_item(DesignServerIconModeSelect(options))
+        self.add_item(
+            legacy.DesignPickerOpenButton(
+                label="Choose the server category frame",
+                custom_id="dank_design_v2:category_frame:open",
+                row=0,
+                picker_factory=lambda: DesignServerCategoryFrameSelect(options, page=self.page),
+            )
+        )
+        self.add_item(
+            legacy.DesignPickerOpenButton(
+                label="Choose server-wide icon behavior",
+                custom_id="dank_design_v2:icon_mode:open",
+                row=1,
+                picker_factory=lambda: DesignServerIconModeSelect(options),
+            )
+        )
         self.previous.disabled = self.page <= 0
         self.next.disabled = self.page >= self.total_pages - 1
 
@@ -865,10 +1009,38 @@ class DesignServerView(DesignView):
     def __init__(self, options: Mapping[str, Any]) -> None:
         super().__init__(timeout=900)
         self.options = dict(options)
-        self.add_item(DesignServerThemeSelect(_safe_str(options.get("theme_id"), "gothic_clean")))
-        self.add_item(DesignServerFontSelect(options))
-        self.add_item(DesignServerStrengthSelect(_safe_int(options.get("strength"), 4)))
-        self.add_item(DesignServerSeparatorSelect(options))
+        self.add_item(
+            legacy.DesignPickerOpenButton(
+                label="1) Choose the server theme",
+                custom_id="dank_design_v2:server_theme:open",
+                row=0,
+                picker_factory=lambda: DesignServerThemeSelect(_safe_str(options.get("theme_id"), "gothic_clean")),
+            )
+        )
+        self.add_item(
+            legacy.DesignPickerOpenButton(
+                label="2) Choose the server font",
+                custom_id="dank_design_v2:server_font:open",
+                row=1,
+                picker_factory=lambda: DesignServerFontSelect(options),
+            )
+        )
+        self.add_item(
+            legacy.DesignPickerOpenButton(
+                label="3) Choose how much styling to use",
+                custom_id="dank_design_v2:server_strength:open",
+                row=2,
+                picker_factory=lambda: DesignServerStrengthSelect(_safe_int(options.get("strength"), 4)),
+            )
+        )
+        self.add_item(
+            legacy.DesignPickerOpenButton(
+                label="4) Choose the channel separator",
+                custom_id="dank_design_v2:server_separator:open",
+                row=3,
+                picker_factory=lambda: DesignServerSeparatorSelect(options),
+            )
+        )
 
     @discord.ui.button(label="Frame / Icons", emoji="🖼️", style=discord.ButtonStyle.secondary, custom_id="dank_design_v2:category_frame", row=4)
     async def category_frame(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -1032,49 +1204,156 @@ async def _edit_category_styles(interaction: discord.Interaction, view: "DesignC
     )
 
 
-class DesignCategoryStyleCategorySelect(discord.ui.Select):
-    def __init__(self, view: "DesignCategoryStylesView") -> None:
+class DesignCategoryStyleCategorySelect(DankPickerView):
+    """Paged house picker for the category a style applies to.
+
+    The raw select silently truncated the list to the first 25
+    categories; this picker pages EVERY category through
+    chunk_choices. Picking loads the same saved-style draft the raw
+    select loaded; Back/Close restores Category Styles untouched.
+    """
+
+    def __init__(self, view: "DesignCategoryStylesView", *, page: int | None = None) -> None:
+        self.host_view = view
         styles = _category_styles_map(view.options)
-        choices: list[discord.SelectOption] = []
-        for category_id, name in view.categories[:25]:
+        all_choices = []
+        for category_id, name in view.categories:
             entry = styles.get(str(category_id))
-            choices.append(
-                discord.SelectOption(
-                    label=(name or f"Category {category_id}")[:100],
-                    value=str(category_id),
-                    description=f"Style: {_category_style_summary(entry)}"[:100],
+            all_choices.append(
+                make_choice(
+                    (name or f"Category {category_id}"),
+                    str(category_id),
+                    description=f"Style: {_category_style_summary(entry)}",
                     default=category_id == view.category_id,
                 )
             )
-        super().__init__(placeholder="1) Choose a category", min_values=1, max_values=1, options=choices, row=0)
+        pages = chunk_choices(all_choices) or [[]]
+        if page is None:
+            current_index = next(
+                (index for index, (category_id, _name) in enumerate(view.categories) if category_id == view.category_id),
+                0,
+            )
+            page = current_index // 25
+        page = max(0, min(int(page), len(pages) - 1))
+        self.page = page
+        self.pages = len(pages)
 
-    async def callback(self, interaction: discord.Interaction) -> None:
+        async def on_pick(interaction: discord.Interaction, value: str) -> None:
+            if not await _require_design_permission(interaction):
+                return
+            host = self.host_view
+            host.category_id = int(value)
+            saved = _category_styles_map(host.options).get(str(host.category_id))
+            host.draft = dict(saved) if saved else {"font": None, "category_font": None, "separator_id": None, "category_frame_id": None}
+            host.template_id = _detect_category_style_template(saved)
+            host.clear_style = False
+            await _edit_category_styles(interaction, host)
+
+        async def on_home(interaction: discord.Interaction) -> None:
+            if not await _require_design_permission(interaction):
+                return
+            await _edit_category_styles(interaction, self.host_view)
+
+        super().__init__(
+            author_id=0,
+            choices=pages[page],
+            on_pick=on_pick,
+            custom_id=(
+                f"dank_design_v2:category_style_category:picker:v1:{page}"
+                if len(pages) > 1 else "dank_design_v2:category_style_category:picker:v1"
+            ),
+            placeholder=(
+                f"1) Choose a category • Page {page + 1}/{len(pages)}"
+                if len(pages) > 1 else "1) Choose a category"
+            ),
+            title="Category Styles",
+            timeout=900,
+            on_home=on_home,
+            on_cancel=on_home,
+            home_label="Back",
+        )
+        if len(pages) > 1:
+            self.add_item(_CategoryStyleCategoryPageButton(self, delta=-1, disabled=page <= 0))
+            self.add_item(_CategoryStyleCategoryPageButton(self, delta=1, disabled=page >= len(pages) - 1))
+
+    def _for_page(self, page: int) -> "DesignCategoryStyleCategorySelect":
+        return DesignCategoryStyleCategorySelect(self.host_view, page=page)
+
+
+class _CategoryStyleCategoryPageButton(discord.ui.Button):
+    """Prev/Next for the category-style category picker's own pages."""
+
+    def __init__(self, owner: DesignCategoryStyleCategorySelect, *, delta: int, disabled: bool) -> None:
+        target = owner.page + delta
+        super().__init__(
+            label="Previous" if delta < 0 else "Next",
+            emoji="⬅️" if delta < 0 else "➡️",
+            style=discord.ButtonStyle.secondary,
+            custom_id=f"dank_design_v2:category_style_category:page:{target}",
+            row=1,
+            disabled=disabled,
+        )
+        self._owner = owner
+        self._target = target
+
+    async def callback(self, interaction: discord.Interaction) -> None:  # type: ignore[override]
         if not await _require_design_permission(interaction):
             return
-        view = self.view
-        if not isinstance(view, DesignCategoryStylesView):
-            return
-        view.category_id = int(self.values[0])
-        saved = _category_styles_map(view.options).get(str(view.category_id))
-        view.draft = dict(saved) if saved else {"font": None, "category_font": None, "separator_id": None, "category_frame_id": None}
-        view.template_id = _detect_category_style_template(saved)
-        view.clear_style = False
-        await _edit_category_styles(interaction, view)
+        message = getattr(interaction, "message", None)
+        embeds = getattr(message, "embeds", None) if message is not None else None
+        await interaction.response.edit_message(
+            embed=embeds[0] if embeds else None,
+            view=self._owner._for_page(self._target),
+        )
 
 
-class DesignCategoryStyleTemplateSelect(discord.ui.Select):
+class DesignCategoryStyleTemplateSelect(DankPickerView):
+    """House picker for stamping a zone template on a category style.
+
+    Picking applies the same draft/template state changes the raw
+    select applied; Back/Close restores Category Styles untouched.
+    """
+
     def __init__(self, view: "DesignCategoryStylesView") -> None:
+        self.host_view = view
         current = "__none__" if view.clear_style else (view.template_id or "__custom__")
-        choices: list[discord.SelectOption] = [
-            discord.SelectOption(
-                label="Server Design · No Category Style",
-                value="__none__",
+
+        async def on_pick(interaction: discord.Interaction, value: str) -> None:
+            if not await _require_design_permission(interaction):
+                return
+            host = self.host_view
+            selected = _safe_str(value, "__custom__")
+            if selected == "__none__":
+                host.clear_style = True
+                host.template_id = "__none__"
+                host.draft = {"font": None, "category_font": None, "separator_id": None, "category_frame_id": None}
+            elif selected == "__custom__":
+                host.template_id = ""
+                host.clear_style = False
+            else:
+                entry = style_zones.category_style_from_template(selected)
+                if entry is None:
+                    raise ValueError("Unsupported Dank Design zone template selection.")
+                host.draft = dict(entry)
+                host.template_id = selected
+                host.clear_style = False
+            await _edit_category_styles(interaction, host)
+
+        async def on_home(interaction: discord.Interaction) -> None:
+            if not await _require_design_permission(interaction):
+                return
+            await _edit_category_styles(interaction, self.host_view)
+
+        choices = [
+            make_choice(
+                "Server Design · No Category Style",
+                "__none__",
                 description="This category follows the server-wide design.",
                 default=current == "__none__",
             ),
-            discord.SelectOption(
-                label="Custom Mix · Fonts Below",
-                value="__custom__",
+            make_choice(
+                "Custom Mix · Fonts Below",
+                "__custom__",
                 description="Keep the channel and header fonts chosen below.",
                 default=current == "__custom__",
             ),
@@ -1082,91 +1361,102 @@ class DesignCategoryStyleTemplateSelect(discord.ui.Select):
         for template_id in style_zones.category_style_template_ids():
             template = style_zones.CATEGORY_STYLE_TEMPLATES[template_id]
             choices.append(
-                discord.SelectOption(
-                    label=_safe_str(template.get("label"), template_id)[:100],
-                    value=template_id,
-                    description=_safe_str(template.get("description"))[:100],
+                make_choice(
+                    _safe_str(template.get("label"), template_id),
+                    template_id,
+                    description=_safe_str(template.get("description")),
                     default=current == template_id,
                 )
             )
-        super().__init__(placeholder="2) Stamp a zone template (optional)", min_values=1, max_values=1, options=choices, row=1)
-
-    async def callback(self, interaction: discord.Interaction) -> None:
-        if not await _require_design_permission(interaction):
-            return
-        view = self.view
-        if not isinstance(view, DesignCategoryStylesView):
-            return
-        selected = _safe_str(self.values[0], "__custom__")
-        if selected == "__none__":
-            view.clear_style = True
-            view.template_id = "__none__"
-            view.draft = {"font": None, "category_font": None, "separator_id": None, "category_frame_id": None}
-        elif selected == "__custom__":
-            view.template_id = ""
-            view.clear_style = False
-        else:
-            entry = style_zones.category_style_from_template(selected)
-            if entry is None:
-                raise ValueError("Unsupported Dank Design zone template selection.")
-            view.draft = dict(entry)
-            view.template_id = selected
-            view.clear_style = False
-        await _edit_category_styles(interaction, view)
+        super().__init__(
+            author_id=0,
+            choices=choices,
+            on_pick=on_pick,
+            custom_id="dank_design_v2:category_style_template:picker:v1",
+            placeholder="2) Stamp a zone template (optional)",
+            title="Category Styles",
+            timeout=900,
+            on_home=on_home,
+            on_cancel=on_home,
+            home_label="Back",
+        )
 
 
-class DesignCategoryStyleFontSelect(discord.ui.Select):
+class DesignCategoryStyleFontSelect(DankPickerView):
+    """House picker for a category style's channel or header font.
+
+    Picking applies the same draft font change the raw select
+    applied ("__server__"/"__same__" still clear the field);
+    Back/Close restores Category Styles untouched.
+    """
+
     def __init__(self, view: "DesignCategoryStylesView", *, field: str) -> None:
+        self.host_view = view
         self.field = field
         current = view.draft.get(field)
         if field == "font":
-            first = discord.SelectOption(
-                label=f"Server Default · {studio.font_label(_design_server_font(view.options))}"[:100],
-                value="__server__",
+            first = make_choice(
+                f"Server Default · {studio.font_label(_design_server_font(view.options))}",
+                "__server__",
                 description="Channels in this category follow the server font.",
                 default=current is None,
             )
             placeholder = "3) Choose the channel font"
-            row = 2
+            custom_id = "dank_design_v2:category_style_font:picker:v1"
         else:
-            first = discord.SelectOption(
-                label="Same as Channel Font",
-                value="__same__",
+            first = make_choice(
+                "Same as Channel Font",
+                "__same__",
                 description="The category header follows the channel font.",
                 default=current is None,
             )
             placeholder = "4) Choose the category header font"
-            row = 3
-        choices: list[discord.SelectOption] = [first]
+            custom_id = "dank_design_v2:category_style_header_font:picker:v1"
+
+        async def on_pick(interaction: discord.Interaction, value: str) -> None:
+            if not await _require_design_permission(interaction):
+                return
+            host = self.host_view
+            selected = _safe_str(value)
+            if selected in {"__server__", "__same__"}:
+                host.draft[self.field] = None
+            elif selected in studio.DESIGN_FONT_STYLES:
+                host.draft[self.field] = selected
+            else:
+                raise ValueError("Unsupported Dank Design font selection.")
+            host.template_id = ""
+            host.clear_style = False
+            await _edit_category_styles(interaction, host)
+
+        async def on_home(interaction: discord.Interaction) -> None:
+            if not await _require_design_permission(interaction):
+                return
+            await _edit_category_styles(interaction, self.host_view)
+
+        choices = [first]
         for style in studio.DESIGN_FONT_STYLES:
             decorative = style in getattr(studio, "RISKY_FONTS", set())
             note = "Decorative · preview recommended" if decorative else "Readable"
             choices.append(
-                discord.SelectOption(
-                    label=(f"⚠️ {studio.font_label(style)}" if decorative else studio.font_label(style))[:100],
-                    value=style,
-                    description=f"{studio.font_preview(style)} · {note}"[:100],
+                make_choice(
+                    (f"⚠️ {studio.font_label(style)}" if decorative else studio.font_label(style)),
+                    style,
+                    description=f"{studio.font_preview(style)} · {note}",
                     default=current == style,
                 )
             )
-        super().__init__(placeholder=placeholder, min_values=1, max_values=1, options=choices[:25], row=row)
-
-    async def callback(self, interaction: discord.Interaction) -> None:
-        if not await _require_design_permission(interaction):
-            return
-        view = self.view
-        if not isinstance(view, DesignCategoryStylesView):
-            return
-        selected = _safe_str(self.values[0])
-        if selected in {"__server__", "__same__"}:
-            view.draft[self.field] = None
-        elif selected in studio.DESIGN_FONT_STYLES:
-            view.draft[self.field] = selected
-        else:
-            raise ValueError("Unsupported Dank Design font selection.")
-        view.template_id = ""
-        view.clear_style = False
-        await _edit_category_styles(interaction, view)
+        super().__init__(
+            author_id=0,
+            choices=choices,
+            on_pick=on_pick,
+            custom_id=custom_id,
+            placeholder=placeholder,
+            title="Category Styles",
+            timeout=900,
+            on_home=on_home,
+            on_cancel=on_home,
+            home_label="Back",
+        )
 
 
 async def _category_style_pro_denial(interaction: discord.Interaction, guild: discord.Guild) -> discord.Embed | None:
@@ -1243,10 +1533,38 @@ class DesignCategoryStylesView(DesignView):
             template_id = _detect_category_style_template(saved)
         self.template_id = template_id
         self.clear_style = bool(clear_style)
-        self.add_item(DesignCategoryStyleCategorySelect(self))
-        self.add_item(DesignCategoryStyleTemplateSelect(self))
-        self.add_item(DesignCategoryStyleFontSelect(self, field="font"))
-        self.add_item(DesignCategoryStyleFontSelect(self, field="category_font"))
+        self.add_item(
+            legacy.DesignPickerOpenButton(
+                label="1) Choose a category",
+                custom_id="dank_design_v2:category_style_category:open",
+                row=0,
+                picker_factory=lambda: DesignCategoryStyleCategorySelect(self),
+            )
+        )
+        self.add_item(
+            legacy.DesignPickerOpenButton(
+                label="2) Stamp a zone template (optional)",
+                custom_id="dank_design_v2:category_style_template:open",
+                row=1,
+                picker_factory=lambda: DesignCategoryStyleTemplateSelect(self),
+            )
+        )
+        self.add_item(
+            legacy.DesignPickerOpenButton(
+                label="3) Choose the channel font",
+                custom_id="dank_design_v2:category_style_font:open",
+                row=2,
+                picker_factory=lambda: DesignCategoryStyleFontSelect(self, field="font"),
+            )
+        )
+        self.add_item(
+            legacy.DesignPickerOpenButton(
+                label="4) Choose the category header font",
+                custom_id="dank_design_v2:category_style_header_font:open",
+                row=3,
+                picker_factory=lambda: DesignCategoryStyleFontSelect(self, field="category_font"),
+            )
+        )
 
     def respawn(self, guild: discord.Guild) -> "DesignCategoryStylesView":
         return DesignCategoryStylesView(

@@ -28,6 +28,15 @@ def _button_labels(view: object) -> list[str]:
     return [str(getattr(item, "label", "")) for item in getattr(view, "children", []) if getattr(item, "label", None)]
 
 
+def _open_picker(view: object, custom_id: str):
+    """Return the house picker a host view's opener button builds."""
+    opener = next(
+        item for item in getattr(view, "children", [])
+        if getattr(item, "custom_id", "") == custom_id
+    )
+    return opener.build_picker()
+
+
 def test_home_has_four_owner_tasks_and_advanced_has_one_owner_per_tool() -> None:
     view = studio_v2.DesignHomeView({})
     assert _button_labels(view) == ["Style All Names", "Edit One Item", "Check & Fix", "Advanced"]
@@ -70,23 +79,22 @@ def test_server_style_controls_are_only_inside_design_server() -> None:
 
 def test_server_font_picker_fits_discord_and_exposes_full_catalog() -> None:
     view = studio_v2.DesignServerView({"theme_id": "gothic_clean", "strength": 4})
-    picker = next(item for item in view.children if isinstance(item, studio_v2.DesignServerFontSelect))
-    assert len(picker.options) == len(studio.DESIGN_FONT_STYLES) + 1
-    assert len(picker.options) <= 25
-    values = {str(option.value) for option in picker.options}
+    picker = _open_picker(view, "dank_design_v2:server_font:open")
+    assert isinstance(picker, studio_v2.DesignServerFontSelect)
+    assert len(picker.choices) == len(studio.DESIGN_FONT_STYLES) + 1
+    assert len(picker.choices) <= 25
+    values = {str(choice.value) for choice in picker.choices}
     assert {"__theme__", "sans", "double_struck", "fraktur", "small_caps"} <= values
-    assert any("𝕘" in str(option.description) for option in picker.options if option.value == "double_struck")
+    assert any("𝕘" in str(choice.description) for choice in picker.choices if choice.value == "double_struck")
 
 
 def test_server_separator_picker_can_follow_theme_or_hold_custom_choice() -> None:
     theme_default = studio_v2.DesignServerView(
         {"theme_id": "gaming_arcade", "strength": 4}
     )
-    picker = next(
-        item for item in theme_default.children
-        if isinstance(item, studio_v2.DesignServerSeparatorSelect)
-    )
-    defaults = [option for option in picker.options if option.default]
+    picker = _open_picker(theme_default, "dank_design_v2:server_separator:open")
+    assert isinstance(picker, studio_v2.DesignServerSeparatorSelect)
+    defaults = [choice for choice in picker.choices if choice.default]
     assert len(defaults) == 1
     assert defaults[0].value == "__theme__"
     assert "Theme Default" in str(defaults[0].label)
@@ -94,11 +102,8 @@ def test_server_separator_picker_can_follow_theme_or_hold_custom_choice() -> Non
     custom = studio_v2.DesignServerView(
         {"theme_id": "gaming_arcade", "strength": 4, "separator_id": "middle_dot"}
     )
-    custom_picker = next(
-        item for item in custom.children
-        if isinstance(item, studio_v2.DesignServerSeparatorSelect)
-    )
-    custom_defaults = [option for option in custom_picker.options if option.default]
+    custom_picker = _open_picker(custom, "dank_design_v2:server_separator:open")
+    custom_defaults = [choice for choice in custom_picker.choices if choice.default]
     assert len(custom_defaults) == 1
     assert custom_defaults[0].value == "middle_dot"
 
@@ -107,14 +112,12 @@ def test_server_separator_picker_can_follow_theme_or_hold_custom_choice() -> Non
 def test_server_icon_behavior_is_explicit_and_examples_follow_it() -> None:
     options = {"theme_id": "gaming_arcade", "strength": 4, "icon_mode": "keep_existing"}
     frame_view = studio_v2.DesignServerCategoryFrameView(options, page=0)
-    picker = next(
-        item for item in frame_view.children
-        if isinstance(item, studio_v2.DesignServerIconModeSelect)
-    )
-    defaults = [option for option in picker.options if option.default]
+    picker = _open_picker(frame_view, "dank_design_v2:icon_mode:open")
+    assert isinstance(picker, studio_v2.DesignServerIconModeSelect)
+    defaults = [choice for choice in picker.choices if choice.default]
     assert len(defaults) == 1
     assert defaults[0].value == "keep_existing"
-    assert {str(option.value) for option in picker.options} == {
+    assert {str(choice.value) for choice in picker.choices} == {
         "replace_missing",
         "keep_existing",
         "clear",
@@ -153,8 +156,14 @@ def test_server_category_frame_browser_exposes_full_catalog_without_row_overflow
     assert str(frame_button.label) == "Frame / Icons"
 
     buttons = [item for item in view.children if getattr(item, "label", None) is not None]
-    assert len(buttons) == 3
-    assert all(getattr(item, "row", None) == 4 for item in buttons)
+    action_buttons = [item for item in buttons if getattr(item, "row", None) == 4]
+    assert len(action_buttons) == 3
+    opener_rows = sorted(
+        getattr(item, "row", None)
+        for item in buttons
+        if str(getattr(item, "custom_id", "")).endswith(":open")
+    )
+    assert opener_rows == [0, 1, 2, 3]
     detail = studio_v2.DesignServerCategoryFrameView({"theme_id": "night_gothic", "strength": 5})
     assert "Preview Separator Only" in _button_labels(detail)
 
@@ -168,13 +177,11 @@ def test_server_category_frame_browser_exposes_full_catalog_without_row_overflow
             {"theme_id": "night_gothic", "strength": 5},
             page=page,
         )
-        picker = next(
-            item for item in page_view.children
-            if isinstance(item, studio_v2.DesignServerCategoryFrameSelect)
-        )
-        assert len(picker.options) <= 25
-        assert str(picker.options[0].value) == "__theme__"
-        seen.update(str(option.value) for option in picker.options if str(option.value) != "__theme__")
+        picker = _open_picker(page_view, "dank_design_v2:category_frame:open")
+        assert isinstance(picker, studio_v2.DesignServerCategoryFrameSelect)
+        assert len(picker.choices) <= 25
+        assert str(picker.choices[0].value) == "__theme__"
+        seen.update(str(choice.value) for choice in picker.choices if str(choice.value) != "__theme__")
 
     assert set(grouped_ids) <= seen
 
@@ -182,11 +189,8 @@ def test_server_category_frame_browser_exposes_full_catalog_without_row_overflow
         {"theme_id": "night_gothic", "strength": 5},
         page=0,
     )
-    picker = next(
-        item for item in theme_default_view.children
-        if isinstance(item, studio_v2.DesignServerCategoryFrameSelect)
-    )
-    defaults = [option for option in picker.options if option.default]
+    picker = _open_picker(theme_default_view, "dank_design_v2:category_frame:open")
+    defaults = [choice for choice in picker.choices if choice.default]
     assert len(defaults) == 1
     assert defaults[0].value == "__theme__"
     assert "Top Box" in str(defaults[0].label)
@@ -199,11 +203,8 @@ def test_server_category_frame_browser_exposes_full_catalog_without_row_overflow
     custom_page = studio_v2._category_frame_page_for(custom_options)
     assert custom_page == len(studio.CATEGORY_FRAME_GROUPS) - 1
     custom_view = studio_v2.DesignServerCategoryFrameView(custom_options, page=custom_page)
-    custom_picker = next(
-        item for item in custom_view.children
-        if isinstance(item, studio_v2.DesignServerCategoryFrameSelect)
-    )
-    custom_defaults = [option for option in custom_picker.options if option.default]
+    custom_picker = _open_picker(custom_view, "dank_design_v2:category_frame:open")
+    custom_defaults = [choice for choice in custom_picker.choices if choice.default]
     assert len(custom_defaults) == 1
     assert custom_defaults[0].value == "ribbon_heart"
 
@@ -215,11 +216,8 @@ def test_server_category_frame_browser_exposes_full_catalog_without_row_overflow
         },
         page=0,
     )
-    invalid_picker = next(
-        item for item in invalid_view.children
-        if isinstance(item, studio_v2.DesignServerCategoryFrameSelect)
-    )
-    invalid_defaults = [option for option in invalid_picker.options if option.default]
+    invalid_picker = _open_picker(invalid_view, "dank_design_v2:category_frame:open")
+    invalid_defaults = [choice for choice in invalid_picker.choices if choice.default]
     assert len(invalid_defaults) == 1
     assert invalid_defaults[0].value == "__theme__"
 
@@ -248,19 +246,19 @@ def test_new_category_frame_families_are_grouped_and_reachable() -> None:
 
 def test_exact_category_editor_can_browse_frames_beyond_first_select_page() -> None:
     initial = legacy.ExactFrameSelect("category", 123, "line")
-    values = {str(option.value) for option in initial.options}
-    assert len(initial.options) <= 25
+    values = {str(choice.value) for choice in initial.choices}
+    assert len(initial.choices) <= 25
     assert legacy.EXACT_FRAME_BROWSE_VALUE in values
 
     late_frame = "ribbon_heart"
     late = legacy.ExactFrameSelect("category", 123, late_frame)
-    late_defaults = [option for option in late.options if option.default]
+    late_defaults = [choice for choice in late.choices if choice.default]
     assert len(late_defaults) == 1
     assert late_defaults[0].value == late_frame
-    assert legacy.EXACT_FRAME_BROWSE_VALUE in {str(option.value) for option in late.options}
+    assert legacy.EXACT_FRAME_BROWSE_VALUE in {str(choice.value) for choice in late.choices}
 
     invalid = legacy.ExactFrameSelect("category", 123, "not-a-frame")
-    invalid_defaults = [option for option in invalid.options if option.default]
+    invalid_defaults = [choice for choice in invalid.choices if choice.default]
     assert len(invalid_defaults) == 1
     assert invalid_defaults[0].value == "plain"
 
@@ -272,25 +270,21 @@ def test_exact_category_editor_can_browse_frames_beyond_first_select_page() -> N
         lock={"category_frame_id": late_frame},
         page=page,
     )
-    picker = next(
-        item for item in browser.children
-        if isinstance(item, legacy.ExactFrameBrowserSelect)
-    )
-    defaults = [option for option in picker.options if option.default]
+    picker = _open_picker(browser, "dank_design:exact_frame_browser:open")
+    assert isinstance(picker, legacy.ExactFrameBrowserSelect)
+    defaults = [choice for choice in picker.choices if choice.default]
     assert len(defaults) == 1
     assert defaults[0].value == late_frame
-    assert len(picker.options) <= 25
+    assert len(picker.choices) <= 25
 
 
 def test_gothic_theme_default_separator_matches_real_preview_plan() -> None:
     options = {"theme_id": "gothic_clean", "strength": 4}
     assert studio_v2._design_server_separator(options) == "pipe_spaced"
     view = studio_v2.DesignServerView(options)
-    picker = next(
-        item for item in view.children
-        if isinstance(item, studio_v2.DesignServerSeparatorSelect)
-    )
-    selected = [option for option in picker.options if option.default]
+    picker = _open_picker(view, "dank_design_v2:server_separator:open")
+    assert isinstance(picker, studio_v2.DesignServerSeparatorSelect)
+    selected = [choice for choice in picker.choices if choice.default]
     assert len(selected) == 1
     assert selected[0].value == "__theme__"
     assert "Spaced" in str(selected[0].label) or "|" in str(selected[0].description)
@@ -557,15 +551,12 @@ def test_plan_defaults_preserve_gothic_pipe_and_visual_name_policy_without_globa
 
 def test_separator_picker_catalogs_expose_mixed_layouts_within_discord_limits() -> None:
     server_view = studio_v2.DesignServerView({"theme_id": "gothic_clean", "strength": 4})
-    server_picker = next(
-        item for item in server_view.children
-        if isinstance(item, studio_v2.DesignServerSeparatorSelect)
-    )
-    server_values = {str(option.value) for option in server_picker.options}
+    server_picker = _open_picker(server_view, "dank_design_v2:server_separator:open")
+    server_values = {str(choice.value) for choice in server_picker.choices}
 
     assert len(studio.SERVER_DESIGN_SEPARATOR_IDS) == 24
-    assert len(server_picker.options) == 25
-    assert len(server_picker.options) <= 25
+    assert len(server_picker.choices) == 25
+    assert len(server_picker.choices) <= 25
     assert {
         "__theme__",
         "dash",

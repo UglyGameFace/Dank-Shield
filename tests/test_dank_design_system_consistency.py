@@ -192,7 +192,7 @@ def test_channel_editor_customizations_are_owned_natively() -> None:
     assert legacy.EDITOR_PAGE_SIZE == 6
 
 
-def test_channel_page_jump_is_native_and_exposes_current_pages(
+def test_channel_page_jump_uses_house_picker_and_exposes_current_pages(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     groups = [
@@ -213,8 +213,8 @@ def test_channel_page_jump_is_native_and_exposes_current_pages(
         page=4,
         category_id=None,
     )
-    assert [option.value for option in select.options] == [str(index) for index in range(7)]
-    assert [option.value for option in select.options if option.default] == ["4"]
+    assert [choice.value for choice in select.choices] == [str(index) for index in range(7)]
+    assert [choice.value for choice in select.choices if choice.default] == ["4"]
     assert "5/7" in str(select.placeholder)
 
 
