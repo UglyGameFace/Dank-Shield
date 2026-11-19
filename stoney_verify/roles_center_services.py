@@ -94,6 +94,10 @@ class RolePanelChannelSelect(DankChannelSelect):
             min_values=1,
             max_values=1,
             channel_types=[discord.ChannelType.text],
+            # The raw select relied on the view's auto row layout
+            # (pronouns on row 0, identity on row 1, buttons row 2);
+            # the wrapper takes an explicit row, so keep that layout.
+            row=0 if kind != "identity" else 1,
         )
         self.custom_id = f"dank_setup_roles:{kind}:channel"
 

@@ -55,8 +55,11 @@ def test_private_ui_attached_to_existing_post_manager():
     menu=PublishedMenu(session,{"published":{}})
     assert "Live Text Updates" in {getattr(i,"label","") for i in menu.children}
     empty=LiveTextMenu(session,[])
-    picks=[item for item in empty.children if isinstance(item,LiveTextSelect)]
-    assert len(picks)==1 and picks[0].options[0].value=="none"
+    # Slice 9: the live-text select is a house picker behind an
+    # opener button on the menu; the picker itself keeps the
+    # "none" empty-state option.
+    assert any(getattr(item,"label","")=="Choose a Post" for item in empty.children)
+    assert LiveTextSelect(session,[]).options[0].value=="none"
     choice=LiveTextChoice(session,"1:2")
     assert {"Enable Hourly Updates","Disable Updates"} <= {
         getattr(x,"label","") for x in choice.children

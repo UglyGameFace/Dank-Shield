@@ -184,6 +184,11 @@ class DankPickerView(discord.ui.View):
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         return await _owner_check(interaction, author_id=self.author_id, allow_anyone=self.allow_anyone)
 
+    @property
+    def options(self) -> list[discord.SelectOption]:
+        """Legacy select-shaped surface: the choices as options."""
+        return [choice.to_option() for choice in self.choices]
+
     async def handle_pick(self, interaction: discord.Interaction, value: str) -> None:
         if value in {"", "__dank_empty__"}:
             return await _safe_ephemeral(interaction, "There is nothing to pick here yet.")

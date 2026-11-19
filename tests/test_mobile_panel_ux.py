@@ -276,7 +276,9 @@ def test_roles_and_profiles_sections_preserve_permission_gated_controls():
             item.label for item in view.children
             if isinstance(item, __import__("discord").ui.Button)
         }
-        expected = set(names) | {"Dank Shield Home", "Close"}
+        # Slice 9: the section select is a house picker behind a
+        # "Choose Section" opener button on the panel.
+        expected = set(names) | {"Dank Shield Home", "Close", "Choose Section"}
         if section == "profile":
             expected.discard("My Community & Pings")  # staff use manager entry instead
         assert actual == expected
@@ -288,7 +290,12 @@ def test_roles_and_profiles_sections_preserve_permission_gated_controls():
         123, staff=False, role_manager=False, setup_manager=False, section="roles",
     )
     assert member.section == "profile"
-    assert {item.value for item in member.children[0].options} == {"profile"}
+    # Slice 9: the member's section picker (behind the opener) still
+    # offers only the profile section to non-staff.
+    member_picker = roles.RolesProfilesSectionSelect(
+        123, "profile", staff=False, role_manager=False, setup_manager=False,
+    )
+    assert {item.value for item in member_picker.options} == {"profile"}
     assert all(item.label not in {"Server Role Editor", "Create Role", "Role Health"}
                for item in member.children if getattr(item, "label", None))
 
@@ -315,7 +322,16 @@ def test_welcome_and_exit_desktop_mobile_shared_navigation():
         assert set(names) <= _buttons(panel)
         assert {"Refresh", "Back to All Features", "Close"} <= _buttons(panel)
         _assert_compact(panel)
-        assert sum(isinstance(item, welcome._WelcomeSectionSelect) for item in panel.children) == 1
+        # Slice 9: the section select is a house picker behind an
+        # opener button (the Exit Card Studio pattern), not a raw
+        # select embedded in the panel.
+        from stoney_verify.ui.picker import DankPickerOpenButton
+
+        assert sum(
+            isinstance(item, DankPickerOpenButton)
+            and item.custom_id == "dank:welcome:settings:section:open"
+            for item in panel.children
+        ) == 1
         assert sum(isinstance(item, welcome.WelcomeChannelSelect) for item in panel.children) == (1 if section == "static" else 0)
     assert "Setup Home" in _buttons(welcome.WelcomeSetupView(owner_id=10, config={}, section="tools"))
 
