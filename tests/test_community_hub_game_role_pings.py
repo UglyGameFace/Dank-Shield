@@ -222,7 +222,9 @@ def test_staff_manager_and_session_controls_are_discoverable_and_bounded():
     assert "dank:hub:staff:gamepings:v1" in ids
     ids = [getattr(child, "custom_id", "") for child in manage.children]
     assert "dank:hub:manage:gameping:v1" in ids
-    assert "dank:hub:manage:section:v1" in ids
+    # Picker migration slice 8: the section select is a house picker; its
+    # opener rides on the panel (the picker keeps the :v1 id itself).
+    assert "dank:hub:manage:section:open:v1" in ids
     assert len(manage.children) <= 9
     for view in (staff, manage, ui.GameRolePingsManagerView(1)):
         rows = {}

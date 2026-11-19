@@ -287,7 +287,9 @@ def test_quick_match_prefers_existing_groups_then_forms_only_opted_in_matches() 
     assert "class AvailableGameSelect" in ui
     assert "def _available_players_embed" in ui
     assert "await hub.list_available_users(guild_id, game, limit=25)" in ui
-    assert 'custom_id="dank:hub:find:availablegame:v1"' in ui
+    # Picker migration slice 8: the stable id is the house picker's
+    # base custom_id (page-suffixed when the game list pages).
+    assert '"dank:hub:find:availablegame:v1"' in ui
     assert 'custom_id="dank:hub:find:quick:v1"' in ui
     assert 'custom_id="dank:hub:find:available:v1"' in ui
     assert "created_match" in ui

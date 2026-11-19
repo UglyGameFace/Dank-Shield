@@ -135,7 +135,13 @@ def test_minecraft_view_and_navigation_fit_discord_mobile():
     view = ui.MinecraftPlayersView(123, page=2, pages=4, edition="JAVA")
     assert len(view.children) <= 5
     assert {getattr(x, "row", 0) for x in view.children} <= {0, 1, 2}
-    select = next(x for x in view.children if isinstance(x, discord.ui.Select))
+    # Picker migration slice 8: the edition select is a house picker
+    # opened from this button; the picker keeps the legacy custom_id.
+    opener = next(
+        x for x in view.children
+        if getattr(x, "custom_id", "") == "dank:hub:outside:minecraft:edition:open:v1"
+    )
+    select = opener._factory(view)
     assert len(select.options) == 4
     assert select.custom_id == "dank:hub:outside:minecraft:edition:v1"
     link = next(x for x in view.children if isinstance(x, discord.ui.Button) and x.style == discord.ButtonStyle.link)

@@ -15,6 +15,7 @@ from .startup_guards.discord_api_safety import fetch_message_with_api_safety
 
 from stoney_verify import toke_sessions
 from stoney_verify.share_router_media_network import is_safe_media_download_url
+from stoney_verify.ui.picker import DankUserSelect
 
 SETTINGS_KEY = "toke_meetup_settings_v1"
 CAPTURE_SECONDS = 90
@@ -842,22 +843,42 @@ async def _resolve_toke_handoff_target(guild: discord.Guild, user_id: int) -> di
 
 
 class TokeHostPickerView(discord.ui.View):
-    """Choose the next host privately; never reassign on selection alone."""
+    """Choose the next host privately; never reassign on selection alone.
+
+    Class C fit: the user picker is the house ``DankUserSelect``
+    wrapper with a stable custom_id and ``allow_anyone`` at the
+    wrapper level. This panel belongs to a live in-channel flow where
+    the *current* starter — who may differ from whoever opened the
+    manager, e.g. after an earlier handoff — or a Manage Server
+    member is a legitimate presser, so neither the view nor the
+    wrapper locks to the opener. The authority stays exactly where
+    the raw UserSelect kept it: the starter/manager permission check
+    inside :meth:`choose`, re-run on every pick.
+    """
 
     def __init__(self, actor_id: int, guild_id: int, message_id: int) -> None:
         super().__init__(timeout=120)
         self.actor_id, self.guild_id, self.message_id = int(actor_id), int(guild_id), int(message_id)
+        select = DankUserSelect(
+            author_id=self.actor_id,
+            on_pick=self.choose,
+            placeholder="Choose the new Toke host",
+            allow_anyone=True,
+            min_values=1,
+            max_values=1,
+            row=0,
+        )
+        select.custom_id = "dank:toke:host_picker:v1"
+        self.add_item(select)
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id != self.actor_id or interaction.guild is None or int(interaction.guild.id) != self.guild_id:
-            await interaction.response.send_message("Open your own sesh manager.", ephemeral=True)
-            return False
+        # No opener lock (see the class docstring): choose() re-checks
+        # guild + starter/manager authority on every pick.
         return True
 
-    @discord.ui.select(cls=discord.ui.UserSelect, placeholder="Choose the new Toke host", min_values=1, max_values=1)
-    async def choose(self, interaction: discord.Interaction, select: discord.ui.UserSelect) -> None:
+    async def choose(self, interaction: discord.Interaction, selected: Any) -> None:
         await interaction.response.defer()
-        if interaction.guild is None:
+        if interaction.guild is None or int(interaction.guild.id) != self.guild_id:
             return await interaction.edit_original_response(content="This server is unavailable.", view=None)
         try:
             current = await toke_sessions.get(self.guild_id, self.message_id)
@@ -867,7 +888,8 @@ class TokeHostPickerView(discord.ui.View):
             return await interaction.edit_original_response(content="This sesh has ended.", view=None)
         if interaction.user.id != int(current["starter_id"]) and not getattr(interaction.user.guild_permissions, "manage_guild", False):
             return await interaction.edit_original_response(content="You can no longer manage this sesh.", view=None)
-        candidate = await _resolve_toke_handoff_target(interaction.guild, int(select.values[0].id))
+        target = selected.values[0] if getattr(selected, "values", None) else selected
+        candidate = await _resolve_toke_handoff_target(interaction.guild, int(target.id))
         if candidate is None or candidate.bot:
             return await interaction.edit_original_response(content="Choose a current non-bot server member.", view=None)
         if int(candidate.id) == int(current["starter_id"]):

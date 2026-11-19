@@ -70,7 +70,12 @@ def test_first_click_queries_outside_network_and_local_together(monkeypatch):
     assert isinstance(view, ui.UnifiedPlayerDiscoveryView)
     assert len(view.children) <= 25
     assert all((getattr(x, "row", 0) or 0) <= 4 for x in view.children)
-    assert len([x for x in view.children if isinstance(x, discord.ui.Select)]) == 1
+    # Picker migration slice 8: exactly one picker opener (the outside
+    # group house picker) rides on this view.
+    assert len([
+        x for x in view.children
+        if getattr(x, "custom_id", "") == "dank:hub:unified:networkselect:open:v1"
+    ]) == 1
     assert "PRIVATE_NOTES" not in repr(embed.to_dict())
     assert "PRIVATE_HOST_ID" not in repr(embed.to_dict())
     assert "PRIVATE_SESSION_DESCRIPTION" not in repr(embed.to_dict())
@@ -85,8 +90,10 @@ def test_unmigrated_network_does_not_hide_outside_matches(monkeypatch):
     assert "NA survival friends" in rendered
     assert "Cross-server listings aren't set up" in rendered
     assert "unavailable or not migrated yet" not in rendered
+    # Picker migration slice 8: the picker opener keeps the raw select's
+    # disabled-when-empty affordance.
     menu = next(x for x in edit.await_args.kwargs["view"].children
-                if isinstance(x, discord.ui.Select))
+                if getattr(x, "custom_id", "") == "dank:hub:unified:networkselect:open:v1")
     assert menu.disabled
 
 
@@ -98,7 +105,7 @@ def test_atlas_outage_does_not_hide_approved_network(monkeypatch):
     assert "Outside group listings are temporarily unavailable" in rendered
     assert "The 420 Lobby" in rendered
     menu = next(x for x in edit.await_args.kwargs["view"].children
-                if isinstance(x, discord.ui.Select))
+                if getattr(x, "custom_id", "") == "dank:hub:unified:networkselect:open:v1")
     assert not menu.disabled
 
 

@@ -1001,12 +1001,19 @@ def test_content_filter_ui_has_selectable_four_modes_and_preserves_proxy_default
         content_filter="everything",
     )
     for view, current in ((existing, "videos"), (proxy, "everything")):
-        selects = [part for part in view.children if isinstance(part, discord.ui.Select)]
-        assert len(selects) == 1
-        assert {opt.value for opt in selects[0].options} == {
+        # Picker migration slice 8: the content-filter select is a house
+        # picker opened by the "Content Filter" button on the landing
+        # view; the picker carries the same four modes and default.
+        openers = [
+            part for part in view.children
+            if getattr(part, "label", "") == "Content Filter"
+        ]
+        assert len(openers) == 1
+        picker = ui.ShareRouterContentFilterPickerView(view)
+        assert {choice.value for choice in picker.choices} == {
             "videos", "images", "links", "everything",
         }
-        assert [opt.value for opt in selects[0].options if opt.default] == [current]
+        assert [choice.value for choice in picker.choices if choice.default] == [current]
     assert existing.back.label == "Back to Existing Channels"
     embed = ui._target_options_embed(source, delete_source=False, content_filter="videos")
     assert "Videos Only" in str(embed.to_dict())

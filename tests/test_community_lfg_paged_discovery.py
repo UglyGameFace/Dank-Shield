@@ -44,8 +44,12 @@ def test_mobile_paging_reuses_existing_select_row_without_extra_commands():
         44, _sessions(25), partner=True, page=1, has_next=True,
         game_query="mc", play_style="casual", mic_preference="required",
     )
-    select = next(item for item in page1.children if getattr(item, "custom_id", "") == "dank:hub:find:preferences:v1")
-    assert select.row == 4
+    # Picker migration slice 8: the preferences select is a house picker
+    # opened from the button that took its row; the picker keeps its id.
+    opener = next(item for item in page1.children if getattr(item, "custom_id", "") == "dank:hub:find:preferences:open:v1")
+    assert opener.row == 4
+    select = opener._factory(page1)
+    assert select.custom_id == "dank:hub:find:preferences:v1"
     assert select.page == 1
     assert {x.value for x in select.options} >= {"page:prev", "page:next", "style:casual", "mic:required"}
     assert len(select.options) <= 25
@@ -110,5 +114,6 @@ def test_revoked_partner_listings_reset_stale_page(monkeypatch):
 
 def test_source_view_does_not_enable_pagination_without_more_results():
     first = ui.FindPlayersView(44, _sessions(5), partner=False)
-    menu = next(item for item in first.children if getattr(item, "custom_id", "") == "dank:hub:find:preferences:v1")
+    opener = next(item for item in first.children if getattr(item, "custom_id", "") == "dank:hub:find:preferences:open:v1")
+    menu = opener._factory(first)
     assert not any(option.value.startswith("page:") for option in menu.options)

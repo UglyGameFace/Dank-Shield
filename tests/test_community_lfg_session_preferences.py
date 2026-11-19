@@ -55,11 +55,14 @@ def test_mobile_ui_adds_one_select_without_exceeding_discord_rows() -> None:
         assert view.play_style == "casual"
         assert view.mic_preference == "required"
         assert not view.clear_game.disabled
-        preference = next(
+        # Picker migration slice 8: one opener button on the same row
+        # opens the house preferences picker (<=25 options as before).
+        opener = next(
             item for item in view.children
-            if getattr(item, "custom_id", "") == "dank:hub:find:preferences:v1"
+            if getattr(item, "custom_id", "") == "dank:hub:find:preferences:open:v1"
         )
-        assert preference.row == 4
+        assert opener.row == 4
+        preference = opener._factory(view)
         assert len(preference.options) <= 25
         rows: dict[int, int] = {}
         for item in view.children:

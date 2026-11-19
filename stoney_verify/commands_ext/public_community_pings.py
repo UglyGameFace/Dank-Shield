@@ -34,7 +34,7 @@ from stoney_verify.community_pings_service import (
     without_option,
 )
 from stoney_verify.panel_lifecycle import PRIVATE_MENU_TTL_SECONDS
-from stoney_verify.ui.picker import DankChoice, DankMultiPickerView, DankPickerView
+from stoney_verify.ui.picker import DankChoice, DankMultiPickerView, DankPickerView, make_choice
 from stoney_verify.ui.resource_browser import DankGuildResourceBrowserView
 
 
@@ -643,14 +643,35 @@ _OPTION_EDITOR_SECTIONS = {
 }
 
 
-class CommunityOptionEditorSectionSelect(discord.ui.Select):
+class CommunityOptionEditorSectionSelect(DankPickerView):
+    """House picker for switching Community & Pings option-editor sections.
+
+    Keeps the old section select's behavior: staff authorization is
+    re-checked on every switch, and picking re-renders the option
+    editor at the chosen section.
+    """
+
     def __init__(self, owner_id: int, option_key: str, section: str) -> None:
         self.owner_id = int(owner_id)
         self.option_key = option_key
+        self.section = section
+
+        async def on_pick(interaction: discord.Interaction, value: str) -> None:
+            if not await _staff_authorized(interaction):
+                return
+            await _open_option_editor(
+                interaction, self.owner_id, self.option_key, section=value,
+            )
+
+        async def on_home(interaction: discord.Interaction) -> None:
+            await _open_option_editor(
+                interaction, self.owner_id, self.option_key, section=self.section,
+            )
+
         super().__init__(
-            placeholder="Choose what to change",
-            options=[
-                discord.SelectOption(label=label, value=key, default=key == section)
+            author_id=self.owner_id,
+            choices=[
+                make_choice(label, key, default=key == section)
                 for key, label in (
                     ("details", "Option Details"),
                     ("rules", "Access Rules"),
@@ -658,15 +679,44 @@ class CommunityOptionEditorSectionSelect(discord.ui.Select):
                     ("order", "Order & Position"),
                 )
             ],
-            row=0,
+            on_pick=on_pick,
             custom_id="dank:pings:option:section:v1",
+            placeholder="Choose what to change",
+            title="Community & Pings Option",
+            timeout=PRIVATE_MENU_TTL_SECONDS,
+            on_home=on_home,
+            home_label="Back",
         )
 
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if _safe_int(getattr(interaction.user, "id", 0), 0) == self.owner_id:
+            return True
+        await _reply(interaction, "Open your own Community & Pings panel to use these controls.")
+        return False
+
+
+class CommunityOptionEditorSectionOpenButton(discord.ui.Button):
+    """Swaps the option editor panel for the section picker on the same message."""
+
+    def __init__(self, owner_id: int, option_key: str, section: str) -> None:
+        super().__init__(
+            label="Switch Section", emoji="🧭",
+            style=discord.ButtonStyle.secondary,
+            custom_id="dank:pings:option:section:open:v1", row=0,
+        )
+        self.owner_id = int(owner_id)
+        self.option_key = option_key
+        self.section = section
+
     async def callback(self, interaction: discord.Interaction) -> None:
-        if not await _staff_authorized(interaction):
+        view = self.view
+        if not isinstance(view, CommunityOptionEditorView) or not await view.interaction_check(interaction):
             return
-        await _open_option_editor(
-            interaction, self.owner_id, self.option_key, section=self.values[0],
+        message = getattr(interaction, "message", None)
+        embeds = getattr(message, "embeds", None) if message is not None else None
+        await interaction.response.edit_message(
+            embed=embeds[0] if embeds else None,
+            view=CommunityOptionEditorSectionSelect(self.owner_id, self.option_key, self.section),
         )
 
 
@@ -677,7 +727,7 @@ class CommunityOptionEditorView(_OwnedView):
         self.section = section if section in _OPTION_EDITOR_SECTIONS else "details"
         by_label = {str(getattr(item, "label", "")): item for item in self.children}
         self.clear_items()
-        self.add_item(CommunityOptionEditorSectionSelect(self.owner_id, option_key, self.section))
+        self.add_item(CommunityOptionEditorSectionOpenButton(self.owner_id, option_key, self.section))
         actions = (*_OPTION_EDITOR_SECTIONS[self.section], "Back", "Close")
         for index, label in enumerate(actions):
             item = by_label[label]
@@ -976,13 +1026,42 @@ _PINGS_MANAGER_SECTIONS = {
 }
 
 
-class CommunityPingsSectionSelect(discord.ui.Select):
+class CommunityPingsSectionSelect(DankPickerView):
+    """House picker for switching Community & Pings manager sections.
+
+    Keeps the old section select's behavior: staff authorization is
+    re-checked on every switch, the interaction is deferred, and
+    picking re-renders the manager panel at the chosen section.
+    """
+
     def __init__(self, owner_id: int, current: str):
         self.owner_id = int(owner_id)
+        self.current = current
+
+        async def on_pick(interaction: discord.Interaction, value: str) -> None:
+            if not await _staff_authorized(interaction):
+                return
+            guild = interaction.guild
+            if guild is None:
+                return await _reply(interaction, "Use this inside a server.")
+            if not interaction.response.is_done():
+                await interaction.response.defer()
+            raw, model = await _load(guild)
+            await _replace(
+                interaction,
+                embed=_manager_embed(guild, raw, model, section=value),
+                view=CommunityPingsManagerView(self.owner_id, section=value),
+            )
+
+        async def on_home(interaction: discord.Interaction) -> None:
+            await _open_manager_message(
+                interaction, owner_id=self.owner_id, section=self.current,
+            )
+
         super().__init__(
-            placeholder="Choose Community & Pings settings",
-            options=[
-                discord.SelectOption(label=label, value=key, default=current == key)
+            author_id=self.owner_id,
+            choices=[
+                make_choice(label, key, default=current == key)
                 for key, label in (
                     ("options", "Member Options"),
                     ("groups", "Role Groups"),
@@ -990,23 +1069,43 @@ class CommunityPingsSectionSelect(discord.ui.Select):
                     ("movie", "Movie Night"),
                 )
             ],
-            row=0,
+            on_pick=on_pick,
             custom_id="dank:pings:manager:section:v2",
+            placeholder="Choose Community & Pings settings",
+            title="Community & Pings",
+            timeout=PRIVATE_MENU_TTL_SECONDS,
+            on_home=on_home,
+            home_label="Back",
         )
 
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if _safe_int(getattr(interaction.user, "id", 0), 0) == self.owner_id:
+            return True
+        await _reply(interaction, "Open your own Community & Pings panel to use these controls.")
+        return False
+
+
+class CommunityPingsSectionOpenButton(discord.ui.Button):
+    """Swaps the Community & Pings manager panel for the section picker on the same message."""
+
+    def __init__(self, owner_id: int, section: str) -> None:
+        super().__init__(
+            label="Switch Section", emoji="🧭",
+            style=discord.ButtonStyle.secondary,
+            custom_id="dank:pings:manager:section:open:v1", row=0,
+        )
+        self.owner_id = int(owner_id)
+        self.section = section
+
     async def callback(self, interaction: discord.Interaction) -> None:
-        if not await _staff_authorized(interaction):
+        view = self.view
+        if not isinstance(view, CommunityPingsManagerView) or not await view.interaction_check(interaction):
             return
-        guild = interaction.guild
-        if guild is None:
-            return await _reply(interaction, "Use this inside a server.")
-        if not interaction.response.is_done():
-            await interaction.response.defer()
-        raw, model = await _load(guild)
-        await _replace(
-            interaction,
-            embed=_manager_embed(guild, raw, model, section=self.values[0]),
-            view=CommunityPingsManagerView(self.owner_id, section=self.values[0]),
+        message = getattr(interaction, "message", None)
+        embeds = getattr(message, "embeds", None) if message is not None else None
+        await interaction.response.edit_message(
+            embed=embeds[0] if embeds else None,
+            view=CommunityPingsSectionSelect(self.owner_id, self.section),
         )
 
 
@@ -1016,7 +1115,7 @@ class CommunityPingsManagerView(_OwnedView):
         self.section = section if section in _PINGS_MANAGER_SECTIONS else "options"
         existing = {str(getattr(item, "label", "")): item for item in self.children}
         self.clear_items()
-        self.add_item(CommunityPingsSectionSelect(self.owner_id, self.section))
+        self.add_item(CommunityPingsSectionOpenButton(self.owner_id, self.section))
         for index, label in enumerate(
             (*_PINGS_MANAGER_SECTIONS[self.section], "Refresh", "Home", "Close")
         ):

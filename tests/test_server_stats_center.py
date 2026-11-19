@@ -57,9 +57,12 @@ def test_server_stats_center_exposes_management_and_customization_controls() -> 
         "Close",
     } <= labels
 
+    # Picker migration slice 8: the visible/label selects are house
+    # pickers; the panel carries their opener buttons (the pickers keep
+    # the dank_server_stats:visible / :label custom_ids themselves).
     assert {
-        "dank_server_stats:visible",
-        "dank_server_stats:label",
+        "dank_server_stats:visible_open",
+        "dank_server_stats:label_open",
         "dank_server_stats:enable",
         "dank_server_stats:disable",
         "dank_server_stats:refresh",
@@ -74,12 +77,14 @@ def test_server_stats_center_exposes_management_and_customization_controls() -> 
 
 
 def test_server_stats_center_offers_every_authoritative_counter() -> None:
-    view = stats_ui.ServerStatsView(owner_id=1, cfg={})
-    visible = _item(view, "dank_server_stats:visible")
-    assert {str(option.value) for option in visible.options} == set(
+    # Picker migration slice 8: the counters live on the house picker the
+    # panel's "visible" opener swaps in; it keeps the legacy custom_id.
+    visible = stats_ui.VisibleStatsSelect(owner_id=1, cfg={})
+    assert visible.custom_id == "dank_server_stats:visible"
+    assert {str(choice.value) for choice in visible.choices} == set(
         security_stats.DEFAULT_SECURITY_STATS_VISIBLE_KEYS
     )
-    by_key = {str(option.value): option for option in visible.options}
+    by_key = {str(choice.value): choice for choice in visible.choices}
     assert "GUILD_CREATE member_count" in str(by_key["members"].description)
     assert "ticket records" in str(by_key["open_tickets"].description)
 
