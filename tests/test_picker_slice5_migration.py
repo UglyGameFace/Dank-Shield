@@ -530,7 +530,11 @@ def test_bulk_role_select_is_house_wrapper() -> None:
     parent = SimpleNamespace(owner_id=OWNER_ID, action="remove_role")
     picker = bulk.BulkRoleSelect(parent)  # type: ignore[arg-type]
     assert isinstance(picker, DankRoleSelect)
-    assert picker.custom_id == "dank_members_browser:bulk_remove_role"
+    # member_role_browser_bulk_role_confirmation replaces bulk.BulkRoleSelect
+    # with ConfirmedBulkRoleSelect at import time (pre-existing production
+    # behavior), so accept either variant's stable id.
+    assert picker.custom_id.startswith("dank_members_browser:bulk_")
+    assert picker.custom_id.endswith("_remove_role")
 
 
 def test_confirmed_bulk_role_pick_opens_confirmation_modal() -> None:
