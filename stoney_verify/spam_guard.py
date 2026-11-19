@@ -27,6 +27,7 @@ from .settings_registry import (
     normalize_spam_guard_settings as _registry_normalize_spam_guard_settings,
     spam_guard_defaults as _registry_spam_guard_defaults,
 )
+from .ui.picker import DankPickerView, DankRoleSelect, make_choice
 
 # ============================================================
 # Spam / hacked-account guard with compact multi-page control UI
@@ -3277,87 +3278,186 @@ class SpamListsModal(discord.ui.Modal, title="Spam Guard • Channels + Users"):
             pass
 
 
-class SpamSectionSelect(discord.ui.Select):
-    def __init__(self, current_page: str):
-        options = [
-            discord.SelectOption(
-                label="Overview",
-                value="overview",
-                description="Main summary and simple explanations",
-                default=current_page == "overview",
-            ),
-            discord.SelectOption(
-                label="Detection Rules",
-                value="detection",
-                description="What counts as spam",
-                default=current_page == "detection",
-            ),
-            discord.SelectOption(
-                label="Response Actions",
-                value="enforcement",
-                description="What the bot does after detection",
-                default=current_page == "enforcement",
-            ),
-            discord.SelectOption(
-                label="Allow Lists + Exemptions",
-                value="access",
-                description="Who is allowed or exempt",
-                default=current_page == "access",
-            ),
-        ]
+async def _ignore_role_pick(interaction: discord.Interaction, role: object) -> None:
+    return None
+
+
+async def _restore_spam_panel(interaction: discord.Interaction, *, page: str) -> None:
+    """Put the persistent Spam Guard panel back on a message a picker borrowed."""
+    guild = interaction.guild
+    if guild is None:
+        return await _reply_ephemeral(interaction, "Invalid context.")
+    settings = await get_spam_settings(guild.id)
+    embed = _build_panel_embed(
+        guild,
+        settings,
+        page=page,
+        persisted_hint=None,
+    )
+    view = SpamGuardPanelView.build(page=page, settings=settings)
+    if interaction.response.is_done():
+        await interaction.edit_original_response(embed=embed, view=view)
+    else:
+        await interaction.response.edit_message(embed=embed, view=view)
+
+
+class SpamSectionPickerView(DankPickerView):
+    """House picker for switching Spam Guard panel sections.
+
+    The panel itself stays persistent; this picker is the transient
+    surface the panel's section opener swaps in on the same message.
+    Picking runs the same _switch_panel_page flow the raw section
+    select used (staff gate inside), and Back/Close restores the
+    panel untouched. The panel is staff-gated rather than owned by
+    one person, so the framework owner check stays open
+    (author_id=0) and the staff gate in the save/switch paths is
+    the only gate, exactly as before.
+    """
+
+    def __init__(self, current_page: str) -> None:
+        self.current_page = current_page if current_page in SPAM_PANEL_PAGES else "overview"
+
+        async def on_pick(interaction: discord.Interaction, value: str) -> None:
+            target_page = value if value in SPAM_PANEL_PAGES else "overview"
+            await _switch_panel_page(interaction, page=target_page)
+
+        async def on_home(interaction: discord.Interaction) -> None:
+            await _restore_spam_panel(interaction, page=self.current_page)
+
         super().__init__(
+            author_id=0,
+            choices=[
+                make_choice("Overview", "overview", description="Main summary and simple explanations", default=self.current_page == "overview"),
+                make_choice("Detection Rules", "detection", description="What counts as spam", default=self.current_page == "detection"),
+                make_choice("Response Actions", "enforcement", description="What the bot does after detection", default=self.current_page == "enforcement"),
+                make_choice("Allow Lists + Exemptions", "access", description="Who is allowed or exempt", default=self.current_page == "access"),
+            ],
+            on_pick=on_pick,
+            custom_id=f"spamguard:{self.current_page}:section:picker:v1",
             placeholder="Open a spam guard section…",
-            min_values=1,
-            max_values=1,
-            options=options,
-            custom_id=f"spamguard:{current_page}:section",
+            title="Spam Guard",
+            timeout=900,
+            on_home=on_home,
+            on_cancel=on_home,
+            home_label="Back",
+        )
+
+
+class SpamSectionOpenButton(discord.ui.Button):
+    """Swaps the Spam Guard panel for the section picker on the same message."""
+
+    def __init__(self, page: str):
+        super().__init__(
+            label="Switch Section",
+            emoji="🧭",
+            style=discord.ButtonStyle.secondary,
+            custom_id=f"spamguard:{page}:section:open",
             row=1,
         )
+        self.page = page
 
     async def callback(self, interaction: discord.Interaction) -> None:
-        target_page = self.values[0] if self.values and self.values[0] in SPAM_PANEL_PAGES else "overview"
-        await _switch_panel_page(interaction, page=target_page)
+        if not await _ensure_staff_panel_access(interaction):
+            return
+        message = getattr(interaction, "message", None)
+        embeds = getattr(message, "embeds", None) if message is not None else None
+        await interaction.response.edit_message(
+            embed=embeds[0] if embeds else None,
+            view=SpamSectionPickerView(self.page),
+        )
 
 
-class SpamModeSelect(discord.ui.Select):
-    def __init__(self, current_page: str, current_mode: str):
-        options = [
-            discord.SelectOption(label="Log Only", value="log_only", description="Only record the event", default=current_mode == "log_only"),
-            discord.SelectOption(label="Delete Only", value="delete_only", description="Remove matched spam messages only", default=current_mode == "delete_only"),
-            discord.SelectOption(label="Timeout", value="timeout", description="Remove matched spam and timeout the user", default=current_mode == "timeout"),
-            discord.SelectOption(label="Quarantine", value="quarantine", description="Remove matched spam, quarantine, and allow one-click restore", default=current_mode == "quarantine"),
-            discord.SelectOption(label="Kick", value="kick", description="Remove matched spam and kick the user", default=current_mode == "kick"),
-            discord.SelectOption(label="Ban", value="ban", description="Remove matched spam and ban the user", default=current_mode == "ban"),
-        ]
+class SpamModePickerView(DankPickerView):
+    """House picker for the Spam Guard response mode.
+
+    Picking saves the same {"mode": ...} patch through
+    _save_patch_and_rerender the raw mode select used; Back/Close
+    restores the panel untouched.
+    """
+
+    def __init__(self, current_page: str, current_mode: str) -> None:
+        self.current_page = current_page if current_page in SPAM_PANEL_PAGES else "overview"
+        clean_mode = _normalize_mode(current_mode, "timeout")
+
+        async def on_pick(interaction: discord.Interaction, value: str) -> None:
+            new_mode = _normalize_mode(value, "timeout")
+            await _save_patch_and_rerender(
+                interaction,
+                patch={"mode": new_mode},
+                page=self.current_page,
+                success_text=f"Spam guard mode set to `{new_mode}`.",
+            )
+
+        async def on_home(interaction: discord.Interaction) -> None:
+            await _restore_spam_panel(interaction, page=self.current_page)
+
         super().__init__(
+            author_id=0,
+            choices=[
+                make_choice("Log Only", "log_only", description="Only record the event", default=clean_mode == "log_only"),
+                make_choice("Delete Only", "delete_only", description="Remove matched spam messages only", default=clean_mode == "delete_only"),
+                make_choice("Timeout", "timeout", description="Remove matched spam and timeout the user", default=clean_mode == "timeout"),
+                make_choice("Quarantine", "quarantine", description="Remove matched spam, quarantine, and allow one-click restore", default=clean_mode == "quarantine"),
+                make_choice("Kick", "kick", description="Remove matched spam and kick the user", default=clean_mode == "kick"),
+                make_choice("Ban", "ban", description="Remove matched spam and ban the user", default=clean_mode == "ban"),
+            ],
+            on_pick=on_pick,
+            custom_id=f"spamguard:{self.current_page}:mode:picker:v1",
             placeholder="Choose response mode…",
-            min_values=1,
-            max_values=1,
-            options=options,
-            custom_id=f"spamguard:{current_page}:mode",
+            title="Spam Guard",
+            timeout=900,
+            on_home=on_home,
+            on_cancel=on_home,
+            home_label="Back",
+        )
+
+
+class SpamModeOpenButton(discord.ui.Button):
+    """Swaps the Spam Guard panel for the response-mode picker on the same message."""
+
+    def __init__(self, page: str, current_mode: str):
+        super().__init__(
+            label="Choose Response Mode…",
+            style=discord.ButtonStyle.secondary,
+            custom_id=f"spamguard:{page}:mode:open",
             row=2,
         )
-        self.current_page = current_page
+        self.page = page
+        self.current_mode = current_mode
 
     async def callback(self, interaction: discord.Interaction) -> None:
-        new_mode = _normalize_mode(self.values[0], "timeout")
-        await _save_patch_and_rerender(
-            interaction,
-            patch={"mode": new_mode},
-            page=self.current_page,
-            success_text=f"Spam guard mode set to `{new_mode}`.",
+        if not await _ensure_staff_panel_access(interaction):
+            return
+        message = getattr(interaction, "message", None)
+        embeds = getattr(message, "embeds", None) if message is not None else None
+        await interaction.response.edit_message(
+            embed=embeds[0] if embeds else None,
+            view=SpamModePickerView(self.page, self.current_mode),
         )
 
 
-class SpamInviteAllowedRolesSelect(discord.ui.RoleSelect):
+class SpamInviteAllowedRolesSelect(DankRoleSelect):
+    """House role picker for invite-allowed roles (multi-pick, clearable).
+
+    The framework wrapper's own callback only forwards the first
+    value, so this subclass keeps the exact original flow: every
+    picked role — or an empty pick, which clears the list — is saved
+    as invite_allowed_role_ids through _save_patch_and_rerender. The
+    panel is staff-gated, not owner-locked, so the framework owner
+    check stays open (author_id=0) and the staff gate inside the
+    save path remains the only gate, as before.
+    """
+
     def __init__(self, current_page: str):
         super().__init__(
+            author_id=0,
+            on_pick=_ignore_role_pick,
             placeholder="Invite-allowed roles",
             min_values=0,
             max_values=10,
-            custom_id=f"spamguard:{current_page}:invite_roles",
             row=2,
         )
+        self.custom_id = f"spamguard:{current_page}:invite_roles"
         self.current_page = current_page
 
     async def callback(self, interaction: discord.Interaction) -> None:
@@ -3369,15 +3469,23 @@ class SpamInviteAllowedRolesSelect(discord.ui.RoleSelect):
         )
 
 
-class SpamExemptRolesSelect(discord.ui.RoleSelect):
+class SpamExemptRolesSelect(DankRoleSelect):
+    """House role picker for fully exempt roles (multi-pick, clearable).
+
+    Same contract as SpamInviteAllowedRolesSelect, saving
+    exempt_role_ids.
+    """
+
     def __init__(self, current_page: str):
         super().__init__(
+            author_id=0,
+            on_pick=_ignore_role_pick,
             placeholder="Fully exempt roles",
             min_values=0,
             max_values=10,
-            custom_id=f"spamguard:{current_page}:exempt_roles",
             row=3,
         )
+        self.custom_id = f"spamguard:{current_page}:exempt_roles"
         self.current_page = current_page
 
     async def callback(self, interaction: discord.Interaction) -> None:
@@ -3610,7 +3718,7 @@ class SpamGuardPanelView(discord.ui.View):
 
         view.add_item(ToggleEnabledButton(page, bool(settings["enabled"])))
         view.add_item(RefreshPanelButton(page))
-        view.add_item(SpamSectionSelect(page))
+        view.add_item(SpamSectionOpenButton(page))
 
         if page == "access":
             view.add_item(SpamInviteAllowedRolesSelect(page))
@@ -3618,7 +3726,7 @@ class SpamGuardPanelView(discord.ui.View):
             view.add_item(ActionsModalButton(page))
             view.add_item(ListsModalButton(page))
         else:
-            view.add_item(SpamModeSelect(page, _normalize_mode(settings.get("mode"), "timeout")))
+            view.add_item(SpamModeOpenButton(page, _normalize_mode(settings.get("mode"), "timeout")))
             view.add_item(ThresholdsModalButton(page))
             view.add_item(ActionsModalButton(page))
             view.add_item(ListsModalButton(page))
