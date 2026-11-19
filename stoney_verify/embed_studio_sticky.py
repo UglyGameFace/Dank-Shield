@@ -6,10 +6,10 @@ deleted, a fresh copy with the post's current look is sent, and the tracked
 record follows the new message. Editing the post edits the current copy in
 place, so the next move carries the edit along.
 
-One sticky per channel, shared with Community Tools Sticky Messages: if a
-channel already has an enabled Community Tools sticky, or another Post
-Builder post is already sticky there, making a post sticky is refused in
-plain words. The two systems never move posts in the same channel.
+One sticky per channel: if another Post Builder post is already sticky
+in the channel, making a post sticky is refused in plain words. Post
+Builder's own rule is the only gate — the old Community Tools
+sticky system is gone.
 
 State lives on the Studio published record itself (a small ``sticky``
 dict), saved through the existing library save path — no new tables.
@@ -26,14 +26,6 @@ from typing import Any, Optional
 
 import discord
 
-from .community_tools_service import (
-    DEFAULT_INTERVAL_SECONDS,
-    DEFAULT_MESSAGE_THRESHOLD,
-    CommunityStorageUnavailable,
-    StickyConfig,
-    get_sticky,
-)
-from .community_tools_runtime import should_refresh_sticky
 from .embed_studio_core import StudioValidationError, render_embeds, validate_project
 from .startup_guards.discord_api_safety import fetch_message_with_api_safety
 
@@ -41,8 +33,11 @@ _RUNTIME_ATTR = "_dank_studio_sticky_runtime"
 _MENTIONS = discord.AllowedMentions.none()
 STARTUP_RECONCILE_CONCURRENCY = 10
 
-STICKY_INTERVAL_SECONDS = int(DEFAULT_INTERVAL_SECONDS)
-STICKY_MESSAGE_THRESHOLD = int(DEFAULT_MESSAGE_THRESHOLD)
+# The sticky pace, owned here since the Community Tools sticky engine
+# was removed: move at most once per interval, or once this many human
+# messages have gone past, whichever the throttle decides first.
+STICKY_INTERVAL_SECONDS = 15
+STICKY_MESSAGE_THRESHOLD = 5
 
 
 def _log(message: str) -> None:
@@ -104,15 +99,24 @@ def channel_sticky_key(
     return None
 
 
-def _throttle_config(entry: "StudioStickyEntry") -> StickyConfig:
-    return StickyConfig(
-        guild_id=int(entry.guild_id),
-        channel_id=int(entry.channel_id),
-        enabled=True,
-        interval_seconds=STICKY_INTERVAL_SECONDS,
-        message_threshold=STICKY_MESSAGE_THRESHOLD,
-        last_sent_at=entry.last_sent_at,
-    )
+def _should_refresh(
+    entry: "StudioStickyEntry", *, message_count: int, now: Optional[datetime] = None,
+) -> bool:
+    """Return whether this human-message event should move the sticky.
+
+    Same decision the old shared engine made: move once enough messages
+    have gone past, or once the minimum interval has elapsed since the
+    last move (a post that has never moved moves on the first message).
+    """
+    if int(message_count) >= STICKY_MESSAGE_THRESHOLD:
+        return True
+    if entry.last_sent_at is None:
+        return True
+    current = now or datetime.now(timezone.utc)
+    sent_at = entry.last_sent_at
+    if sent_at.tzinfo is None:
+        sent_at = sent_at.replace(tzinfo=timezone.utc)
+    return (current - sent_at.astimezone(timezone.utc)).total_seconds() >= STICKY_INTERVAL_SECONDS
 
 
 @dataclass
@@ -196,18 +200,6 @@ async def set_post_sticky(
             f"already sticky in <#{channel_id}>. A channel can only have one "
             "sticky. Turn sticky off for that post first, then make this one sticky."
         )
-    try:
-        community = await get_sticky(channel_id)
-    except CommunityStorageUnavailable:
-        return False, "Sticky settings could not be checked right now. Nothing was changed."
-    if community is not None and community.enabled:
-        return False, (
-            f"<#{channel_id}> already has a Sticky Message turned on in "
-            "Community Tools. A channel can only have one sticky. Turn that "
-            "one off first (Community Tools → Sticky Messages), then make "
-            "this post sticky."
-        )
-
     now = datetime.now(timezone.utc)
     item["sticky"] = {"enabled": True, "last_sent_at": _format_ts(now)}
     try:
@@ -256,9 +248,8 @@ def _message_view(item: dict[str, Any], project: dict[str, Any]) -> Optional[dis
 class StudioStickyRuntime:
     """Moves sticky Post Builder posts to the bottom of their channel.
 
-    Mirrors the Community Tools sticky engine: an in-memory channel index
-    (zero database reads on the message hot path), the same throttle
-    decision (``should_refresh_sticky``), per-channel locks, send the new
+    An in-memory channel index (zero database reads on the message hot
+    path), the throttle decision above, per-channel locks, send the new
     copy first, and roll the new copy back if the tracking save fails.
     """
 
@@ -308,7 +299,7 @@ class StudioStickyRuntime:
         # Messages. Counts and the minimum interval keep movement calm.
         count = int(self._counts.get(channel_id, 0)) + 1
         self._counts[channel_id] = count
-        if not should_refresh_sticky(_throttle_config(entry), message_count=count):
+        if not _should_refresh(entry, message_count=count):
             return
         self._counts[channel_id] = 0
         if channel_id in self._pending:
@@ -374,20 +365,10 @@ class StudioStickyRuntime:
             if str(item.get("live_nonce") or ""):
                 # Live Text owns one fixed message; never move it.
                 return None
-            if not force and not should_refresh_sticky(
-                _throttle_config(entry),
-                message_count=max(1, self._counts.get(channel_id, 0)),
+            if not force and not _should_refresh(
+                entry, message_count=max(1, self._counts.get(channel_id, 0)),
             ):
                 return None
-            try:
-                community = await get_sticky(channel_id)
-            except CommunityStorageUnavailable:
-                return None
-            if community is not None and community.enabled:
-                # A Community Tools sticky owns this channel now; never fight.
-                _log(f"channel={channel_id} has a Community Tools sticky; studio sticky stands down")
-                return None
-
             old_message_id = int(item.get("message_id") or 0)
             if old_message_id <= 0:
                 await self._clear_sticky_record(int(entry.guild_id), entry.post_key)
@@ -737,9 +718,7 @@ async def open_sticky_menu(interaction: discord.Interaction, session: StudioSess
         description=(
             "Make one tracked post per channel sticky. A sticky post is "
             "re-posted at the bottom of its channel as people chat, so it "
-            "does not get buried. If a channel already has a Sticky Message "
-            "from Community Tools, that one wins — a channel can only have "
-            "one sticky."
+            "does not get buried. A channel can only have one sticky."
         ),
         view=StudioStickyMenuView(session, lib),
     )

@@ -468,11 +468,6 @@ def test_sticky_repost_carries_poll_votes(monkeypatch):
     monkeypatch.setattr(sticky, "_load_library", harness.load)
     monkeypatch.setattr(sticky, "_save_library", harness.save)
 
-    async def no_community_sticky(channel_id):
-        return None
-
-    monkeypatch.setattr(sticky, "get_sticky", no_community_sticky)
-
     deleted = []
 
     async def delete():

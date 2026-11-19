@@ -280,10 +280,8 @@ FEATURES: tuple[NavigationFeature, ...] = (
         "Community Tools",
         "🧰",
         "community",
-        "Create polls or pinned messages, check permissions, and use handy server tools.",
+        "Create a quick native poll, set a quiet-server notice, check permissions, and use handy server tools.",
         (
-            "sticky",
-            "stickies",
             "poll",
             "server tools",
             "permission check",
@@ -548,8 +546,7 @@ RECENT_UPDATES: tuple[RecentFeatureUpdate, ...] = (
     # Same day: every studio picker moved to the house picker framework
     # (Felix's standing rule) — picker coverage is noted in the "help"
     # entry below, which tracks the whole migration.
-    # Same day: Post Builder posts can be made sticky (one per channel,
-    # shared with Community Tools Sticky Messages).
+    # Same day: Post Builder posts can be made sticky (one per channel).
     # Same day: polls moved into Post Builder — create, vote, pause, and
     # end them under Edit Posted → Polls; sticky polls keep their votes
     # when they move.

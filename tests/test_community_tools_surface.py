@@ -8,11 +8,7 @@ from stoney_verify.commands_ext.public_command_surface_v2 import FeatureCategory
 from stoney_verify.commands_ext.public_community_tools import (
     CommunityToolsView,
     FunLookupView,
-    StickyCenterView,
-    StickySettingsView,
-    StickyTypeView,
 )
-from stoney_verify.community_tools_service import StickyConfig
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -38,7 +34,7 @@ def test_community_navigation_exposes_tools_without_new_slash_child() -> None:
 def test_community_center_keeps_core_tools_without_command_sprawl() -> None:
     labels = _labels(CommunityToolsView(1))
     assert {
-        "Sticky Messages",
+        "Quiet Server Notice",
         "Create Poll",
         "Embed Studio",
         "Member / Server Info",
@@ -47,32 +43,6 @@ def test_community_center_keeps_core_tools_without_command_sprawl() -> None:
         "Dank Shield Home",
         "Close",
     } <= labels
-
-
-def test_sticky_center_is_compact_and_routes_advanced_management() -> None:
-    labels = _labels(StickyCenterView(1, config=None, poll=None))
-    assert {
-        "Create / Edit",
-        "Preview / Test",
-        "Sticky Settings",
-        "Sticky Poll",
-        "Quiet Server Notice",
-        "Server Stickies",
-        "Community Tools",
-    } <= labels
-    assert {"Pause / Resume", "Remove", "Speed / Cadence", "Custom Sender"}.isdisjoint(labels)
-
-    config = StickyConfig(guild_id=1, channel_id=2, content="hello")
-    settings = _labels(StickySettingsView(1, config, None))
-    assert {"Pause / Resume", "Remove", "Speed / Cadence", "Custom Sender", "Back to Sticky"} <= settings
-
-
-def test_sticky_editor_is_guided_instead_of_free_text_mode_selection() -> None:
-    labels = _labels(StickyTypeView(1, None, None))
-    assert {"Message Sticky", "Embed Sticky", "Back"} <= labels
-    ui = (ROOT / "stoney_verify/commands_ext/public_community_tools.py").read_text(encoding="utf-8")
-    assert 'label="Mode: plain or embed"' not in ui
-    assert 'label="Hex color"' in ui
 
 
 def test_fun_lookup_surface_contains_real_features_only() -> None:
@@ -97,17 +67,6 @@ def test_runtime_has_one_canonical_message_listener_registration_and_no_monkey_p
     assert "@bot.event" not in runtime
     assert "bot.on_message =" not in runtime
     assert "webhook_url" not in runtime
-
-
-def test_custom_sender_uses_managed_webhook_and_fails_closed() -> None:
-    runtime = (ROOT / "stoney_verify/community_tools_runtime.py").read_text(encoding="utf-8")
-    ui = (ROOT / "stoney_verify/commands_ext/public_community_tools.py").read_text(encoding="utf-8")
-    assert 'MANAGED_WEBHOOK_NAME = "Dank Shield Sticky"' in runtime
-    assert ".create_webhook(" in runtime
-    assert "No webhook URL/token is stored" in ui
-    assert "Manage Webhooks + Manage Messages" in runtime
-    assert "perms.manage_webhooks and perms.manage_messages" in runtime
-    assert "webhook_url" not in ui
 
 
 def test_migrations_are_service_role_only_and_atomic_bundle_exists() -> None:

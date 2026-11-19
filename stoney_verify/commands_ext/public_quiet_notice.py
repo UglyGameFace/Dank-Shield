@@ -309,12 +309,12 @@ class QuietNoticeCenterView(_OwnedView):
             view=QuietNoticeRemoveView(self.owner_id, self.config),
         )
 
-    @discord.ui.button(label="Back to Stickies", emoji="↩️", style=discord.ButtonStyle.secondary, row=1)
+    @discord.ui.button(label="Back to Community Tools", emoji="↩️", style=discord.ButtonStyle.secondary, row=1)
     async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
-        from .public_community_tools import _open_sticky_center
+        from .public_community_tools import open_community_tools
 
-        await _open_sticky_center(interaction, replace_message=False)
+        await open_community_tools(interaction, replace_message=False)
 
 
 class QuietNoticePreviewView(_OwnedView):
@@ -389,7 +389,7 @@ class QuietNoticeRemoveView(_OwnedView):
             await runtime.delete_quiet_live_message(current)
         await _private(
             interaction,
-            "✅ Quiet notice removed. Normal stickies were left alone.",
+            "✅ Quiet notice removed.",
             embed=quiet_status_embed(None),
             view=QuietNoticeCenterView(self.owner_id, None),
         )

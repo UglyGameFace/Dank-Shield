@@ -1,8 +1,8 @@
 """Post Builder sticky posts (Embed Studio).
 
 A tracked post can be made sticky: human chat in its channel re-posts it
-at the bottom, throttled like Community Tools Sticky Messages, one sticky
-per channel across both systems. These tests drive the real toggle
+at the bottom, throttled at the normal sticky pace, one sticky per
+channel (Post Builder's own rule is the only gate). These tests drive the real toggle
 (``set_post_sticky``), the real runtime (``StudioStickyRuntime``), and the
 real publish callback for the edit/deleted-post paths.
 """
@@ -18,7 +18,6 @@ import discord
 from stoney_verify import embed_studio_sticky as sticky
 from stoney_verify import embed_studio_ui as ui
 from stoney_verify.commands_ext import public_embed_group
-from stoney_verify.community_tools_service import StickyConfig
 from stoney_verify.embed_studio_core import library_payload, new_project, parse_library
 from stoney_verify.embed_studio_sticky import (
     StudioStickyChoiceView,
@@ -86,13 +85,6 @@ def _patch_library(monkeypatch, harness, *, module=sticky):
     monkeypatch.setattr(module, "_save_library", harness.save)
 
 
-def _patch_no_community_sticky(monkeypatch):
-    async def none_sticky(channel_id):
-        return None
-
-    monkeypatch.setattr(sticky, "get_sticky", none_sticky)
-
-
 def _fake_bot():
     listeners = []
     bot = SimpleNamespace(
@@ -134,7 +126,6 @@ def test_channel_sticky_key_finds_other_post_only():
 def test_make_sticky_persists_on_published_record(monkeypatch):
     harness = LibraryHarness({POST_KEY: _record()})
     _patch_library(monkeypatch, harness)
-    _patch_no_community_sticky(monkeypatch)
     bot = _fake_bot()
     runtime = sticky.ensure_studio_sticky_runtime(bot)
 
@@ -149,45 +140,12 @@ def test_make_sticky_persists_on_published_record(monkeypatch):
     assert entry is not None and entry.post_key == POST_KEY
 
 
-def test_make_sticky_refuses_enabled_community_tools_sticky(monkeypatch):
-    harness = LibraryHarness({POST_KEY: _record()})
-    _patch_library(monkeypatch, harness)
-
-    async def community_sticky(channel_id):
-        return StickyConfig(guild_id=GUILD_ID, channel_id=CHANNEL_ID, enabled=True, content="Rules")
-
-    monkeypatch.setattr(sticky, "get_sticky", community_sticky)
-
-    ok, message = asyncio.run(set_post_sticky(GUILD_ID, POST_KEY, enabled=True))
-
-    assert ok is False
-    assert "Community Tools" in message
-    assert "only have one sticky" in message
-    assert harness.saves == []
-    assert post_is_sticky(harness.published[POST_KEY]) is False
-
-
-def test_make_sticky_allowed_when_community_sticky_is_paused(monkeypatch):
-    harness = LibraryHarness({POST_KEY: _record()})
-    _patch_library(monkeypatch, harness)
-
-    async def paused_sticky(channel_id):
-        return StickyConfig(guild_id=GUILD_ID, channel_id=CHANNEL_ID, enabled=False, content="Rules")
-
-    monkeypatch.setattr(sticky, "get_sticky", paused_sticky)
-
-    ok, _message = asyncio.run(set_post_sticky(GUILD_ID, POST_KEY, enabled=True))
-    assert ok is True
-    assert post_is_sticky(harness.published[POST_KEY]) is True
-
-
 def test_make_sticky_refuses_second_studio_post_in_channel(monkeypatch):
     harness = LibraryHarness({
         POST_KEY: _record(sticky=_sticky_on()),
         OTHER_POST_KEY: _record(OTHER_MESSAGE_ID),
     })
     _patch_library(monkeypatch, harness)
-    _patch_no_community_sticky(monkeypatch)
 
     ok, message = asyncio.run(set_post_sticky(GUILD_ID, OTHER_POST_KEY, enabled=True))
 
@@ -200,7 +158,6 @@ def test_make_sticky_refuses_second_studio_post_in_channel(monkeypatch):
 def test_make_sticky_refuses_live_text_post(monkeypatch):
     harness = LibraryHarness({POST_KEY: _record(live_nonce="abc123", live_source={})})
     _patch_library(monkeypatch, harness)
-    _patch_no_community_sticky(monkeypatch)
 
     ok, message = asyncio.run(set_post_sticky(GUILD_ID, POST_KEY, enabled=True))
 
@@ -212,7 +169,6 @@ def test_make_sticky_refuses_live_text_post(monkeypatch):
 def test_remove_sticky_persists_and_unregisters(monkeypatch):
     harness = LibraryHarness({POST_KEY: _record(sticky=_sticky_on())})
     _patch_library(monkeypatch, harness)
-    _patch_no_community_sticky(monkeypatch)
     bot = _fake_bot()
     runtime = sticky.ensure_studio_sticky_runtime(bot)
     runtime.set_sticky(StudioStickyEntry(GUILD_ID, CHANNEL_ID, POST_KEY))
@@ -262,7 +218,6 @@ class RuntimeHarness:
     def __init__(self, monkeypatch, *, record=None, fetch_impl=None):
         self.harness = LibraryHarness({POST_KEY: record or _record(sticky=_sticky_on())})
         _patch_library(monkeypatch, self.harness)
-        _patch_no_community_sticky(monkeypatch)
         self.deleted = []
         self.live_message = _bot_message(MESSAGE_ID, deleted=self.deleted)
 
@@ -397,20 +352,6 @@ def test_refresh_deleted_sticky_copy_stops_without_resurrecting(monkeypatch):
     # Sticky turned itself off and the runtime dropped the channel.
     assert post_is_sticky(rig.harness.published[POST_KEY]) is False
     assert rig.runtime.entry_for(CHANNEL_ID) is None
-
-
-def test_refresh_stands_down_when_community_sticky_owns_channel(monkeypatch):
-    rig = RuntimeHarness(monkeypatch)
-
-    async def community_sticky(channel_id):
-        return StickyConfig(guild_id=GUILD_ID, channel_id=CHANNEL_ID, enabled=True, content="Rules")
-
-    monkeypatch.setattr(sticky, "get_sticky", community_sticky)
-    result = asyncio.run(rig.runtime.refresh_channel(rig.channel, entry=rig.entry, force=True))
-
-    assert result is None
-    assert rig.channel.sent == []
-    assert rig.deleted == []
 
 
 def test_remove_sticky_then_chat_does_not_move_post(monkeypatch):

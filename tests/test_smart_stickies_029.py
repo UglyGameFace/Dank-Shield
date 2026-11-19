@@ -7,20 +7,14 @@ from types import SimpleNamespace
 import discord
 import pytest
 
-from stoney_verify.commands_ext.public_community_tools import StickyCenterView, StickySettingsView
 from stoney_verify.commands_ext.public_quiet_notice import (
     QuietNoticeCenterView,
     human_duration,
     parse_inactivity_duration,
 )
-from stoney_verify.commands_ext.public_sticky_preview import (
-    StickyDraftPreviewView,
-    StickyPreviewTestView,
-    _merge_draft_with_live_state,
-)
 from stoney_verify.community_quiet_notice_service import QuietNoticeConfig, normalize_quiet_notice
 from stoney_verify.community_tools_runtime import StickyRuntime, quiet_notice_embed, quiet_notice_view, should_send_quiet_notice
-from stoney_verify.community_tools_service import InvalidCommunityToolValue, StickyConfig, StickyPoll
+from stoney_verify.community_tools_service import InvalidCommunityToolValue
 
 
 def _labels(view: discord.ui.View) -> set[str]:
@@ -112,7 +106,6 @@ def test_runtime_observes_human_activity_anywhere_in_configured_guild() -> None:
         )
         await runtime.on_message(message)
         assert runtime._guild_last_activity[1001] == observed
-        assert 9999 not in runtime._configs
 
     asyncio.run(scenario())
 
@@ -130,7 +123,7 @@ def test_quiet_notice_preview_has_optional_partner_link_and_clear_truth() -> Non
 
 def test_quiet_notice_center_guides_setup_preview_destination_pause_remove_and_back() -> None:
     labels = _labels(QuietNoticeCenterView(1, _quiet()))
-    assert {"Setup / Edit", "Preview / Test", "Pause / Resume", "Use This Channel", "Remove", "Back to Stickies"} <= labels
+    assert {"Setup / Edit", "Preview / Test", "Pause / Resume", "Use This Channel", "Remove", "Back to Community Tools"} <= labels
 
     empty = QuietNoticeCenterView(1, None)
     disabled = {
@@ -139,95 +132,3 @@ def test_quiet_notice_center_guides_setup_preview_destination_pause_remove_and_b
         if bool(getattr(item, "disabled", False))
     }
     assert {"Preview / Test", "Pause / Resume", "Use This Channel", "Remove"} <= disabled
-
-
-def test_normal_sticky_preview_exposes_non_persistent_30_second_test() -> None:
-    sticky = StickyConfig(guild_id=1001, channel_id=2001, content="Hello", mode="plain")
-    labels = _labels(StickyPreviewTestView(1, sticky, None))
-    assert "Post 30s Test" in labels
-
-
-def test_sticky_draft_requires_explicit_publish_after_preview() -> None:
-    sticky = StickyConfig(guild_id=1001, channel_id=2001, content="Hello", mode="plain")
-    labels = _labels(StickyDraftPreviewView(1, sticky))
-    assert {"Publish Sticky", "Post 30s Test", "Discard Draft"} <= labels
-
-
-def test_draft_publish_preserves_operational_state_but_keeps_draft_design() -> None:
-    sent_at = datetime(2026, 8, 12, 15, 0, tzinfo=timezone.utc)
-    current = StickyConfig(
-        guild_id=1001,
-        channel_id=2001,
-        enabled=False,
-        content="old",
-        mode="plain",
-        color=0x123456,
-        interval_seconds=90,
-        message_threshold=12,
-        use_webhook=True,
-        sender_name="Community Host",
-        sender_avatar_url="https://example.com/avatar.png",
-        last_message_id=9999,
-        last_sent_at=sent_at,
-    )
-    draft = StickyConfig(
-        guild_id=1001,
-        channel_id=2001,
-        enabled=True,
-        content="new copy",
-        mode="embed",
-        title="New title",
-        color=0xABCDEF,
-        interval_seconds=15,
-        message_threshold=5,
-        last_message_id=1111,
-    )
-    merged = _merge_draft_with_live_state(draft, current)
-    assert merged.content == "new copy"
-    assert merged.mode == "embed"
-    assert merged.title == "New title"
-    assert merged.color == 0xABCDEF
-    assert merged.enabled is False
-    assert merged.interval_seconds == 90
-    assert merged.message_threshold == 12
-    assert merged.use_webhook is True
-    assert merged.sender_name == "Community Host"
-    assert merged.last_message_id == 9999
-    assert merged.last_sent_at == sent_at
-
-    fresh = _merge_draft_with_live_state(draft, None)
-    assert fresh.last_message_id is None
-    assert fresh.last_sent_at is None
-    assert fresh.color == 0xABCDEF
-
-
-def test_main_sticky_center_stays_focused_and_advanced_actions_live_in_settings() -> None:
-    sticky = StickyConfig(guild_id=1001, channel_id=2001, content="Hello", mode="plain")
-    main_labels = _labels(StickyCenterView(1, config=sticky, poll=None))
-    assert {
-        "Create / Edit",
-        "Preview / Test",
-        "Sticky Settings",
-        "Sticky Poll",
-        "Quiet Server Notice",
-        "Server Stickies",
-        "Community Tools",
-    } <= main_labels
-    assert {"Pause / Resume", "Speed / Cadence", "Custom Sender", "Remove"}.isdisjoint(main_labels)
-
-    settings_labels = _labels(StickySettingsView(1, sticky, None))
-    assert {"Pause / Resume", "Speed / Cadence", "Custom Sender", "Remove", "Back to Sticky"} <= settings_labels
-
-
-def test_existing_sticky_poll_changes_main_action_to_poll_controls() -> None:
-    sticky = StickyConfig(guild_id=1001, channel_id=2001, content="Pick one", mode="poll")
-    poll = StickyPoll(
-        guild_id=1001,
-        channel_id=2001,
-        question="Pick one",
-        options=("A", "B"),
-        votes={},
-    )
-    labels = _labels(StickyCenterView(1, config=sticky, poll=poll))
-    assert "Poll Controls" in labels
-    assert "Sticky Poll" not in labels

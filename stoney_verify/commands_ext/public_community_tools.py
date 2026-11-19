@@ -5,7 +5,6 @@ from __future__ import annotations
 import hashlib
 import random
 import re
-from dataclasses import replace
 from datetime import timedelta
 from typing import Any, Optional, Sequence
 
@@ -23,33 +22,11 @@ from stoney_verify.community_lookup_service import (
     weather_lookup,
     wikipedia_lookup,
 )
-from stoney_verify.community_tools_runtime import ensure_community_tools_runtime, sticky_poll_embed
-from stoney_verify.community_tools_service import (
-    MAX_INTERVAL_SECONDS,
-    MAX_MESSAGE_THRESHOLD,
-    MIN_INTERVAL_SECONDS,
-    MIN_MESSAGE_THRESHOLD,
-    CommunityStorageUnavailable,
-    InvalidCommunityToolValue,
-    StickyConfig,
-    StickyPoll,
-    delete_sticky,
-    get_sticky,
-    get_sticky_poll,
-    list_stickies,
-    normalize_https_url,
-    normalize_poll,
-    reset_sticky_poll,
-    save_sticky,
-    save_sticky_bundle,
-    set_sticky_enabled,
-    set_sticky_poll_state,
-)
+from stoney_verify.community_tools_runtime import ensure_community_tools_runtime
+from stoney_verify.community_tools_service import InvalidCommunityToolValue
 from .public_quiet_notice import open_quiet_notice_center
-from .public_sticky_preview import _draft_is_stale, show_sticky_draft_preview, show_sticky_preview
 
 _ALLOWED_MENTIONS = discord.AllowedMentions.none()
-_SERVER_STICKIES_PAGE_SIZE = 15
 _DICE_PATTERN = re.compile(r"^(?P<count>\d{1,2})?d(?P<sides>\d{1,4})(?P<modifier>[+-]\d{1,5})?$", re.IGNORECASE)
 
 
@@ -64,26 +41,6 @@ def _member_permissions(interaction: discord.Interaction) -> Optional[discord.Pe
     if channel is None or not isinstance(member, discord.Member):
         return None
     return channel.permissions_for(member)
-
-
-def _manage_messages(interaction: discord.Interaction) -> bool:
-    member = interaction.user
-    perms = _member_permissions(interaction)
-    return bool(
-        isinstance(member, discord.Member)
-        and perms is not None
-        and (member.guild_permissions.administrator or perms.manage_messages)
-    )
-
-
-def _manage_webhooks(interaction: discord.Interaction) -> bool:
-    member = interaction.user
-    perms = _member_permissions(interaction)
-    return bool(
-        isinstance(member, discord.Member)
-        and perms is not None
-        and (member.guild_permissions.administrator or perms.manage_webhooks)
-    )
 
 
 def _can_send_messages(interaction: discord.Interaction) -> bool:
@@ -177,8 +134,8 @@ def _center_embed() -> discord.Embed:
     embed.add_field(
         name="✏️ Make a post",
         value=(
-            "**Sticky Messages:** Keep a message visible in a channel.\n"
             "**Create Poll:** Let members vote.\n"
+            "**Quiet Server Notice:** Post a notice when the server goes quiet.\n"
             "**Embed Studio:** Build a custom announcement with images and buttons."
         ),
         inline=False,
@@ -201,131 +158,11 @@ def _center_embed() -> discord.Embed:
     return embed
 
 
-def _sticky_status_embed(config: Optional[StickyConfig], poll: Optional[StickyPoll] = None) -> discord.Embed:
-    if config is None:
-        embed = discord.Embed(
-            title="📌 Sticky Messages",
-            description="No channel sticky is configured here yet.",
-            color=discord.Color.blurple(),
-        )
-        embed.add_field(
-            name="Quick setup",
-            value=(
-                "**1. Create / Edit** and choose Message or Embed.\n"
-                "**2. Review the private draft** and optionally post a temporary test.\n"
-                "**3. Publish** only when it looks right. Use **Sticky Poll** for a persistent vote card."
-            ),
-            inline=False,
-        )
-        embed.add_field(
-            name="Quiet-time message instead?",
-            value=(
-                "Use **Quiet Server Notice** for one post after no human messages are observed in channels Dank Shield can see. "
-                "It is independent from normal channel stickies."
-            ),
-            inline=False,
-        )
-        embed.set_footer(text="Default movement: after 15 seconds or 5 new human messages")
-        return embed
-
-    state = "▶️ Active" if config.enabled else "⏸️ Paused"
-    mode = {"plain": "Message", "embed": "Rich embed", "poll": "Sticky poll"}.get(config.mode, config.mode)
-    embed = discord.Embed(
-        title="📌 Sticky Messages",
-        description=f"{state} • **{mode}** • <#{config.channel_id}>",
-        color=discord.Color.green() if config.enabled else discord.Color.orange(),
-    )
-    embed.add_field(
-        name="Movement",
-        value=(
-            f"When a human message arrives, move if **{config.interval_seconds}s** have elapsed since the last sticky, "
-            f"or after **{config.message_threshold}** new human messages."
-        ),
-        inline=False,
-    )
-    if config.mode == "plain":
-        embed.add_field(name="Message", value=(config.content or "(empty)")[:1000], inline=False)
-    elif config.mode == "embed":
-        preview = config.title or config.content or config.image_url or "(empty embed)"
-        embed.add_field(name="Embed", value=preview[:1000], inline=False)
-        embed.add_field(name="Color", value=f"`#{int(config.color):06X}`", inline=True)
-    elif poll is not None:
-        embed.add_field(
-            name="Poll",
-            value=f"{poll.question[:700]}\n**{poll.total_votes}** votes • **{poll.state}**",
-            inline=False,
-        )
-    embed.add_field(
-        name="Custom sender",
-        value=(f"✅ {config.sender_name or 'Dank Shield'}" if config.use_webhook else "Off • normal Dank Shield message"),
-        inline=True,
-    )
-    embed.add_field(name="Repeated pings", value="Suppressed", inline=True)
-    embed.set_footer(text="Preview stays private until you post a test or publish the draft")
-    return embed
-
-
-def _sticky_settings_embed(config: StickyConfig) -> discord.Embed:
-    state = "Active" if config.enabled else "Paused"
-    embed = discord.Embed(
-        title="⚙️ Sticky Settings",
-        description=f"Settings for <#{config.channel_id}> • **{state}** • **{config.mode}**",
-        color=discord.Color.blurple(),
-    )
-    embed.add_field(
-        name="Movement",
-        value=(
-            f"On human activity: eligible after **{config.interval_seconds}s**, or immediately after "
-            f"**{config.message_threshold}** new human messages."
-        ),
-        inline=False,
-    )
-    embed.add_field(
-        name="Sender",
-        value=(f"Custom sender: **{config.sender_name or 'Dank Shield'}**" if config.use_webhook else "Normal Dank Shield message"),
-        inline=False,
-    )
-    if config.mode == "poll":
-        embed.add_field(
-            name="Sticky polls",
-            value="Custom Sender is unavailable because the bot must own persistent vote buttons.",
-            inline=False,
-        )
-    embed.set_footer(text="Pause stops movement without deleting the current sticky • Remove deletes the sticky")
-    return embed
-
-
-async def _current_sticky(interaction: discord.Interaction) -> tuple[Optional[StickyConfig], Optional[StickyPoll]]:
-    channel = _text_channel(interaction)
-    if channel is None:
-        return None, None
-    config = await get_sticky(int(channel.id))
-    poll = await get_sticky_poll(int(channel.id)) if config and config.mode == "poll" else None
-    return config, poll
-
-
-async def _open_sticky_center(interaction: discord.Interaction, *, replace_message: bool = True) -> None:
-    if not _manage_messages(interaction):
-        return await _private(interaction, "❌ Sticky management requires **Manage Messages in this channel**.")
-    if _text_channel(interaction) is None:
-        return await _private(interaction, "❌ Configure stickies inside a normal text channel.")
-    try:
-        config, poll = await _current_sticky(interaction)
-    except CommunityStorageUnavailable:
-        return await _private(interaction, "❌ Community Tools storage is unavailable. Apply the Community Tools migrations first.")
-    embed = _sticky_status_embed(config, poll)
-    view = StickyCenterView(int(interaction.user.id), config=config, poll=poll)
-    if replace_message and not interaction.response.is_done():
-        await _replace(interaction, embed=embed, view=view)
-    else:
-        await _private(interaction, embed=embed, view=view)
-
-
 class CommunityToolsView(_OwnedView):
-    @discord.ui.button(label="Sticky Messages", emoji="📌", style=discord.ButtonStyle.primary, row=0)
-    async def sticky(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+    @discord.ui.button(label="Quiet Server Notice", emoji="🌙", style=discord.ButtonStyle.primary, row=0)
+    async def quiet_notice(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
-        await _open_sticky_center(interaction)
+        await open_quiet_notice_center(interaction)
 
     @discord.ui.button(label="Create Poll", emoji="📊", style=discord.ButtonStyle.primary, row=0)
     async def poll(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -384,626 +221,6 @@ class CommunityToolsView(_OwnedView):
     async def close(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await _replace(interaction, content="Community Tools closed.", embed=None, view=None)
-
-
-class StickyCenterView(_OwnedView):
-    def __init__(self, owner_id: int, *, config: Optional[StickyConfig], poll: Optional[StickyPoll]) -> None:
-        super().__init__(owner_id)
-        self.config = config
-        self.poll = poll
-        for item in self.children:
-            label = str(getattr(item, "label", "") or "")
-            if config is None and label in {"Preview / Test", "Sticky Settings"}:
-                item.disabled = True
-            if label == "Sticky Poll" and config is not None and config.mode == "poll" and poll is not None:
-                item.label = "Poll Controls"
-                item.emoji = "🗳️"
-
-    @discord.ui.button(label="Create / Edit", emoji="✏️", style=discord.ButtonStyle.primary, row=0)
-    async def edit(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        _ = button
-        embed = discord.Embed(
-            title="✏️ Choose Sticky Type",
-            description="Choose a normal message or rich embed. Nothing live changes until you preview and publish the draft.",
-            color=discord.Color.blurple(),
-        )
-        if self.config is not None and self.config.mode == "poll":
-            embed.add_field(
-                name="Current sticky is a poll",
-                value="Publishing a Message/Embed draft will atomically replace the poll and remove its saved vote state.",
-                inline=False,
-            )
-        await _replace(interaction, embed=embed, view=StickyTypeView(self.owner_id, self.config, self.poll))
-
-    @discord.ui.button(label="Preview / Test", emoji="👁️", style=discord.ButtonStyle.secondary, row=0)
-    async def preview(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        _ = button
-        await show_sticky_preview(interaction, self.config, self.poll)
-
-    @discord.ui.button(label="Sticky Settings", emoji="⚙️", style=discord.ButtonStyle.secondary, row=0)
-    async def settings(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        _ = button
-        if self.config is None:
-            return await _private(interaction, "❌ Create a sticky first.")
-        await _replace(
-            interaction,
-            embed=_sticky_settings_embed(self.config),
-            view=StickySettingsView(self.owner_id, self.config, self.poll),
-        )
-
-    @discord.ui.button(label="Sticky Poll", emoji="📊", style=discord.ButtonStyle.success, row=1)
-    async def sticky_poll(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        _ = button
-        if self.config is not None and self.config.mode == "poll" and self.poll is not None:
-            return await _replace(
-                interaction,
-                embed=sticky_poll_embed(self.poll),
-                view=StickyPollControlView(self.owner_id, self.config, self.poll),
-            )
-        await interaction.response.send_modal(StickyPollModal(self.config, self.poll))
-
-    @discord.ui.button(label="Quiet Server Notice", emoji="🌙", style=discord.ButtonStyle.success, row=1)
-    async def quiet_notice(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        _ = button
-        await open_quiet_notice_center(interaction)
-
-    @discord.ui.button(label="Server Stickies", emoji="📋", style=discord.ButtonStyle.secondary, row=1)
-    async def list_server(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        _ = button
-        if interaction.guild is None:
-            return await _private(interaction, "❌ Use this in a server.")
-        try:
-            rows = await list_stickies(guild_id=int(interaction.guild.id))
-        except CommunityStorageUnavailable:
-            return await _private(interaction, "❌ Sticky storage is unavailable.")
-        await _private(
-            interaction,
-            embed=_server_stickies_embed(rows, 0),
-            view=ServerStickiesView(self.owner_id, rows, page=0),
-        )
-
-    @discord.ui.button(label="Community Tools", emoji="🧰", style=discord.ButtonStyle.secondary, row=2)
-    async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        _ = button
-        await _replace(interaction, embed=_center_embed(), view=CommunityToolsView(self.owner_id))
-
-
-class StickyTypeView(_OwnedView):
-    def __init__(self, owner_id: int, config: Optional[StickyConfig], poll: Optional[StickyPoll]) -> None:
-        super().__init__(owner_id, timeout=300)
-        self.config = config
-        self.poll = poll
-
-    @discord.ui.button(label="Message Sticky", emoji="💬", style=discord.ButtonStyle.primary)
-    async def plain(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        _ = button
-        await interaction.response.send_modal(StickyMessageModal(self.config, self.poll))
-
-    @discord.ui.button(label="Embed Sticky", emoji="🧱", style=discord.ButtonStyle.primary)
-    async def embed(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        _ = button
-        await interaction.response.send_modal(StickyEmbedModal(self.config, self.poll))
-
-    @discord.ui.button(label="Back", emoji="↩️", style=discord.ButtonStyle.secondary)
-    async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        _ = button
-        await _replace(
-            interaction,
-            embed=_sticky_status_embed(self.config, self.poll),
-            view=StickyCenterView(self.owner_id, config=self.config, poll=self.poll),
-        )
-
-
-class StickySettingsView(_OwnedView):
-    def __init__(self, owner_id: int, config: StickyConfig, poll: Optional[StickyPoll]) -> None:
-        super().__init__(owner_id)
-        self.config = config
-        self.poll = poll
-        if config.mode == "poll":
-            for item in self.children:
-                if str(getattr(item, "label", "") or "") == "Custom Sender":
-                    item.disabled = True
-
-    @discord.ui.button(label="Pause / Resume", emoji="⏯️", style=discord.ButtonStyle.secondary, row=0)
-    async def toggle(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        _ = button
-        channel = _text_channel(interaction)
-        if channel is None:
-            return await _private(interaction, "❌ This needs a text channel.")
-        try:
-            current = await get_sticky(int(channel.id))
-            if current is None:
-                return await _private(interaction, "❌ There is no sticky in this channel.")
-            saved = await set_sticky_enabled(int(channel.id), not current.enabled, actor_id=int(interaction.user.id))
-        except CommunityStorageUnavailable:
-            return await _private(interaction, "❌ Sticky storage is unavailable.")
-        runtime = ensure_community_tools_runtime(interaction.client)
-        if saved is not None:
-            runtime.set_config(saved)
-            if saved.enabled:
-                await runtime.refresh_channel(channel, force=True)
-        await _open_sticky_center(interaction, replace_message=False)
-
-    @discord.ui.button(label="Speed / Cadence", emoji="⏱️", style=discord.ButtonStyle.secondary, row=0)
-    async def speed(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        _ = button
-        await interaction.response.send_modal(StickySpeedModal(self.config))
-
-    @discord.ui.button(label="Custom Sender", emoji="🎭", style=discord.ButtonStyle.secondary, row=0)
-    async def persona(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        _ = button
-        if self.config.mode == "poll":
-            return await _private(interaction, "ℹ️ Sticky polls stay bot-owned so their persistent vote buttons remain reliable.")
-        if not _manage_webhooks(interaction):
-            return await _private(interaction, "❌ Custom Sender requires **Manage Webhooks in this channel**.")
-        await interaction.response.send_modal(StickyPersonaModal(self.config))
-
-    @discord.ui.button(label="Remove", emoji="🗑️", style=discord.ButtonStyle.danger, row=1)
-    async def remove(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        _ = button
-        await _replace(
-            interaction,
-            embed=discord.Embed(
-                title="Remove sticky?",
-                description="This deletes the saved sticky, managed live copy, and sticky-poll state for this channel. Quiet Server Notice is separate.",
-                color=discord.Color.red(),
-            ),
-            view=StickyRemoveConfirmView(self.owner_id, self.config),
-        )
-
-    @discord.ui.button(label="Back to Sticky", emoji="↩️", style=discord.ButtonStyle.secondary, row=1)
-    async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        _ = button
-        await _replace(
-            interaction,
-            embed=_sticky_status_embed(self.config, self.poll),
-            view=StickyCenterView(self.owner_id, config=self.config, poll=self.poll),
-        )
-
-
-class StickyRemoveConfirmView(_OwnedView):
-    def __init__(self, owner_id: int, config: StickyConfig) -> None:
-        super().__init__(owner_id, timeout=120)
-        self.config = config
-
-    @discord.ui.button(label="Remove Sticky", emoji="🗑️", style=discord.ButtonStyle.danger)
-    async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        _ = button
-        try:
-            current = await get_sticky(int(self.config.channel_id))
-            if current is None:
-                ensure_community_tools_runtime(interaction.client).remove_config(int(self.config.channel_id))
-                return await _replace(
-                    interaction,
-                    embed=_sticky_status_embed(None),
-                    view=StickyCenterView(self.owner_id, config=None, poll=None),
-                )
-            await delete_sticky(int(current.channel_id))
-        except CommunityStorageUnavailable:
-            return await _private(interaction, "❌ Sticky storage is unavailable, so the live sticky was left untouched.")
-        runtime = ensure_community_tools_runtime(interaction.client)
-        channel = interaction.client.get_channel(int(current.channel_id))
-        if isinstance(channel, discord.TextChannel):
-            await runtime.delete_live_message(channel, current.last_message_id)
-            if current.use_webhook:
-                await runtime.cleanup_managed_webhook(channel)
-        runtime.remove_config(int(current.channel_id))
-        await _replace(
-            interaction,
-            embed=_sticky_status_embed(None),
-            view=StickyCenterView(self.owner_id, config=None, poll=None),
-        )
-
-    @discord.ui.button(label="Cancel", emoji="↩️", style=discord.ButtonStyle.secondary)
-    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        _ = button
-        await _open_sticky_center(interaction)
-
-
-class StickyMessageModal(discord.ui.Modal, title="Message sticky"):
-    message = discord.ui.TextInput(
-        label="Message text",
-        style=discord.TextStyle.paragraph,
-        required=True,
-        max_length=1900,
-        placeholder="Text shown in the sticky.",
-    )
-
-    def __init__(self, current: Optional[StickyConfig], current_poll: Optional[StickyPoll] = None) -> None:
-        super().__init__()
-        self.current = current
-        self.current_poll = current_poll
-        if current is not None and current.mode == "plain":
-            self.message.default = current.content
-
-    async def on_submit(self, interaction: discord.Interaction) -> None:
-        if not _manage_messages(interaction):
-            return await _private(interaction, "❌ Sticky management requires **Manage Messages in this channel**.")
-        channel = _text_channel(interaction)
-        if channel is None or interaction.guild is None:
-            return await _private(interaction, "❌ Configure stickies inside a normal text channel.")
-        base = self.current or StickyConfig(guild_id=int(interaction.guild.id), channel_id=int(channel.id))
-        config = replace(
-            base,
-            guild_id=int(interaction.guild.id),
-            channel_id=int(channel.id),
-            content=str(self.message.value or ""),
-            mode="plain",
-            title="",
-            image_url="",
-            thumbnail_url="",
-            use_webhook=bool(base.use_webhook and base.mode != "poll"),
-            updated_by=int(interaction.user.id),
-        )
-        await show_sticky_draft_preview(
-            interaction,
-            config,
-            baseline=self.current,
-            baseline_poll=self.current_poll,
-        )
-
-
-class StickyEmbedModal(discord.ui.Modal, title="Embed sticky"):
-    embed_title = discord.ui.TextInput(label="Title (optional)", required=False, max_length=256)
-    message = discord.ui.TextInput(label="Description (optional)", style=discord.TextStyle.paragraph, required=False, max_length=1900)
-    color = discord.ui.TextInput(label="Hex color", required=True, max_length=8, default="5865F2")
-    image_url = discord.ui.TextInput(label="Large image HTTPS URL (optional)", required=False, max_length=1000)
-    thumbnail_url = discord.ui.TextInput(label="Thumbnail HTTPS URL (optional)", required=False, max_length=1000)
-
-    def __init__(self, current: Optional[StickyConfig], current_poll: Optional[StickyPoll] = None) -> None:
-        super().__init__()
-        self.current = current
-        self.current_poll = current_poll
-        if current is not None and current.mode == "embed":
-            self.embed_title.default = current.title
-            self.message.default = current.content
-            self.color.default = f"{int(current.color):06X}"
-            self.image_url.default = current.image_url
-            self.thumbnail_url.default = current.thumbnail_url
-
-    async def on_submit(self, interaction: discord.Interaction) -> None:
-        if not _manage_messages(interaction):
-            return await _private(interaction, "❌ Sticky management requires **Manage Messages in this channel**.")
-        channel = _text_channel(interaction)
-        if channel is None or interaction.guild is None:
-            return await _private(interaction, "❌ Configure stickies inside a normal text channel.")
-        try:
-            color = _parse_color(str(self.color.value))
-        except InvalidCommunityToolValue as exc:
-            return await _private(interaction, f"❌ {exc}")
-        base = self.current or StickyConfig(guild_id=int(interaction.guild.id), channel_id=int(channel.id))
-        config = replace(
-            base,
-            guild_id=int(interaction.guild.id),
-            channel_id=int(channel.id),
-            content=str(self.message.value or ""),
-            mode="embed",
-            title=str(self.embed_title.value or ""),
-            color=color,
-            image_url=str(self.image_url.value or ""),
-            thumbnail_url=str(self.thumbnail_url.value or ""),
-            use_webhook=bool(base.use_webhook and base.mode != "poll"),
-            updated_by=int(interaction.user.id),
-        )
-        await show_sticky_draft_preview(
-            interaction,
-            config,
-            baseline=self.current,
-            baseline_poll=self.current_poll,
-        )
-
-
-class StickySpeedModal(discord.ui.Modal, title="Sticky speed / cadence"):
-    seconds = discord.ui.TextInput(
-        label=f"Elapsed seconds ({MIN_INTERVAL_SECONDS}-{MAX_INTERVAL_SECONDS})",
-        required=True,
-        max_length=4,
-    )
-    messages = discord.ui.TextInput(
-        label=f"Human messages ({MIN_MESSAGE_THRESHOLD}-{MAX_MESSAGE_THRESHOLD})",
-        required=True,
-        max_length=3,
-    )
-
-    def __init__(self, current: StickyConfig) -> None:
-        super().__init__()
-        self.current = current
-        self.seconds.default = str(current.interval_seconds)
-        self.messages.default = str(current.message_threshold)
-
-    async def on_submit(self, interaction: discord.Interaction) -> None:
-        try:
-            seconds = int(str(self.seconds.value).strip())
-            messages = int(str(self.messages.value).strip())
-        except ValueError:
-            return await _private(interaction, "❌ Enter whole numbers for both cadence fields.")
-        if not MIN_INTERVAL_SECONDS <= seconds <= MAX_INTERVAL_SECONDS:
-            return await _private(interaction, f"❌ Seconds must be {MIN_INTERVAL_SECONDS}-{MAX_INTERVAL_SECONDS}; the value was not changed.")
-        if not MIN_MESSAGE_THRESHOLD <= messages <= MAX_MESSAGE_THRESHOLD:
-            return await _private(interaction, f"❌ Message count must be {MIN_MESSAGE_THRESHOLD}-{MAX_MESSAGE_THRESHOLD}; the value was not changed.")
-        try:
-            current = await get_sticky(int(self.current.channel_id))
-            if current is None:
-                return await _private(interaction, "❌ This sticky was removed while the cadence editor was open.")
-            config = replace(
-                current,
-                interval_seconds=seconds,
-                message_threshold=messages,
-                updated_by=int(interaction.user.id),
-            )
-            saved = await save_sticky(config)
-            poll = await get_sticky_poll(int(saved.channel_id)) if saved.mode == "poll" else None
-        except (InvalidCommunityToolValue, CommunityStorageUnavailable) as exc:
-            return await _private(interaction, f"❌ {exc}")
-        ensure_community_tools_runtime(interaction.client).set_config(saved)
-        await _private(
-            interaction,
-            "✅ Sticky cadence updated exactly as entered without overwriting newer sticky content or sender settings.",
-            embed=_sticky_status_embed(saved, poll),
-            view=StickyCenterView(int(interaction.user.id), config=saved, poll=poll),
-        )
-
-
-class StickyPersonaModal(discord.ui.Modal, title="Custom sticky sender"):
-    enabled = discord.ui.TextInput(label="Enable custom sender? yes/no", required=True, max_length=3, default="yes")
-    name = discord.ui.TextInput(label="Sender name", required=False, max_length=80)
-    avatar = discord.ui.TextInput(label="Avatar HTTPS URL (optional)", required=False, max_length=1000)
-
-    def __init__(self, current: StickyConfig) -> None:
-        super().__init__()
-        self.current = current
-        self.enabled.default = "yes" if current.use_webhook else "no"
-        self.name.default = current.sender_name
-        self.avatar.default = current.sender_avatar_url
-
-    async def on_submit(self, interaction: discord.Interaction) -> None:
-        if not _manage_webhooks(interaction):
-            return await _private(interaction, "❌ Custom Sender requires **Manage Webhooks in this channel**.")
-        choice = str(self.enabled.value).strip().lower()
-        if choice not in {"y", "yes", "n", "no"}:
-            return await _private(interaction, "❌ Enter `yes` or `no`; the sender setting was not changed.")
-        enabled = choice in {"y", "yes"}
-        channel = _text_channel(interaction)
-        if channel is None:
-            return await _private(interaction, "❌ Configure the sender inside its text channel.")
-        try:
-            current = await get_sticky(int(channel.id))
-        except CommunityStorageUnavailable:
-            return await _private(interaction, "❌ Sticky storage is unavailable.")
-        if current is None:
-            return await _private(interaction, "❌ This sticky was removed while the sender editor was open.")
-        if current.mode == "poll":
-            return await _private(interaction, "❌ This sticky is now a poll; Custom Sender is unavailable for poll buttons.")
-
-        runtime = ensure_community_tools_runtime(interaction.client)
-        created_for_enable = bool(enabled and not current.use_webhook)
-        if enabled and not await runtime.ensure_managed_webhook(channel):
-            return await _private(
-                interaction,
-                "❌ Dank Shield needs **Manage Webhooks + Manage Messages** in this channel for a reliable custom sender. Nothing was changed.",
-            )
-        config = replace(
-            current,
-            use_webhook=enabled,
-            sender_name=str(self.name.value or "") if enabled else "",
-            sender_avatar_url=str(self.avatar.value or "") if enabled else "",
-            updated_by=int(interaction.user.id),
-        )
-        try:
-            saved = await save_sticky(config)
-        except (InvalidCommunityToolValue, CommunityStorageUnavailable) as exc:
-            if created_for_enable:
-                await runtime.cleanup_managed_webhook(channel)
-            return await _private(interaction, f"❌ {exc}")
-        runtime.set_config(saved)
-        posted = await runtime.refresh_channel(channel, force=True) if saved.enabled else None
-        if not enabled:
-            await runtime.cleanup_managed_webhook(channel)
-        note = "✅ Custom Sender settings saved. No webhook URL/token is stored."
-        if saved.enabled and posted is None:
-            note += " The setting is durable, but the replacement could not be posted; Permission Check will show the blocker."
-        await _private(
-            interaction,
-            note,
-            embed=_sticky_status_embed(saved),
-            view=StickyCenterView(int(interaction.user.id), config=saved, poll=None),
-        )
-
-
-class StickyPollModal(discord.ui.Modal, title="Create or edit sticky poll"):
-    question = discord.ui.TextInput(label="Poll question", required=True, max_length=300)
-    choices = discord.ui.TextInput(
-        label="Choices — one per line (2-7)",
-        style=discord.TextStyle.paragraph,
-        required=True,
-        max_length=560,
-        placeholder="Choice one\nChoice two",
-    )
-
-    def __init__(self, current_sticky: Optional[StickyConfig], current: Optional[StickyPoll]) -> None:
-        super().__init__()
-        self.current_sticky = current_sticky
-        self.current = current
-        if current is not None:
-            self.question.default = current.question
-            self.choices.default = "\n".join(current.options)
-
-    async def on_submit(self, interaction: discord.Interaction) -> None:
-        if not _manage_messages(interaction):
-            return await _private(interaction, "❌ Sticky polls require **Manage Messages in this channel**.")
-        channel = _text_channel(interaction)
-        if channel is None or interaction.guild is None:
-            return await _private(interaction, "❌ Create sticky polls inside a normal text channel.")
-        options = tuple(line.strip() for line in str(self.choices.value).splitlines() if line.strip())
-        try:
-            existing = await get_sticky(int(channel.id))
-            live_poll = await get_sticky_poll(int(channel.id)) if existing is not None and existing.mode == "poll" else None
-            if _draft_is_stale(self.current_sticky, existing, self.current, live_poll):
-                raise InvalidCommunityToolValue(
-                    "The sticky changed while this poll editor was open. Reopen Community Tools before creating a draft so newer work is not overwritten."
-                )
-            base_votes = dict(live_poll.votes) if live_poll is not None and tuple(live_poll.options) == options else {}
-            base_state = live_poll.state if live_poll is not None else "active"
-            poll = StickyPoll(
-                guild_id=int(interaction.guild.id),
-                channel_id=int(channel.id),
-                question=str(self.question.value),
-                options=options,
-                votes=base_votes,
-                state=base_state,
-                updated_by=int(interaction.user.id),
-            )
-            safe_poll = normalize_poll(poll)
-        except (InvalidCommunityToolValue, CommunityStorageUnavailable) as exc:
-            return await _private(interaction, f"❌ {exc}")
-        draft_sticky = StickyConfig(
-            guild_id=int(interaction.guild.id),
-            channel_id=int(channel.id),
-            enabled=existing.enabled if existing else True,
-            content=safe_poll.question,
-            mode="poll",
-            interval_seconds=existing.interval_seconds if existing else 15,
-            message_threshold=existing.message_threshold if existing else 5,
-            updated_by=int(interaction.user.id),
-            last_message_id=existing.last_message_id if existing else None,
-            last_sent_at=existing.last_sent_at if existing else None,
-        )
-        await _private(
-            interaction,
-            "👁️ **Sticky poll draft** — live votes/state are preserved when the choices still match, and newer edits will not be overwritten.",
-            embed=sticky_poll_embed(safe_poll),
-            view=StickyPollDraftView(
-                int(interaction.user.id),
-                draft_sticky,
-                safe_poll,
-                baseline_sticky=existing,
-                baseline_poll=live_poll,
-            ),
-        )
-
-
-class StickyPollDraftView(_OwnedView):
-    def __init__(
-        self,
-        owner_id: int,
-        sticky: StickyConfig,
-        poll: StickyPoll,
-        *,
-        baseline_sticky: Optional[StickyConfig],
-        baseline_poll: Optional[StickyPoll],
-    ) -> None:
-        super().__init__(owner_id, timeout=300)
-        self.sticky = sticky
-        self.poll = poll
-        self.baseline_sticky = baseline_sticky
-        self.baseline_poll = baseline_poll
-
-    @discord.ui.button(label="Publish Sticky Poll", emoji="✅", style=discord.ButtonStyle.success)
-    async def publish(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        _ = button
-        if not _manage_messages(interaction):
-            return await _private(interaction, "❌ Publishing requires **Manage Messages in this channel**.")
-        channel = _text_channel(interaction)
-        if channel is None or int(channel.id) != int(self.sticky.channel_id):
-            return await _private(interaction, "❌ Reopen Community Tools in this poll's destination channel.")
-        if not _bot_can_post(channel, embed=True):
-            return await _private(interaction, "❌ Dank Shield needs **View Channel + Send Messages + Embed Links** here.")
-        try:
-            current = await get_sticky(int(channel.id))
-            current_poll = await get_sticky_poll(int(channel.id)) if current is not None and current.mode == "poll" else None
-            if _draft_is_stale(self.baseline_sticky, current, self.baseline_poll, current_poll):
-                raise InvalidCommunityToolValue(
-                    "This poll draft is stale because another Community Tools change modified the live poll while you were reviewing it. Reopen the editor first."
-                )
-            publish_poll = replace(
-                self.poll,
-                votes=(dict(current_poll.votes) if current_poll is not None and tuple(current_poll.options) == tuple(self.poll.options) else {}),
-                state=current_poll.state if current_poll is not None else self.poll.state,
-                updated_by=int(interaction.user.id),
-            )
-            sticky = replace(
-                self.sticky,
-                enabled=current.enabled if current else True,
-                interval_seconds=current.interval_seconds if current else self.sticky.interval_seconds,
-                message_threshold=current.message_threshold if current else self.sticky.message_threshold,
-                last_message_id=current.last_message_id if current else None,
-                last_sent_at=current.last_sent_at if current else None,
-                updated_by=int(interaction.user.id),
-            )
-            saved_sticky, saved_poll = await save_sticky_bundle(sticky, publish_poll)
-        except (InvalidCommunityToolValue, CommunityStorageUnavailable) as exc:
-            return await _private(interaction, f"❌ {exc}")
-        if saved_poll is None:
-            return await _private(interaction, "❌ Poll state was not returned after the atomic save.")
-        runtime = ensure_community_tools_runtime(interaction.client)
-        runtime.set_config(saved_sticky)
-        posted = await runtime.refresh_channel(channel, force=True) if saved_sticky.enabled else None
-        message = "✅ Sticky poll published." if posted is not None or not saved_sticky.enabled else (
-            "⚠️ Sticky poll state was saved atomically, but Dank Shield could not post the live replacement. Check Permission Check."
-        )
-        await _replace(
-            interaction,
-            content=message,
-            embed=_sticky_status_embed(saved_sticky, saved_poll),
-            view=StickyCenterView(self.owner_id, config=saved_sticky, poll=saved_poll),
-        )
-        self.stop()
-
-    @discord.ui.button(label="Discard Draft", emoji="✖️", style=discord.ButtonStyle.secondary)
-    async def discard(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        _ = button
-        await _replace(interaction, content="Draft discarded. Live sticky/poll state was not changed.", embed=None, view=None)
-        self.stop()
-
-
-class StickyPollControlView(_OwnedView):
-    def __init__(self, owner_id: int, config: StickyConfig, poll: StickyPoll) -> None:
-        super().__init__(owner_id)
-        self.config = config
-        self.poll = poll
-
-    async def _apply(self, interaction: discord.Interaction, action: str) -> None:
-        try:
-            if action == "reset":
-                poll = await reset_sticky_poll(int(self.poll.channel_id), actor_id=int(interaction.user.id))
-            else:
-                poll = await set_sticky_poll_state(int(self.poll.channel_id), action, actor_id=int(interaction.user.id))
-        except (InvalidCommunityToolValue, CommunityStorageUnavailable) as exc:
-            return await _private(interaction, f"❌ {exc}")
-        channel = _text_channel(interaction)
-        runtime = ensure_community_tools_runtime(interaction.client)
-        if channel is not None:
-            await runtime.refresh_channel(channel, force=True)
-        await _replace(
-            interaction,
-            embed=sticky_poll_embed(poll),
-            view=StickyPollControlView(self.owner_id, self.config, poll),
-        )
-
-    @discord.ui.button(label="Resume", emoji="▶️", style=discord.ButtonStyle.success, row=0)
-    async def resume(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        _ = button
-        await self._apply(interaction, "active")
-
-    @discord.ui.button(label="Pause", emoji="⏸️", style=discord.ButtonStyle.secondary, row=0)
-    async def pause(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        _ = button
-        await self._apply(interaction, "paused")
-
-    @discord.ui.button(label="Reset Votes", emoji="🔄", style=discord.ButtonStyle.secondary, row=0)
-    async def reset(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        _ = button
-        await self._apply(interaction, "reset")
-
-    @discord.ui.button(label="End Poll", emoji="🛑", style=discord.ButtonStyle.danger, row=0)
-    async def end(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        _ = button
-        await self._apply(interaction, "ended")
-
-    @discord.ui.button(label="Sticky Center", emoji="↩️", style=discord.ButtonStyle.secondary, row=1)
-    async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        _ = button
-        await _open_sticky_center(interaction)
 
 
 def _normalize_native_poll_choices(raw: str) -> list[str]:
@@ -1225,85 +442,37 @@ async def show_permission_check(interaction: discord.Interaction) -> None:
         ("Send Messages", bot.send_messages),
         ("Embed Links", bot.embed_links),
         ("Read Message History", bot.read_message_history),
-        ("Manage Messages (custom sender cleanup)", bot.manage_messages),
-        ("Manage Webhooks (custom sender)", bot.manage_webhooks),
+        ("Manage Messages", bot.manage_messages),
         ("Send/Create Polls", _poll_permission(bot)),
     ]
     user_checks = [
         ("View Channel", user.view_channel),
         ("Send Messages", user.send_messages),
-        ("Manage Messages (stickies/embeds)", user.manage_messages or member.guild_permissions.administrator),
-        ("Manage Webhooks (custom sender)", user.manage_webhooks or member.guild_permissions.administrator),
+        ("Manage Messages", user.manage_messages or member.guild_permissions.administrator),
         ("Send/Create Polls", _poll_permission(user)),
     ]
-    sticky_ok = bool(bot.view_channel and bot.send_messages and bot.read_message_history)
-    embed_ok = bool(sticky_ok and bot.embed_links)
+    post_ok = bool(bot.view_channel and bot.send_messages and bot.read_message_history)
+    embed_ok = bool(post_ok and bot.embed_links)
     native_poll_ok = bool(bot.view_channel and bot.send_messages and _poll_permission(bot))
-    custom_sender_ok = bool(sticky_ok and bot.manage_webhooks and bot.manage_messages)
 
     embed = discord.Embed(
         title=f"🔐 Permission Check • #{channel.name}",
         description="Effective channel permissions after role/category/channel overwrites are applied.",
-        color=discord.Color.green() if sticky_ok and embed_ok else discord.Color.orange(),
+        color=discord.Color.green() if post_ok and embed_ok else discord.Color.orange(),
     )
     embed.add_field(name="Dank Shield", value="\n".join(_permission_line(*item) for item in bot_checks), inline=False)
     embed.add_field(name="You", value="\n".join(_permission_line(*item) for item in user_checks), inline=False)
     embed.add_field(
         name="Feature readiness",
         value=(
-            f"{'✅' if sticky_ok else '❌'} Message sticky\n"
-            f"{'✅' if embed_ok else '❌'} Embed / sticky poll\n"
-            f"{'✅' if native_poll_ok else '❌'} Native Discord poll\n"
-            f"{'✅' if custom_sender_ok else '❌'} Custom sticky sender"
+            f"{'✅' if post_ok else '❌'} Post messages\n"
+            f"{'✅' if embed_ok else '❌'} Embed posts and quiet notices\n"
+            f"{'✅' if native_poll_ok else '❌'} Native Discord poll"
         ),
         inline=False,
     )
-    embed.set_footer(text="Custom Sender needs Manage Webhooks and Manage Messages in this channel")
+    embed.set_footer(text="Quiet Server Notice posts with the same message permissions")
     await _private(interaction, embed=embed)
-
-
-def _server_stickies_embed(rows: Sequence[StickyConfig], page: int) -> discord.Embed:
-    total = len(rows)
-    pages = max(1, (total + _SERVER_STICKIES_PAGE_SIZE - 1) // _SERVER_STICKIES_PAGE_SIZE)
-    safe_page = max(0, min(int(page), pages - 1))
-    start = safe_page * _SERVER_STICKIES_PAGE_SIZE
-    chunk = rows[start : start + _SERVER_STICKIES_PAGE_SIZE]
-    embed = discord.Embed(title="📋 Server Stickies", color=discord.Color.blurple())
-    if not chunk:
-        embed.description = "No stickies are configured."
-    else:
-        embed.description = "\n".join(
-            f"• <#{item.channel_id}> — **{item.mode}** — {'active' if item.enabled else 'paused'}"
-            for item in chunk
-        )
-    embed.set_footer(text=f"{total} configured • page {safe_page + 1}/{pages}")
-    return embed
-
-
-class ServerStickiesView(_OwnedView):
-    def __init__(self, owner_id: int, rows: Sequence[StickyConfig], *, page: int) -> None:
-        super().__init__(owner_id, timeout=300)
-        self.rows = tuple(rows)
-        self.page = max(0, int(page))
-        pages = max(1, (len(self.rows) + _SERVER_STICKIES_PAGE_SIZE - 1) // _SERVER_STICKIES_PAGE_SIZE)
-        for item in self.children:
-            label = str(getattr(item, "label", "") or "")
-            if label == "Previous":
-                item.disabled = self.page <= 0
-            elif label == "Next":
-                item.disabled = self.page >= pages - 1
-
-    @discord.ui.button(label="Previous", emoji="⬅️", style=discord.ButtonStyle.secondary)
-    async def previous(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        _ = button
-        page = max(0, self.page - 1)
-        await _replace(interaction, embed=_server_stickies_embed(self.rows, page), view=ServerStickiesView(self.owner_id, self.rows, page=page))
-
-    @discord.ui.button(label="Next", emoji="➡️", style=discord.ButtonStyle.secondary)
-    async def next(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        _ = button
-        page = self.page + 1
-        await _replace(interaction, embed=_server_stickies_embed(self.rows, page), view=ServerStickiesView(self.owner_id, self.rows, page=page))
 
 
 def _fun_embed() -> discord.Embed:
@@ -1536,10 +705,6 @@ __all__ = [
     "FunLookupView",
     "InfoView",
     "NativePollPreviewView",
-    "ServerStickiesView",
-    "StickyCenterView",
-    "StickySettingsView",
-    "StickyTypeView",
     "ensure_community_tools_runtime",
     "open_community_tools",
     "show_permission_check",
