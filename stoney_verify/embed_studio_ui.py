@@ -3125,7 +3125,7 @@ class StudioReviewView(_StudioView):
         tracked = False
         try:
             source, lib = await _load_library(self.session.guild_id)
-            lib["published"].pop(self.session.post_key, None)
+            previous = lib["published"].pop(self.session.post_key, None)
             lib["published"][self.session.post_key] = {
                 "channel_id": str(channel.id), "message_id": str(message.id),
                 "by": str(interaction.user.id),
@@ -3133,6 +3133,11 @@ class StudioReviewView(_StudioView):
                 "role_actions": draft["role_actions"],
                 "form": deepcopy(form), "form_token": form_token,
             }
+            # A sticky post stays sticky across edits: the record is rebuilt
+            # here, so carry its sticky state over — otherwise every edit
+            # would silently un-stick the post.
+            if isinstance(previous, dict) and isinstance(previous.get("sticky"), dict):
+                lib["published"][self.session.post_key]["sticky"] = deepcopy(previous["sticky"])
             # Store original Smart Text only for safe, normalized records.
             # Enrollment happens separately after explicit moderator approval.
             from .embed_studio_storage_v2 import storage_v2_enabled
@@ -3165,12 +3170,22 @@ class StudioReviewView(_StudioView):
             except (discord.Forbidden, discord.HTTPException):
                 pass  # Runtime still rejects all untracked or stale buttons.
         autosave_warning = await _autosave(interaction, self.session)
-        await _say(
-            interaction,
+        confirmation = (
             f"✅ {'Updated' if editing_existing else 'Published'}: {message.jump_url}"
             + ("" if tracked else "\n⚠️ Message sent, but saved-post tracking is unavailable. Keep the message link.")
-            + ("\n⚠️ " + autosave_warning if autosave_warning else ""),
+            + ("\n⚠️ " + autosave_warning if autosave_warning else "")
         )
+        if tracked:
+            from .embed_studio_sticky import StudioStickyPromptView, post_is_sticky
+            record = lib["published"].get(self.session.post_key) or {}
+            await _say(
+                interaction, confirmation,
+                view=StudioStickyPromptView(
+                    self.session, self.session.post_key,
+                    sticky=post_is_sticky(record)),
+            )
+        else:
+            await _say(interaction, confirmation)
 
     @discord.ui.button(label="Back & Edit", emoji="✏️", style=discord.ButtonStyle.secondary, row=0)
     async def back(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
@@ -3284,6 +3299,11 @@ class PublishedMenu(_StudioView):
     async def live_text(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
         from .embed_studio_live_ui import open_live_text_menu
         await open_live_text_menu(interaction, self.session)
+
+    @discord.ui.button(label="Sticky Posts", emoji="📌", style=discord.ButtonStyle.secondary, row=1, custom_id="dank:embed_studio:sticky_menu:v1")
+    async def sticky_posts(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        from .embed_studio_sticky import open_sticky_menu
+        await open_sticky_menu(interaction, self.session)
 
     @discord.ui.button(label="Back", emoji="◀️", style=discord.ButtonStyle.secondary, row=1)
     async def back(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
