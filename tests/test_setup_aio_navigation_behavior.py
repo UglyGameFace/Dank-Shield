@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+from types import SimpleNamespace
 from typing import Any
 
 import discord
@@ -30,6 +32,31 @@ def select_labels(view: discord.ui.View) -> list[str]:
     return result
 
 
+def open_picker(view: discord.ui.View, custom_id: str) -> Any:
+    """Drive a house-picker opener button and return the picker view."""
+    opener = next(
+        child
+        for child in view.children
+        if str(getattr(child, "custom_id", "") or "") == custom_id
+    )
+    captured: dict[str, Any] = {}
+
+    async def edit_message(**kwargs: Any) -> None:
+        captured.update(kwargs)
+
+    interaction = SimpleNamespace(
+        message=SimpleNamespace(embeds=[]),
+        response=SimpleNamespace(edit_message=edit_message),
+    )
+    asyncio.run(opener.callback(interaction))
+    return captured["view"]
+
+
+def picker_labels(view: discord.ui.View, custom_id: str) -> list[str]:
+    picker = open_picker(view, custom_id)
+    return [str(choice.label) for choice in picker._all_choices]
+
+
 def field_names(embed: discord.Embed) -> list[str]:
     return [str(field.name) for field in embed.fields]
 
@@ -54,6 +81,7 @@ def test_started_home_exposes_direct_area_picker_without_manage_hop() -> None:
         completed=False,
     )
     assert labels(view) == [
+        "Choose a Section",
         "Continue Setup",
         "Change Plan",
         "Check Configuration",
@@ -61,7 +89,8 @@ def test_started_home_exposes_direct_area_picker_without_manage_hop() -> None:
         "Close",
     ]
     assert "Manage Setup" not in labels(view)
-    assert len(select_labels(view)) == len(CATEGORIES)
+    assert select_labels(view) == []
+    assert len(picker_labels(view, "dank_setup_compact:area:open:v1")) == len(CATEGORIES)
 
 
 def test_ready_home_calls_final_guided_feature_testing_by_name() -> None:
@@ -70,7 +99,12 @@ def test_ready_home_calls_final_guided_feature_testing_by_name() -> None:
         started=True,
         completed=False,
     )
-    assert labels(view)[0] == "Start Guided Test"
+    primary = next(
+        child
+        for child in view.children
+        if str(getattr(child, "custom_id", "") or "") == "dank_setup_home:continue"
+    )
+    assert primary.label == "Start Guided Test"
     assert "Test Features" not in labels(view)
     assert "Check Configuration" in labels(view)
 
@@ -78,24 +112,39 @@ def test_ready_home_calls_final_guided_feature_testing_by_name() -> None:
 def test_manage_screen_is_one_compact_feature_picker() -> None:
     view = compact.CompactManagerView()
     assert labels(view) == [
+        "Choose a Section",
         "Change Plan",
         "Check Configuration",
         "Advanced",
         "Setup Home",
         "Close",
     ]
-    assert select_labels(view) == [category.label for category in CATEGORIES]
+    assert select_labels(view) == []
+    picker = open_picker(view, "dank_setup_compact:area:open:v1")
+    assert [str(choice.label) for choice in picker._all_choices] == [
+        category.label for category in CATEGORIES
+    ]
     selector = next(
-        child for child in view.children if isinstance(child, discord.ui.Select)
+        child for child in picker.children if isinstance(child, discord.ui.Select)
     )
     assert str(selector.placeholder) == "Choose a section…"
 
 
 def test_feature_picker_does_not_repeat_areas_as_buttons() -> None:
     view = compact.CompactManagerView()
-    assert not set(select_labels(view)).intersection(labels(view))
+    assert not set(
+        picker_labels(view, "dank_setup_compact:area:open:v1")
+    ).intersection(labels(view))
     assert len(
         [child for child in view.children if isinstance(child, discord.ui.Select)]
+    ) == 0
+    assert len(
+        [
+            child
+            for child in view.children
+            if str(getattr(child, "custom_id", "") or "")
+            == "dank_setup_compact:area:open:v1"
+        ]
     ) == 1
 
 
@@ -113,11 +162,13 @@ def test_guided_test_screen_hides_disabled_features_and_starts_next_test() -> No
         }
     )
     assert labels(view) == [
+        "Jump to a Specific Test",
         "Start Next Test",
         "Setup Home",
         "Close",
     ]
-    assert select_labels(view) == ["Simple Verify"]
+    assert select_labels(view) == []
+    assert picker_labels(view, "dank_setup_guided_test:jump:open:v1") == ["Simple Verify"]
     assert "Finish Setup" not in labels(view)
 
 

@@ -22,6 +22,12 @@ from typing import Any, Optional
 
 import discord
 
+from stoney_verify.ui.picker import (
+    DankPickerView as _DankPickerView,
+    chunk_choices as _chunk_choices,
+    make_choice as _make_choice,
+)
+
 _PATCHED = False
 
 
@@ -185,6 +191,104 @@ def _find_row(rows: list[dict[str, Any]], slug: str) -> Optional[dict[str, Any]]
         if _row_slug(row) == wanted:
             return row
     return None
+
+
+def _category_action_choices(rows: list[dict[str, Any]]) -> list[Any]:
+    """All rows as house-picker choices (no 25-row cut)."""
+    choices: list[Any] = []
+    for row in rows:
+        slug = _row_slug(row)
+        if not slug:
+            continue
+        choices.append(
+            _make_choice(
+                _option_label(row),
+                slug,
+                description=_option_description(row),
+                emoji="🧾",
+            )
+        )
+    if not choices:
+        choices.append(_make_choice("No ticket menu options found", "__none__", description="Create recommended options first."))
+    return choices
+
+
+class _CompatPickerView(_DankPickerView):
+    """Paged house picker (chunk_choices) with Prev/Next buttons."""
+
+    def __init__(
+        self,
+        *,
+        choices: Any,
+        on_pick: Any,
+        custom_id: str,
+        placeholder: str,
+        title: str,
+        on_home: Any = None,
+        page: int = 0,
+    ) -> None:
+        all_choices = list(choices or [])
+        pages = _chunk_choices(all_choices) or [[]]
+        page = max(0, min(int(page), len(pages) - 1))
+        super().__init__(
+            author_id=0,
+            choices=pages[page],
+            on_pick=on_pick,
+            custom_id=f"{custom_id}:{page}" if len(pages) > 1 else custom_id,
+            placeholder=(
+                f"{placeholder} • Page {page + 1}/{len(pages)}"
+                if len(pages) > 1 else placeholder
+            ),
+            title=title,
+            timeout=600,
+            on_home=on_home,
+            home_label="Back",
+        )
+        self._all_choices = all_choices
+        self._picker_on_pick = on_pick
+        self._base_custom_id = custom_id
+        self._base_placeholder = placeholder
+        self._picker_title = title
+        self._picker_on_home = on_home
+        self.page = page
+        self.pages = len(pages)
+        if len(pages) > 1:
+            self.add_item(_CompatPageButton(delta=-1, disabled=page <= 0))
+            self.add_item(_CompatPageButton(delta=1, disabled=page >= len(pages) - 1))
+
+    def _for_page(self, page: int) -> "_CompatPickerView":
+        return _CompatPickerView(
+            choices=self._all_choices,
+            on_pick=self._picker_on_pick,
+            custom_id=self._base_custom_id,
+            placeholder=self._base_placeholder,
+            title=self._picker_title,
+            on_home=self._picker_on_home,
+            page=page,
+        )
+
+
+class _CompatPageButton(discord.ui.Button):
+    def __init__(self, *, delta: int, disabled: bool) -> None:
+        super().__init__(
+            label="Previous" if delta < 0 else "Next",
+            emoji="◀️" if delta < 0 else "▶️",
+            style=discord.ButtonStyle.secondary,
+            custom_id=(
+                "dank_setup_category_compat:picker:prev" if delta < 0
+                else "dank_setup_category_compat:picker:next"
+            ),
+            row=2,
+            disabled=bool(disabled),
+        )
+        self.delta = int(delta)
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        view = self.view
+        if not isinstance(view, _CompatPickerView):
+            return
+        page = max(0, min(view.page + self.delta, view.pages - 1))
+        await interaction.response.edit_message(view=view._for_page(page))
 
 
 class DeleteTicketCategoryConfirmView(discord.ui.View):
@@ -436,85 +540,108 @@ def install_setup_category_modal_compat() -> bool:
         async def on_error(self, interaction: discord.Interaction, error: Exception) -> None:
             await _reply(interaction, f"❌ Ticket menu edit failed: `{type(error).__name__}: {str(error)[:300]}`")
 
-    class CategoryActionSelect(discord.ui.Select):
+    async def _apply_category_action(interaction: discord.Interaction, *, rows: list[dict[str, Any]], action: str, slug_raw: Any) -> None:
+        """The old CategoryActionSelect callback body, picker-driven."""
+        if not await _require_setup_permission_best_effort(solid, interaction):
+            return
+        guild = interaction.guild
+        if guild is None:
+            return await _reply(interaction, "❌ This must be used inside a server.")
+
+        slug = _safe_str(slug_raw)
+        if slug == "__none__":
+            return await _reply(interaction, "No ticket menu options exist yet. Use **Create Recommended** or **Add Custom Menu Option** first.")
+
+        row = _find_row(rows, slug)
+        if not row:
+            return await _reply(interaction, f"❌ Could not find `{slug}` in this setup view. Press **Refresh** and try again.")
+
+        if action == "edit":
+            return await interaction.response.send_modal(EditTicketCategoryModal(row=row))
+
+        if action == "default":
+            try:
+                from stoney_verify.commands_ext import ticket_category_admin as category_admin
+
+                ok = await category_admin._set_default(guild.id, slug)
+                if not ok:
+                    detail = "unknown database error"
+                    try:
+                        detail = category_admin._last_category_db_error() or detail
+                    except Exception:
+                        pass
+                    return await _reply(interaction, f"❌ Could not set `{slug}` as default. `{detail[:700]}`")
+            except Exception as e:
+                return await _reply(interaction, f"❌ Set default failed: `{type(e).__name__}: {str(e)[:300]}`")
+            return await _reply(interaction, f"⭐ Set **{_row_name(row)}** (`{slug}`) as the default ticket menu option. Press **Refresh** to see it.")
+
+        if action == "delete":
+            embed = discord.Embed(
+                title="Delete Ticket Menu Option?",
+                description=f"Delete **{_row_name(row)}** (`{slug}`)?\n\nThis only deletes the routing/menu record. It does **not** delete Discord channels, roles, or tickets.",
+                color=discord.Color.red(),
+            )
+            return await interaction.response.edit_message(
+                embed=embed,
+                view=DeleteTicketCategoryConfirmView(slug=slug, name=_row_name(row)),
+            )
+
+        return await _reply(interaction, "❌ Unknown ticket menu action.")
+
+    class CategoryActionOpenButton(discord.ui.Button):
         def __init__(self, *, rows: list[dict[str, Any]], action: str) -> None:
             self.rows = [dict(r) for r in rows]
             self.action = _safe_str(action, "edit").lower()
-            options: list[discord.SelectOption] = []
-            for row in self.rows[:25]:
-                slug = _row_slug(row)
-                if not slug:
-                    continue
-                options.append(
-                    discord.SelectOption(
-                        label=_option_label(row),
-                        value=slug,
-                        description=_option_description(row),
-                        emoji="🧾",
-                    )
-                )
-            if not options:
-                options.append(discord.SelectOption(label="No ticket menu options found", value="__none__", description="Create recommended options first."))
-            placeholder = {
+            self.placeholder = {
                 "edit": "Choose option to edit",
                 "default": "Choose default option",
                 "delete": "Choose option to delete",
             }.get(self.action, "Choose ticket menu option")
-            super().__init__(placeholder=placeholder, min_values=1, max_values=1, options=options, row=0)
+            emoji = {"edit": "✏️", "default": "⭐", "delete": "🗑️"}.get(self.action, "🧾")
+            super().__init__(
+                label=self.placeholder[:80],
+                emoji=emoji,
+                style=discord.ButtonStyle.primary,
+                custom_id=f"dank_setup_category_compat:action:{self.action}:open:v1",
+                row=0,
+            )
 
         async def callback(self, interaction: discord.Interaction) -> None:
-            if not await _require_setup_permission_best_effort(solid, interaction):
-                return
-            guild = interaction.guild
-            if guild is None:
-                return await _reply(interaction, "❌ This must be used inside a server.")
+            rows = self.rows
+            action = self.action
 
-            slug = _safe_str(self.values[0])
-            if slug == "__none__":
-                return await _reply(interaction, "No ticket menu options exist yet. Use **Create Recommended** or **Add Custom Menu Option** first.")
+            async def on_pick(pick_interaction: discord.Interaction, value: str) -> None:
+                await _apply_category_action(pick_interaction, rows=rows, action=action, slug_raw=value)
 
-            row = _find_row(self.rows, slug)
-            if not row:
-                return await _reply(interaction, f"❌ Could not find `{slug}` in this setup view. Press **Refresh** and try again.")
-
-            if self.action == "edit":
-                return await interaction.response.send_modal(EditTicketCategoryModal(row=row))
-
-            if self.action == "default":
-                try:
-                    from stoney_verify.commands_ext import ticket_category_admin as category_admin
-
-                    ok = await category_admin._set_default(guild.id, slug)
-                    if not ok:
-                        detail = "unknown database error"
-                        try:
-                            detail = category_admin._last_category_db_error() or detail
-                        except Exception:
-                            pass
-                        return await _reply(interaction, f"❌ Could not set `{slug}` as default. `{detail[:700]}`")
-                except Exception as e:
-                    return await _reply(interaction, f"❌ Set default failed: `{type(e).__name__}: {str(e)[:300]}`")
-                return await _reply(interaction, f"⭐ Set **{_row_name(row)}** (`{slug}`) as the default ticket menu option. Press **Refresh** to see it.")
-
-            if self.action == "delete":
-                embed = discord.Embed(
-                    title="Delete Ticket Menu Option?",
-                    description=f"Delete **{_row_name(row)}** (`{slug}`)?\n\nThis only deletes the routing/menu record. It does **not** delete Discord channels, roles, or tickets.",
-                    color=discord.Color.red(),
-                )
-                return await interaction.response.edit_message(
-                    embed=embed,
-                    view=DeleteTicketCategoryConfirmView(slug=slug, name=_row_name(row)),
+            async def on_home(home_interaction: discord.Interaction) -> None:
+                message = getattr(home_interaction, "message", None)
+                embeds = getattr(message, "embeds", None) if message is not None else None
+                await home_interaction.response.edit_message(
+                    embed=embeds[0] if embeds else None,
+                    view=CategorySelectActionView(rows=rows, action=action),
                 )
 
-            return await _reply(interaction, "❌ Unknown ticket menu action.")
+            picker = _CompatPickerView(
+                choices=_category_action_choices(rows),
+                on_pick=on_pick,
+                custom_id=f"dank_setup_category_compat:action:{action}:v1",
+                placeholder=self.placeholder,
+                title=self.placeholder,
+                on_home=on_home,
+            )
+            message = getattr(interaction, "message", None)
+            embeds = getattr(message, "embeds", None) if message is not None else None
+            await interaction.response.edit_message(
+                embed=embeds[0] if embeds else None,
+                view=picker,
+            )
 
     class CategorySelectActionView(discord.ui.View):
         def __init__(self, *, rows: list[dict[str, Any]], action: str) -> None:
             super().__init__(timeout=600)
             self.rows = [dict(r) for r in rows]
             self.action = _safe_str(action, "edit").lower()
-            self.add_item(CategoryActionSelect(rows=self.rows, action=self.action))
+            self.add_item(CategoryActionOpenButton(rows=self.rows, action=self.action))
 
         @discord.ui.button(label="Back", emoji="⬅️", style=discord.ButtonStyle.secondary, row=1)
         async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:

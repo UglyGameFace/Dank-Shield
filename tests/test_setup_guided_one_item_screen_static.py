@@ -50,9 +50,16 @@ def test_one_item_screen_has_both_plain_choices():
     assert "Back to Guided Setup" in TEXT
 
     _class("GuidedOneItemView")
-    _class("GuidedExistingRoleSelect")
-    _class("GuidedExistingChannelSelect")
+    _class("_GuidedExistingOpenButton")
     _class("GuidedCreateItemButton")
+
+    # The old Discord-native selects are gone; the one-item screen now
+    # opens the canonical resource browser through the house opener.
+    class_names = {
+        node.name for node in TREE.body if isinstance(node, ast.ClassDef)
+    }
+    assert "GuidedExistingRoleSelect" not in class_names
+    assert "GuidedExistingChannelSelect" not in class_names
 
 
 def test_exact_guided_items_use_the_one_item_screen():

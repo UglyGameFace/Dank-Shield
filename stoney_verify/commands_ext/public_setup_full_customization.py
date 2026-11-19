@@ -21,6 +21,12 @@ _REGISTERED = False
 _PATCHED = False
 
 from .public_setup_logs import JOIN_LEAVE_LOG_ALIASES
+from ..ui import DankGuildResourceBrowserView
+from ..setup_resource_picker_binding import (
+    _custom_id as _picker_custom_id,
+    _message_embed as _picker_parent_embed,
+    _resource_kinds as _picker_resource_kinds,
+)
 
 STAFF_LOG_ALIASES: tuple[str, ...] = (
     "raidlog_channel_id",
@@ -616,161 +622,232 @@ class FullChooseExistingView(SetupBackView):
         await interaction.response.send_modal(BehaviorSettingsModal())
 
 
-class SaveRoleSelect(discord.ui.RoleSelect):
+async def _apply_save_role_pick(
+    interaction: discord.Interaction,
+    role: discord.Role,
+    *,
+    placeholder: str,
+    columns: tuple[str, ...],
+    also_same: tuple[str, ...] = (),
+    require_manage: bool = True,
+) -> None:
+    """The old SaveRoleSelect callback body, driven by the house picker."""
+    if not await _require_setup_permission(interaction):
+        return
+    guild = interaction.guild
+    if guild is None:
+        return await interaction.response.send_message(
+            "❌ This must be used inside a server.",
+            ephemeral=True,
+        )
+
+    ok, messages = _role_manage_warning(
+        guild,
+        role,
+        require_manage=require_manage,
+    )
+    if not ok:
+        embed = discord.Embed(
+            title="🚫 Role Not Saved",
+            description="\n".join(f"• {x}" for x in messages),
+            color=discord.Color.red(),
+        )
+        embed.add_field(
+            name="What To Do",
+            value=(
+                "Pick a different role, or move Dank Shield's bot role "
+                "above this role in Server Settings → Roles."
+            ),
+            inline=False,
+        )
+        return await interaction.response.send_message(
+            embed=embed,
+            ephemeral=True,
+        )
+
+    payload = {
+        column: _snowflake(role)
+        for column in columns + also_same
+    }
+    await _save_config(
+        interaction,
+        payload,
+        source=(
+            "/dank setup full customization role picker: "
+            f"{placeholder}"
+        ),
+    )
+    await _send_saved(
+        interaction,
+        title="✅ Role Saved",
+        description=(
+            f"Saved {_mention(role)} as "
+            f"**{str(placeholder or 'this role')}**."
+        ),
+        warnings=messages if messages else None,
+    )
+
+
+async def _apply_save_channel_pick(
+    interaction: discord.Interaction,
+    raw_value: Any,
+    *,
+    placeholder: str,
+    columns: tuple[str, ...],
+    also_same: tuple[str, ...] = (),
+    need_files: bool = False,
+) -> None:
+    """The old SaveChannelSelect callback body, driven by the house picker."""
+    if not await _require_setup_permission(interaction):
+        return
+    guild = interaction.guild
+    if guild is None:
+        return await interaction.response.send_message(
+            "❌ This must be used inside a server.",
+            ephemeral=True,
+        )
+
+    channel = await _resolve_selected_channel(guild, raw_value)
+    ok, messages = _channel_warnings(
+        guild,
+        channel,
+        need_files=need_files,
+    )
+    if not ok:
+        embed = discord.Embed(
+            title="🚫 Channel Not Saved",
+            description="\n".join(f"• {x}" for x in messages),
+            color=discord.Color.red(),
+        )
+        embed.add_field(
+            name="What To Do",
+            value=(
+                "Fix the listed permissions, then pick this channel again."
+            ),
+            inline=False,
+        )
+        return await interaction.response.send_message(
+            embed=embed,
+            ephemeral=True,
+        )
+
+    payload = {
+        column: _snowflake(channel)
+        for column in columns + also_same
+    }
+    await _save_config(
+        interaction,
+        payload,
+        source=(
+            "/dank setup full customization channel picker: "
+            f"{placeholder}"
+        ),
+    )
+    await _send_saved(
+        interaction,
+        title="✅ Channel Saved",
+        description=(
+            f"Saved {_mention(channel)} as "
+            f"**{str(placeholder or 'this channel')}**."
+        ),
+    )
+
+
+class _CustomPickButton(discord.ui.Button):
+    """Opens the canonical guild resource browser for one setup field.
+
+    This is the native form of the button the setup resource-picker
+    binding used to substitute for the old SaveRoleSelect /
+    SaveChannelSelect classes: same label, custom_id scheme, browser
+    titles and empty messages; the pick delegates to the module's own
+    save handlers (_apply_save_role_pick / _apply_save_channel_pick).
+    """
+
     def __init__(
         self,
         *,
-        placeholder: str,
+        kind: str,
+        label: str,
         columns: tuple[str, ...],
         also_same: tuple[str, ...] = (),
+        channel_types: Optional[list[discord.ChannelType]] = None,
+        row: int = 0,
         require_manage: bool = True,
-        row: int = 0,
-    ) -> None:
-        super().__init__(
-            placeholder=placeholder,
-            min_values=1,
-            max_values=1,
-            row=row,
-        )
-        self.columns = columns
-        self.also_same = also_same
-        self.require_manage = require_manage
-
-    async def callback(self, interaction: discord.Interaction) -> None:
-        if not await _require_setup_permission(interaction):
-            return
-        guild = interaction.guild
-        role = self.values[0]
-        if guild is None:
-            return await interaction.response.send_message(
-                "❌ This must be used inside a server.",
-                ephemeral=True,
-            )
-
-        ok, messages = _role_manage_warning(
-            guild,
-            role,
-            require_manage=self.require_manage,
-        )
-        if not ok:
-            embed = discord.Embed(
-                title="🚫 Role Not Saved",
-                description="\n".join(f"• {x}" for x in messages),
-                color=discord.Color.red(),
-            )
-            embed.add_field(
-                name="What To Do",
-                value=(
-                    "Pick a different role, or move Dank Shield's bot role "
-                    "above this role in Server Settings → Roles."
-                ),
-                inline=False,
-            )
-            return await interaction.response.send_message(
-                embed=embed,
-                ephemeral=True,
-            )
-
-        payload = {
-            column: _snowflake(role)
-            for column in self.columns + self.also_same
-        }
-        await _save_config(
-            interaction,
-            payload,
-            source=(
-                "/dank setup full customization role picker: "
-                f"{self.placeholder}"
-            ),
-        )
-        await _send_saved(
-            interaction,
-            title="✅ Role Saved",
-            description=(
-                f"Saved {_mention(role)} as "
-                f"**{str(self.placeholder or 'this role')}**."
-            ),
-            warnings=messages if messages else None,
-        )
-
-
-class SaveChannelSelect(discord.ui.ChannelSelect):
-    def __init__(
-        self,
-        *,
-        placeholder: str,
-        columns: tuple[str, ...],
-        channel_types: list[discord.ChannelType],
-        also_same: tuple[str, ...] = (),
-        row: int = 0,
         need_files: bool = False,
     ) -> None:
+        self.kind = kind
+        self.placeholder = str(label or ("Choose a role" if kind == "role" else "Choose a channel"))
+        self.columns = tuple(columns)
+        self.also_same = tuple(also_same)
+        self.channel_types = list(channel_types or [])
+        self.require_manage = bool(require_manage)
+        self.need_files = bool(need_files)
+        prefix = "dank_full:role" if kind == "role" else "dank_full:channel"
         super().__init__(
-            placeholder=placeholder,
-            min_values=1,
-            max_values=1,
-            channel_types=channel_types,
+            label=self.placeholder[:80],
+            emoji="🎭" if kind == "role" else "🧭",
+            style=discord.ButtonStyle.primary,
+            custom_id=_picker_custom_id(prefix, self.columns + self.also_same, row),
             row=row,
         )
-        self.columns = columns
-        self.also_same = also_same
-        self.need_files = need_files
 
     async def callback(self, interaction: discord.Interaction) -> None:
         if not await _require_setup_permission(interaction):
             return
         guild = interaction.guild
-        raw_channel = self.values[0]
         if guild is None:
-            return await interaction.response.send_message(
-                "❌ This must be used inside a server.",
-                ephemeral=True,
-            )
+            return await interaction.response.send_message("❌ This must be used inside a server.", ephemeral=True)
 
-        channel = await _resolve_selected_channel(guild, raw_channel)
-        ok, messages = _channel_warnings(
-            guild,
-            channel,
-            need_files=self.need_files,
-        )
-        if not ok:
-            embed = discord.Embed(
-                title="🚫 Channel Not Saved",
-                description="\n".join(f"• {x}" for x in messages),
-                color=discord.Color.red(),
-            )
-            embed.add_field(
-                name="What To Do",
-                value=(
-                    "Fix the listed permissions, then pick this channel again."
-                ),
-                inline=False,
-            )
-            return await interaction.response.send_message(
-                embed=embed,
-                ephemeral=True,
-            )
+        parent_view = self.view
+        parent_embed = _picker_parent_embed(interaction)
 
-        payload = {
-            column: _snowflake(channel)
-            for column in self.columns + self.also_same
-        }
-        await _save_config(
-            interaction,
-            payload,
-            source=(
-                "/dank setup full customization channel picker: "
-                f"{self.placeholder}"
-            ),
-        )
-        await _send_saved(
-            interaction,
-            title="✅ Channel Saved",
-            description=(
-                f"Saved {_mention(channel)} as "
-                f"**{str(self.placeholder or 'this channel')}**."
-            ),
-        )
+        async def on_home(home_interaction: discord.Interaction) -> None:
+            kwargs: dict[str, Any] = {"view": parent_view}
+            if parent_embed is not None:
+                kwargs["embed"] = parent_embed
+            await home_interaction.response.edit_message(**kwargs)
+
+        if self.kind == "role":
+            async def on_pick(pick_interaction: discord.Interaction, role: Any) -> None:
+                await _apply_save_role_pick(
+                    pick_interaction, role,
+                    placeholder=self.placeholder, columns=self.columns,
+                    also_same=self.also_same, require_manage=self.require_manage,
+                )
+
+            browser = DankGuildResourceBrowserView(
+                guild=guild,
+                author_id=int(interaction.user.id),
+                resource_kinds=("role",),
+                on_pick=on_pick,
+                custom_id=_picker_custom_id("dank_full:role_browser", self.columns + self.also_same, int(self.row or 0)),
+                title="🎭 Choose a Server Role",
+                placeholder=self.placeholder,
+                on_home=on_home,
+                home_label="Back to Full Setup",
+                empty_message="No server roles matched. Try Search with part of the role name or its Discord ID.",
+            )
+        else:
+            async def on_pick(pick_interaction: discord.Interaction, channel: Any) -> None:
+                await _apply_save_channel_pick(
+                    pick_interaction, channel,
+                    placeholder=self.placeholder, columns=self.columns,
+                    also_same=self.also_same, need_files=self.need_files,
+                )
+
+            browser = DankGuildResourceBrowserView(
+                guild=guild,
+                author_id=int(interaction.user.id),
+                resource_kinds=_picker_resource_kinds(self.channel_types),
+                on_pick=on_pick,
+                custom_id=_picker_custom_id("dank_full:channel_browser", self.columns + self.also_same, int(self.row or 0)),
+                title="🧭 Choose a Server Channel / Category",
+                placeholder=self.placeholder,
+                on_home=on_home,
+                home_label="Back to Full Setup",
+                empty_message="No matching server channels/categories were found. Try Search with part of the name or its Discord ID.",
+            )
+        await interaction.response.edit_message(embed=browser.embed(), view=browser)
 
 
 class RoleCustomizationPageOne(SetupBackView):
@@ -778,44 +855,48 @@ class RoleCustomizationPageOne(SetupBackView):
         super().__init__(parent=parent)
 
         self.add_item(
-            SaveRoleSelect(
-                placeholder="Optional: role allowed to manage Dank Shield",
+            _CustomPickButton(
+                kind='role',
+                label="Optional: role allowed to manage Dank Shield",
                 columns=("server_control_role_id",),
                 also_same=(
                     "control_role_id",
                     "perm_role_id",
                     "bot_manager_role_id",
                 ),
-                require_manage=False,
                 row=0,
+                require_manage=False,
             )
         )
 
         self.add_item(
-            SaveRoleSelect(
-                placeholder="Tickets: role that answers tickets",
+            _CustomPickButton(
+                kind='role',
+                label="Tickets: role that answers tickets",
                 columns=("staff_role_id",),
                 also_same=("vc_staff_role_id",),
-                require_manage=False,
                 row=1,
+                require_manage=False,
             )
         )
 
         self.add_item(
-            SaveRoleSelect(
-                placeholder="Verify: waiting role for new members",
+            _CustomPickButton(
+                kind='role',
+                label="Verify: waiting role for new members",
                 columns=("unverified_role_id",),
-                require_manage=True,
                 row=2,
+                require_manage=True,
             )
         )
 
         self.add_item(
-            SaveRoleSelect(
-                placeholder="Verify: approved member role",
+            _CustomPickButton(
+                kind='role',
+                label="Verify: approved member role",
                 columns=("verified_role_id",),
-                require_manage=True,
                 row=3,
+                require_manage=True,
             )
         )
 
@@ -856,31 +937,34 @@ class RoleCustomizationPageTwo(SetupBackView):
         super().__init__(parent=parent)
 
         self.add_item(
-            SaveRoleSelect(
-                placeholder="Optional: full member or resident role",
+            _CustomPickButton(
+                kind='role',
+                label="Optional: full member or resident role",
                 columns=("resident_role_id",),
                 also_same=("member_role_id",),
-                require_manage=True,
                 row=0,
+                require_manage=True,
             )
         )
 
         self.add_item(
-            SaveRoleSelect(
-                placeholder="Optional: separate Voice Verify staff role",
+            _CustomPickButton(
+                kind='role',
+                label="Optional: separate Voice Verify staff role",
                 columns=("vc_staff_role_id",),
-                require_manage=False,
                 row=1,
+                require_manage=False,
             )
         )
 
         self.add_item(
-            SaveRoleSelect(
-                placeholder="Optional: another Dank Shield manager role",
+            _CustomPickButton(
+                kind='role',
+                label="Optional: another Dank Shield manager role",
                 columns=("control_role_id",),
                 also_same=("server_control_role_id",),
-                require_manage=False,
                 row=2,
+                require_manage=False,
             )
         )
 
@@ -925,8 +1009,9 @@ class DiscordCategoryCustomizationView(SetupBackView):
         super().__init__(parent=parent)
 
         self.add_item(
-            SaveChannelSelect(
-                placeholder="Optional: welcome or start folder",
+            _CustomPickButton(
+                kind='channel',
+                label="Optional: welcome or start folder",
                 columns=("start_category_id",),
                 also_same=("welcome_category_id",),
                 channel_types=[discord.ChannelType.category],
@@ -935,8 +1020,9 @@ class DiscordCategoryCustomizationView(SetupBackView):
         )
 
         self.add_item(
-            SaveChannelSelect(
-                placeholder="Tickets: folder for new tickets",
+            _CustomPickButton(
+                kind='channel',
+                label="Tickets: folder for new tickets",
                 columns=("ticket_category_id",),
                 channel_types=[discord.ChannelType.category],
                 row=1,
@@ -944,8 +1030,9 @@ class DiscordCategoryCustomizationView(SetupBackView):
         )
 
         self.add_item(
-            SaveChannelSelect(
-                placeholder="Optional: folder for closed tickets",
+            _CustomPickButton(
+                kind='channel',
+                label="Optional: folder for closed tickets",
                 columns=("ticket_archive_category_id",),
                 also_same=("ticket_closed_category_id",),
                 channel_types=[discord.ChannelType.category],
@@ -954,8 +1041,9 @@ class DiscordCategoryCustomizationView(SetupBackView):
         )
 
         self.add_item(
-            SaveChannelSelect(
-                placeholder="Optional: folder for staff tools",
+            _CustomPickButton(
+                kind='channel',
+                label="Optional: folder for staff tools",
                 columns=("management_category_id",),
                 also_same=("staff_tools_category_id",),
                 channel_types=[discord.ChannelType.category],
@@ -969,8 +1057,9 @@ class ChannelCustomizationPageOne(SetupBackView):
         super().__init__(parent=parent)
 
         self.add_item(
-            SaveChannelSelect(
-                placeholder="Optional: welcome channel",
+            _CustomPickButton(
+                kind='channel',
+                label="Optional: welcome channel",
                 columns=("welcome_channel_id",),
                 channel_types=[discord.ChannelType.text],
                 row=0,
@@ -978,8 +1067,9 @@ class ChannelCustomizationPageOne(SetupBackView):
         )
 
         self.add_item(
-            SaveChannelSelect(
-                placeholder="Verify: channel with the Verify button",
+            _CustomPickButton(
+                kind='channel',
+                label="Verify: channel with the Verify button",
                 columns=("verify_channel_id",),
                 channel_types=[discord.ChannelType.text],
                 row=1,
@@ -987,8 +1077,9 @@ class ChannelCustomizationPageOne(SetupBackView):
         )
 
         self.add_item(
-            SaveChannelSelect(
-                placeholder="Tickets: channel with Create Ticket panel",
+            _CustomPickButton(
+                kind='channel',
+                label="Tickets: channel with Create Ticket panel",
                 columns=("ticket_panel_channel_id",),
                 also_same=("support_channel_id",),
                 channel_types=[discord.ChannelType.text],
@@ -997,8 +1088,9 @@ class ChannelCustomizationPageOne(SetupBackView):
         )
 
         self.add_item(
-            SaveChannelSelect(
-                placeholder="Voice Verify: voice channel for the check",
+            _CustomPickButton(
+                kind='channel',
+                label="Voice Verify: voice channel for the check",
                 columns=("vc_verify_channel_id",),
                 channel_types=[discord.ChannelType.voice],
                 row=3,
@@ -1050,8 +1142,9 @@ class ChannelCustomizationPageTwo(SetupBackView):
         super().__init__(parent=parent)
 
         self.add_item(
-            SaveChannelSelect(
-                placeholder="Voice Verify: staff request channel",
+            _CustomPickButton(
+                kind='channel',
+                label="Voice Verify: staff request channel",
                 columns=("vc_verify_queue_channel_id",),
                 channel_types=[discord.ChannelType.text],
                 row=0,
@@ -1059,8 +1152,9 @@ class ChannelCustomizationPageTwo(SetupBackView):
         )
 
         self.add_item(
-            SaveChannelSelect(
-                placeholder="Join and leave: staff log channel",
+            _CustomPickButton(
+                kind='channel',
+                label="Join and leave: staff log channel",
                 columns=("join_leave_log_channel_id",),
                 also_same=JOIN_LEAVE_LOG_ALIASES,
                 channel_types=[discord.ChannelType.text],
@@ -1069,8 +1163,9 @@ class ChannelCustomizationPageTwo(SetupBackView):
         )
 
         self.add_item(
-            SaveChannelSelect(
-                placeholder="Bot status: uptime and health channel",
+            _CustomPickButton(
+                kind='channel',
+                label="Bot status: uptime and health channel",
                 columns=("health_channel_id",),
                 also_same=(
                     "status_channel_id",
@@ -1126,8 +1221,9 @@ class LogStatusCustomizationView(SetupBackView):
         super().__init__(parent=parent)
 
         self.add_item(
-            SaveChannelSelect(
-                placeholder="Tickets: saved transcript channel",
+            _CustomPickButton(
+                kind='channel',
+                label="Tickets: saved transcript channel",
                 columns=("transcripts_channel_id",),
                 channel_types=[discord.ChannelType.text],
                 row=0,
@@ -1136,8 +1232,9 @@ class LogStatusCustomizationView(SetupBackView):
         )
 
         self.add_item(
-            SaveChannelSelect(
-                placeholder="Moderation and protection log channel",
+            _CustomPickButton(
+                kind='channel',
+                label="Moderation and protection log channel",
                 columns=("modlog_channel_id",),
                 also_same=STAFF_LOG_ALIASES,
                 channel_types=[discord.ChannelType.text],
@@ -1146,8 +1243,9 @@ class LogStatusCustomizationView(SetupBackView):
         )
 
         self.add_item(
-            SaveChannelSelect(
-                placeholder="Join and leave log channel",
+            _CustomPickButton(
+                kind='channel',
+                label="Join and leave log channel",
                 columns=("join_leave_log_channel_id",),
                 also_same=JOIN_LEAVE_LOG_ALIASES,
                 channel_types=[discord.ChannelType.text],
@@ -1156,8 +1254,9 @@ class LogStatusCustomizationView(SetupBackView):
         )
 
         self.add_item(
-            SaveChannelSelect(
-                placeholder="Bot status and uptime channel",
+            _CustomPickButton(
+                kind='channel',
+                label="Bot status and uptime channel",
                 columns=("status_channel_id",),
                 also_same=(
                     "bot_status_channel_id",

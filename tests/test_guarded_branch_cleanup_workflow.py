@@ -69,11 +69,16 @@ def test_current_setup_picker_preserves_closed_pr9_configuration_contract() -> N
     ):
         assert f'"{key}"' in source
     for required in (
-        "_require_setup_permission", "discord.ui.ChannelSelect",
-        "discord.ui.RoleSelect", "_validate_ticket_setup",
+        "_require_setup_permission", "DankPickerView",
+        "make_choice", "_validate_ticket_setup",
         "_validate_verify_setup", "_validate_log_setup",
         "upsert_guild_config", "invalidate_guild_config",
         "class SetupPickerHome", "class TicketPicker",
         "class VerifyPicker", "class VCPicker", "class LogPicker",
     ):
         assert required in source
+    # The wizard's channel/role picks run through the house picker
+    # framework (Slice 3 migration); the Discord-native entity selects
+    # from the original PR #9 surface are gone.
+    assert "discord.ui.ChannelSelect" not in source
+    assert "discord.ui.RoleSelect" not in source

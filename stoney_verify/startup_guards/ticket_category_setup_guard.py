@@ -341,11 +341,17 @@ class CategorySetupManagerView(discord.ui.View):
             if custom_rows:
                 if self.context == _MANAGER_CONTEXT_SETUP:
                     self.add_item(
-                        solid.CategorySelect(
+                        solid._CategoryPickOpenButton(
                             custom_rows,
                             action="edit",
-                            placeholder="✏️ Edit a custom ticket choice",
+                            label="Edit a custom ticket choice",
+                            emoji="✏️",
                             row=2,
+                            home_factory=lambda: CategorySetupManagerView(
+                                state=state,
+                                db_error=db_error,
+                                context=self.context,
+                            ),
                         )
                     )
 

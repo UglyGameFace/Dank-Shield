@@ -43,11 +43,22 @@ def button_labels(view: discord.ui.View) -> list[str]:
 
 
 def setup_choice_labels(view: discord.ui.View) -> set[str]:
-    result: set[str] = set()
-    for child in view.children:
-        if isinstance(child, discord.ui.Select):
-            result.update(str(option.label) for option in child.options)
-    return result
+    # Picker migration slice 3: plan choices live in the house picker
+    # the opener button builds, not in a raw select on the panel.
+    opener = button_by_id(view, "dank_setup_plans:choose:open:v1")
+    captured: dict[str, Any] = {}
+
+    async def edit_message(**kwargs: Any) -> None:
+        captured.update(kwargs)
+
+    interaction = SimpleNamespace(
+        guild=getattr(opener, "_guild", None),
+        message=SimpleNamespace(embeds=[]),
+        response=SimpleNamespace(edit_message=edit_message),
+    )
+    run(opener.callback(interaction))
+    picker = captured["view"]
+    return {str(choice.label) for choice in picker._all_choices}
 
 
 def test_new_server_opens_setup_type_before_guided_setup(
@@ -165,10 +176,11 @@ def test_quick_setup_plan_picker_is_a_root_screen(
         guild=SimpleNamespace(id=101),
     )
 
-    assert button_labels(view) == [
+    assert set(button_labels(view)) == {
+        "Choose a setup plan",
         "Setup Home",
         "Close",
-    ]
+    }
     assert "Back to All Features" not in button_labels(view)
     assert "Back to Manage Setup" not in button_labels(view)
 

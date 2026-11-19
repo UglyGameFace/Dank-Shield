@@ -20,6 +20,10 @@ from typing import Any, Mapping, Optional
 import discord
 
 from stoney_verify.spam_guard_defaults import SPAM_GUARD_DEFAULT_ENABLED
+from stoney_verify.ui.picker import (
+    DankPickerView as _DankPickerView,
+    chunk_choices as _chunk_choices,
+)
 from stoney_verify.settings_registry import (
     normalize_spam_guard_settings as _registry_normalize_spam_guard_settings,
     spam_guard_defaults as _registry_spam_guard_defaults,
@@ -602,32 +606,159 @@ def _warning_fixes(lines: list[str]) -> list[str]:
     return out[:5]
 
 
-class ServicePresetSelect(discord.ui.Select):
-    def __init__(self, current: ServiceState) -> None:
-        options = []
-        for key, (label, flags, description) in PRESETS.items():
-            selected = flags == current.as_payload()
-            emoji = "🎫" if key == "tickets" else "✅" if key == "verification" else "🛡️" if key == "spamguard" else "🚀"
-            options.append(discord.SelectOption(label=label, value=key, description=description[:100], emoji=emoji, default=selected))
-        super().__init__(placeholder="Choose what this server will use", min_values=1, max_values=1, options=options, row=0)
+class _PickerViewBase(_DankPickerView):
+    """Paged house picker (chunk_choices) with Prev/Next buttons."""
+
+    def __init__(
+        self,
+        *,
+        choices: Any,
+        on_pick: Any,
+        custom_id: str,
+        placeholder: str,
+        title: str,
+        on_home: Any = None,
+        page: int = 0,
+    ) -> None:
+        all_choices = list(choices or [])
+        pages = _chunk_choices(all_choices) or [[]]
+        page = max(0, min(int(page), len(pages) - 1))
+        super().__init__(
+            author_id=0,
+            choices=pages[page],
+            on_pick=on_pick,
+            custom_id=f"{custom_id}:{page}" if len(pages) > 1 else custom_id,
+            placeholder=(
+                f"{placeholder} • Page {page + 1}/{len(pages)}"
+                if len(pages) > 1 else placeholder
+            ),
+            title=title,
+            timeout=900,
+            on_home=on_home,
+            home_label="Back",
+        )
+        self._all_choices = all_choices
+        self._picker_on_pick = on_pick
+        self._base_custom_id = custom_id
+        self._base_placeholder = placeholder
+        self._picker_title = title
+        self._picker_on_home = on_home
+        self.page = page
+        self.pages = len(pages)
+        if len(pages) > 1:
+            self.add_item(_ServiceModesPageButton(delta=-1, disabled=page <= 0))
+            self.add_item(_ServiceModesPageButton(delta=1, disabled=page >= len(pages) - 1))
+
+    def _for_page(self, page: int) -> "_PickerViewBase":
+        return type(self)(
+            choices=self._all_choices,
+            on_pick=self._picker_on_pick,
+            custom_id=self._base_custom_id,
+            placeholder=self._base_placeholder,
+            title=self._picker_title,
+            on_home=self._picker_on_home,
+            page=page,
+        )
+
+
+class _ServiceModesPageButton(discord.ui.Button):
+    def __init__(self, *, delta: int, disabled: bool) -> None:
+        super().__init__(
+            label="Previous" if delta < 0 else "Next",
+            emoji="◀️" if delta < 0 else "▶️",
+            style=discord.ButtonStyle.secondary,
+            custom_id=(
+                "dank_setup_service_modes:picker:prev" if delta < 0
+                else "dank_setup_service_modes:picker:next"
+            ),
+            row=2,
+            disabled=bool(disabled),
+        )
+        self.delta = int(delta)
 
     async def callback(self, interaction: discord.Interaction) -> None:
-        guild = interaction.guild
-        if guild is None:
-            return await interaction.response.send_message("❌ This must be used inside a server.", ephemeral=True)
-        key = str(self.values[0])
-        preset = PRESETS.get(key)
-        if preset is None:
-            return await interaction.response.send_message("❌ Unknown service preset.", ephemeral=True)
-        label, flags, description = preset
-        try:
-            await interaction.response.defer(ephemeral=True)
-        except Exception:
-            pass
-        await _save_service_state(guild.id, dict(flags), interaction.user)
-        state = await load_service_state(guild.id)
-        embed = await build_service_picker_embed(guild, state, saved_message=f"Saved **{label}**. {description}")
-        await interaction.edit_original_response(embed=embed, view=ServiceModeView(state))
+        view = self.view
+        if not isinstance(view, _PickerViewBase):
+            return
+        page = max(0, min(view.page + self.delta, view.pages - 1))
+        await interaction.response.edit_message(view=view._for_page(page))
+
+
+def _service_preset_choices(current: ServiceState) -> list[Any]:
+    from stoney_verify.ui.picker import make_choice
+
+    choices = []
+    for key, (label, flags, description) in PRESETS.items():
+        selected = flags == current.as_payload()
+        emoji = "🎫" if key == "tickets" else "✅" if key == "verification" else "🛡️" if key == "spamguard" else "🚀"
+        choices.append(make_choice(label, key, description=description[:100], emoji=emoji, default=selected))
+    return choices
+
+
+async def _apply_service_preset_pick(interaction: discord.Interaction, key: str) -> None:
+    """The old ServicePresetSelect callback body, driven by the house picker."""
+    guild = interaction.guild
+    if guild is None:
+        return await interaction.response.send_message("❌ This must be used inside a server.", ephemeral=True)
+    preset = PRESETS.get(key)
+    if preset is None:
+        return await interaction.response.send_message("❌ Unknown service preset.", ephemeral=True)
+    label, flags, description = preset
+    try:
+        await interaction.response.defer(ephemeral=True)
+    except Exception:
+        pass
+    await _save_service_state(guild.id, dict(flags), interaction.user)
+    state = await load_service_state(guild.id)
+    embed = await build_service_picker_embed(guild, state, saved_message=f"Saved **{label}**. {description}")
+    await interaction.edit_original_response(embed=embed, view=ServiceModeView(state))
+
+
+class _ServiceModesPickerView(_PickerViewBase):
+    """House picker for the compat service-mode panel."""
+
+
+class _ServicePresetOpenButton(discord.ui.Button):
+    """Opens the house picker for the service preset on the same message."""
+
+    def __init__(self, current: ServiceState) -> None:
+        super().__init__(
+            label="Choose what this server will use",
+            emoji="🧭",
+            style=discord.ButtonStyle.primary,
+            custom_id="dank_setup_service_modes:preset:open:v1",
+            row=0,
+        )
+        self.current = current
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        current = self.current
+
+        async def on_pick(pick_interaction: discord.Interaction, value: str) -> None:
+            await _apply_service_preset_pick(pick_interaction, value)
+
+        async def on_home(home_interaction: discord.Interaction) -> None:
+            message = getattr(home_interaction, "message", None)
+            embeds = getattr(message, "embeds", None) if message is not None else None
+            await home_interaction.response.edit_message(
+                embed=embeds[0] if embeds else None,
+                view=ServiceModeView(current),
+            )
+
+        picker = _ServiceModesPickerView(
+            choices=_service_preset_choices(current),
+            on_pick=on_pick,
+            custom_id="dank_setup_service_modes:preset:v1",
+            placeholder="Choose what this server will use",
+            title="Choose what this server will use",
+            on_home=on_home,
+        )
+        message = getattr(interaction, "message", None)
+        embeds = getattr(message, "embeds", None) if message is not None else None
+        await interaction.response.edit_message(
+            embed=embeds[0] if embeds else None,
+            view=picker,
+        )
 
 
 class ServiceToggleButton(discord.ui.Button):
@@ -775,7 +906,7 @@ def _append_native_setup_navigation(
 class ServiceModeView(discord.ui.View):
     def __init__(self, state: ServiceState) -> None:
         super().__init__(timeout=900)
-        self.add_item(ServicePresetSelect(state))
+        self.add_item(_ServicePresetOpenButton(state))
         self.add_item(ServiceToggleButton("tickets_enabled", "Tickets", state.tickets, "🎫", 1))
         self.add_item(ServiceToggleButton("verification_enabled", "ID Verify", state.verification, "✅", 1))
         self.add_item(ServiceToggleButton("voice_verification_enabled", "Voice Verify", state.voice, "🎙️", 1))

@@ -429,9 +429,17 @@ def _assert_native_setup_ux_owners(failures: list[str]) -> None:
                 f"{exposed!r}"
             )
 
-    if "class SetupTypeChoiceSelect(discord.ui.Select)" not in fresh_text:
+    if "class _SetupTypeOpenButton(discord.ui.Button)" not in fresh_text:
         failures.append(
-            "setup type chooser must use SetupTypeChoiceSelect"
+            "setup type chooser must open the house picker via _SetupTypeOpenButton"
+        )
+    if "dank_setup_plans:choose:v1" not in fresh_text:
+        failures.append(
+            "setup type chooser must use the house picker (dank_setup_plans:choose:v1)"
+        )
+    if "class SetupTypeChoiceSelect" in fresh_text:
+        failures.append(
+            "setup type chooser must not use a raw discord.ui.Select"
         )
 
     for current_label in (
