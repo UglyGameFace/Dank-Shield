@@ -147,8 +147,11 @@ def test_mobile_studio_has_clear_separate_sections_and_one_confirmation() -> Non
         "Add Buttons", "Saved Designs", "More Tools",
         "Edit Existing Post", "Undo", "Preview & Post",
     } <= labels
-    assert len([item for item in view.children if isinstance(item, discord.ui.Button)]) == 10
+    # 10 section buttons + the Choose a Channel button that opens the
+    # house destination picker (the raw ChannelSelect is gone).
+    assert len([item for item in view.children if isinstance(item, discord.ui.Button)]) == 11
     assert "Use This Channel" in labels
+    assert "Choose a Channel" in labels
     assert not {"JSON Files", "Smart Text", "Role Controls", "Form Builder"} & labels
     from stoney_verify.embed_studio_ui import (
         StudioDesignTools, StudioButtonTools, StudioSavedTools, StudioAdvancedTools,
@@ -166,7 +169,10 @@ def test_mobile_studio_has_clear_separate_sections_and_one_confirmation() -> Non
             "Upcoming Scheduled Posts"} <= {
         item.label for item in StudioAdvancedTools(session).children
     }
-    assert any(isinstance(item, discord.ui.ChannelSelect) for item in view.children)
+    # Picker migration slice 1: the home view carries no raw ChannelSelect;
+    # the destination is chosen in the house picker (see
+    # tests/test_studio_picker_migration.py for the paging proof).
+    assert not any(isinstance(item, discord.ui.ChannelSelect) for item in view.children)
     review = StudioReviewView(session)
     assert "Post Now" in {getattr(item, "label", "") for item in review.children}
     session.post_key = "111:222"
