@@ -11,7 +11,7 @@ from stoney_verify.embed_studio_core import new_project
 from stoney_verify.embed_studio_ui import (
     StudioHomeView,StudioSession,StudioTeamReviewHomeView,
     StudioReviewSubmissionModal,StudioReviewDecisionView,
-    StudioReviewQueueView, StudioReviewQueueSelect,
+    _review_queue_picker_view,
 )
 
 
@@ -90,10 +90,10 @@ def test_discord_mobile_controls_private_and_bounded():
     }
     assert len(StudioReviewSubmissionModal(session).children)==1
     item={"id":str(uuid4()),"title":"Post","submitted_by":"200","channel_id":"300"}
-    pending=StudioReviewQueueView(session,[item],state="pending")
-    selectors=[x for x in pending.children if isinstance(x,StudioReviewQueueSelect)]
-    assert len(selectors)==1
-    assert selectors[0].options[0].label=="Post"
+    pending=_review_queue_picker_view(session,[item],state="pending")
+    selector=pending.children[0]
+    assert selector.custom_id=="dank:embed_studio:review_queue:pending:v1"
+    assert selector.options[0].label=="Post"
     decision=StudioReviewDecisionView(session,str(item["id"]))
     assert {"Approve & Edit Copy","Reject Request","Keep Pending"} <= {
         getattr(x,"label","") for x in decision.children

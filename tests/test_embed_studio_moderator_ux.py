@@ -19,12 +19,16 @@ def test_home_is_a_9_action_guided_post_instead_of_20_technical_buttons():
     session=ui.StudioSession(guild_id=111,owner_id=222)
     home=ui.StudioHomeView(session)
     buttons=[item for item in home.children if isinstance(item,discord.ui.Button)]
-    assert len(buttons)==10
-    assert len([item for item in home.children if isinstance(item,discord.ui.ChannelSelect)])==1
+    assert len(buttons)==11
+    # The channel step is the house picker now, opened from a button with a
+    # stable custom_id; no raw Discord ChannelSelect remains on the home view.
+    assert len([item for item in home.children if isinstance(item,discord.ui.ChannelSelect)])==0
+    openers=[item for item in home.children if isinstance(item,ui._StudioPickerOpenButton)]
+    assert len(openers)==1 and openers[0].custom_id=="dank:embed_studio:destination:open:v1"
     assert max(sum(1 for item in home.children if item.row==row) for row in range(5))<=5
     assert {"Pick a Layout","Write Message","Look & Images","Add Buttons",
             "Saved Designs","More Tools","Edit Existing Post","Undo",
-            "Preview & Post", "Use This Channel"} == {item.label for item in buttons}
+            "Preview & Post", "Use This Channel", "Choose a Channel"} == {item.label for item in buttons}
     assert "JSON Files" not in _labels(home)
     guide=ui._summary(session)
     assert "four easy steps" in guide.description.lower()
@@ -61,9 +65,8 @@ def test_layout_choice_asks_before_replacing_existing_draft(monkeypatch):
     async def fake_menu(*args,**kwargs):
         actions.append(kwargs)
     monkeypatch.setattr(ui,"_menu",fake_menu)
-    select=ui.StarterSelect(session)
-    select._values=[PRESETS[0][0]]
-    asyncio.run(select.callback(object()))
+    picker=ui._starter_picker_view(session)
+    asyncio.run(picker.handle_pick(object(), PRESETS[0][0]))
     assert session.project==snapshot
     assert isinstance(actions[0]["view"],ui.ConfirmStarterLayout)
     assert {"Use New Layout","Keep My Draft"} <= _labels(actions[0]["view"])

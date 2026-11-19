@@ -312,10 +312,12 @@ def test_welcome_and_exit_desktop_mobile_shared_navigation():
     assert len(exit_actions) == 11
     for section, names in exit_ui._EXIT_SECTIONS.items():
         panel = exit_ui.ExitCardStudioView(owner_id=10, cfg={}, section=section)
-        assert set(names) | {"Refresh", "Welcome & Join", "Close"} == _buttons(panel)
+        assert set(names) | {"Refresh", "Welcome & Join", "Close", "Switch Section"} | (
+            {"Choose Channel"} if section == "delivery" else set()
+        ) == _buttons(panel)
         _assert_compact(panel)
-        assert sum(isinstance(item, exit_ui._ExitSectionSelect) for item in panel.children) == 1
-        assert sum(isinstance(item, exit_ui.ExitCardChannelSelect) for item in panel.children) == (1 if section == "delivery" else 0)
+        assert sum(isinstance(item, exit_ui._ExitSectionOpenButton) for item in panel.children) == 1
+        assert sum(isinstance(item, exit_ui._ExitChannelOpenButton) for item in panel.children) == (1 if section == "delivery" else 0)
 
 
 def test_setup_and_trusted_advert_buttons_are_partitioned_not_deleted():
@@ -389,9 +391,11 @@ def test_join_card_studio_remains_small_on_all_discord_clients():
     }
     for section, names in join._JOIN_CARD_SECTIONS.items():
         view = join.WelcomeCardStudioView(owner_id=9, section=section)
-        assert _buttons(view) == set(names) | {"Refresh", "Welcome & Join", "Close"}
+        assert _buttons(view) == set(names) | {"Refresh", "Welcome & Join", "Close", "Switch Section"} | (
+            {"Choose Channel"} if section == "delivery" else set()
+        )
         _assert_compact(view)
-        assert sum(isinstance(item, join.WelcomeCardChannelSelect) for item in view.children) == (1 if section == "delivery" else 0)
+        assert sum(isinstance(item, join._WelcomeChannelOpenButton) for item in view.children) == (1 if section == "delivery" else 0)
 
 
 def test_action_center_member_and_staff_actions_have_distinct_pages():

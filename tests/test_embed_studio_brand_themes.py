@@ -14,8 +14,9 @@ from stoney_verify.embed_studio_core import (
     theme_from_project, theme_name, validate_theme, validate_project,
 )
 from stoney_verify.embed_studio_ui import (
-    BrandThemeMenu, BrandThemeSelect, ConfirmThemeRemovalView,
+    BrandThemeMenu, ConfirmThemeRemovalView,
     StudioHomeView, StudioSession, ThemeNameModal,
+    _StudioPickerOpenButton, _brand_theme_picker_view,
 )
 
 
@@ -123,12 +124,13 @@ def test_mobile_controls_reuse_editor_and_stay_within_discord_limits():
     lib = _saved_lib()
     lib["themes"]["foo"] = {"name": "Stored", "style": {"color": "ABCDEF"}}
     view = BrandThemeMenu(session, lib)
-    # discord.py registers decorated buttons before dynamically added selects.
-    # Find the actual control instead of relying on children insertion order.
-    selectors = [item for item in view.children if isinstance(item, BrandThemeSelect)]
-    assert len(selectors) == 1
-    selector = selectors[0]
-    assert selector.row == 0
+    # The menu opens the house picker from a button; the picker itself
+    # carries the preset + saved-theme options on a stable custom_id.
+    openers = [item for item in view.children if isinstance(item, _StudioPickerOpenButton)]
+    assert len(openers) == 1
+    assert openers[0].row == 0
+    selector = _brand_theme_picker_view(session, lib).children[0]
+    assert selector.custom_id == "dank:embed_studio:brand_theme:v1"
     assert any(o.label == "Stored" for o in selector.options)
     assert len(selector.options) == len(THEME_PRESETS) + 1
     assert len(ThemeNameModal(session).children) == 1

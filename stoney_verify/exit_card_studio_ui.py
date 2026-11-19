@@ -7,6 +7,7 @@ from typing import Any, Awaitable, Callable, Mapping, Optional
 import discord
 
 from .ui.current_channel import current_text_channel
+from .ui.picker import DankPickerView, chunk_choices, make_choice
 
 from .commands_ext.public_setup_group import _require_setup_permission, _upsert_config
 from .exit_card_runtime import build_exit_card_embed, resolve_exit_card_channel
@@ -202,26 +203,61 @@ def _studio_embed(
     return embed
 
 
-class _ExitSectionSelect(discord.ui.Select):
-    def __init__(self, owner_id: int, section: str) -> None:
+class _ExitSectionPickerView(DankPickerView):
+    """House picker for switching Exit Card Studio sections in place."""
+
+    def __init__(self, *, owner_id: int, section: str) -> None:
         self.owner_id = int(owner_id)
+        self.section = section
+
+        async def on_pick(interaction: discord.Interaction, value: str) -> None:
+            if not interaction.response.is_done():
+                await interaction.response.defer()
+            await _refresh(interaction, section=value)
+
+        async def on_home(interaction: discord.Interaction) -> None:
+            await _refresh(interaction, section=section)
+
         super().__init__(
-            placeholder="Choose Exit Card settings",
-            options=[
-                discord.SelectOption(label=label, value=key, default=key == section)
+            author_id=int(owner_id),
+            choices=[
+                make_choice(label, key, default=key == section)
                 for key, label in _EXIT_SECTION_LABELS.items()
             ],
-            row=0, custom_id="dank:exit:studio:section:v2",
+            on_pick=on_pick,
+            custom_id="dank:exit:studio:section:v2",
+            placeholder="Choose Exit Card settings",
+            title="Exit Card Studio",
+            timeout=900,
+            on_home=on_home,
+            home_label="Back",
         )
 
-    async def callback(self, interaction: discord.Interaction) -> None:
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if int(interaction.user.id) != self.owner_id:
-            return await _private(interaction, content="Open your own Exit Card Studio.")
-        if not await _require_setup_permission(interaction):
+            await _private(interaction, content="Open your own Exit Card Studio.")
+            return False
+        return await _require_setup_permission(interaction)
+
+
+class _ExitSectionOpenButton(discord.ui.Button):
+    def __init__(self, owner_id: int, section: str) -> None:
+        super().__init__(
+            label="Switch Section", emoji="🧭",
+            style=discord.ButtonStyle.secondary,
+            custom_id="dank:exit:studio:section:open:v1", row=0,
+        )
+        self.owner_id = int(owner_id)
+        self.section = section
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        view = self.view
+        if not isinstance(view, ExitCardStudioView) or not await view.interaction_check(interaction):
             return
-        if not interaction.response.is_done():
-            await interaction.response.defer()
-        await _refresh(interaction, section=self.values[0])
+        await interaction.response.edit_message(
+            content="Choose Exit Card settings", embed=None,
+            view=_ExitSectionPickerView(owner_id=self.owner_id, section=self.section),
+        )
 
 
 async def send_exit_studio_preview(interaction: discord.Interaction) -> None:
@@ -282,27 +318,13 @@ class _OwnedView(discord.ui.View):
         return await _require_setup_permission(interaction)
 
 
-class _ChoiceSelect(discord.ui.Select):
-    def __init__(
-        self,
-        *,
-        placeholder: str,
-        options: list[discord.SelectOption],
-        on_pick: Callable[[discord.Interaction, str], Awaitable[None]],
-    ) -> None:
-        super().__init__(
-            placeholder=placeholder,
-            options=options[:25],
-            min_values=1,
-            max_values=1,
-        )
-        self._on_pick = on_pick
+class _ChoiceView(DankPickerView):
+    """House picker for the Exit Card Studio's fixed option lists.
 
-    async def callback(self, interaction: discord.Interaction) -> None:
-        await self._on_pick(interaction, (self.values or [""])[0])
+    Keeps the old _ChoiceView contract (owner + setup-permission gate,
+    SelectOption inputs, one string value out) on DankPickerView.
+    """
 
-
-class _ChoiceView(_OwnedView):
     def __init__(
         self,
         *,
@@ -310,15 +332,33 @@ class _ChoiceView(_OwnedView):
         placeholder: str,
         options: list[discord.SelectOption],
         on_pick: Callable[[discord.Interaction, str], Awaitable[None]],
+        custom_id: str,
     ) -> None:
-        super().__init__(owner_id=owner_id)
-        self.add_item(
-            _ChoiceSelect(
-                placeholder=placeholder,
-                options=options,
-                on_pick=on_pick,
+        self.owner_id = int(owner_id)
+        choices = [
+            make_choice(
+                option.label, str(option.value),
+                description=option.description or "",
+                emoji=str(option.emoji) if option.emoji is not None else None,
+                default=bool(option.default),
             )
+            for option in options[:25]
+        ]
+        super().__init__(
+            author_id=int(owner_id),
+            choices=choices,
+            on_pick=on_pick,
+            custom_id=custom_id,
+            placeholder=placeholder,
+            title="Exit Card Studio",
+            timeout=300,
         )
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if int(interaction.user.id) != self.owner_id:
+            await _private(interaction, content="❌ Open your own Exit Card Studio to use this control.")
+            return False
+        return await _require_setup_permission(interaction)
 
 
 async def _save_exit_card_channel(
@@ -362,27 +402,115 @@ async def _save_exit_card_channel(
     await _refresh(interaction, notice=f"✅ Exit cards are ON in {channel.mention}.")
 
 
-class ExitCardChannelSelect(discord.ui.ChannelSelect):
-    def __init__(self) -> None:
+class ExitChannelPickerView(DankPickerView):
+    """Paged house picker for the live exit-card channel.
+
+    Every text channel stays reachable: choices are chunked into pages of
+    25 in server order, with the category shown under each channel name.
+    """
+
+    def __init__(self, *, owner_id: int, guild: discord.Guild, page: int = 0) -> None:
+        self.owner_id = int(owner_id)
+        self.guild = guild
+        all_choices = [
+            make_choice(
+                f"#{channel.name}", str(channel.id),
+                description=channel.category.name if channel.category is not None else "No category",
+            )
+            for channel in guild.text_channels
+        ]
+        pages = chunk_choices(all_choices) or [[]]
+        page = max(0, min(int(page), len(pages) - 1))
+        self.page = page
+        self.pages = len(pages)
+        self._all_choices = all_choices
+
+        async def on_pick(interaction: discord.Interaction, value: str) -> None:
+            active_guild = interaction.guild
+            try:
+                channel = active_guild.get_channel(int(value)) if active_guild else None
+            except (TypeError, ValueError):
+                channel = None
+            if not isinstance(channel, discord.TextChannel):
+                return await _private(interaction, content="❌ Choose a text channel from this server.")
+            await _save_exit_card_channel(interaction, channel)
+
+        async def on_home(interaction: discord.Interaction) -> None:
+            await _refresh(interaction, section="delivery")
+
         super().__init__(
-            placeholder="Choose the exact live exit-card channel…",
-            min_values=1,
-            max_values=1,
-            channel_types=[discord.ChannelType.text],
-            custom_id="dank:exit:studio:channel:v1",
-            row=0,
+            author_id=int(owner_id),
+            choices=pages[page],
+            on_pick=on_pick,
+            custom_id=(
+                f"dank:exit:studio:channel:v1:{page}" if len(pages) > 1
+                else "dank:exit:studio:channel:v1"
+            ),
+            placeholder=(
+                f"Choose the exact live exit-card channel… • Page {page + 1}/{len(pages)}"
+                if len(pages) > 1 else "Choose the exact live exit-card channel…"
+            ),
+            title="Exit Card Studio",
+            timeout=900,
+            on_home=on_home,
+            home_label="Back",
         )
+        if len(pages) > 1:
+            self.add_item(_ExitChannelPageButton(delta=-1, disabled=page <= 0))
+            self.add_item(_ExitChannelPageButton(delta=1, disabled=page >= len(pages) - 1))
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if int(interaction.user.id) != self.owner_id:
+            await _private(interaction, content="❌ Open your own Exit Card Studio to use this control.")
+            return False
+        return await _require_setup_permission(interaction)
+
+    def _for_page(self, page: int) -> "ExitChannelPickerView":
+        return ExitChannelPickerView(owner_id=self.owner_id, guild=self.guild, page=page)
+
+
+class _ExitChannelPageButton(discord.ui.Button):
+    def __init__(self, *, delta: int, disabled: bool) -> None:
+        super().__init__(
+            label="Previous" if delta < 0 else "Next",
+            emoji="◀️" if delta < 0 else "▶️",
+            style=discord.ButtonStyle.secondary,
+            custom_id=(
+                "dank:exit:studio:channel:prev" if delta < 0
+                else "dank:exit:studio:channel:next"
+            ),
+            row=2, disabled=bool(disabled),
+        )
+        self.delta = int(delta)
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        view = self.view
+        if not isinstance(view, ExitChannelPickerView) or not await view.interaction_check(interaction):
+            return
+        page = max(0, min(view.page + self.delta, view.pages - 1))
+        await interaction.response.edit_message(view=view._for_page(page))
+
+
+class _ExitChannelOpenButton(discord.ui.Button):
+    def __init__(self, owner_id: int) -> None:
+        super().__init__(
+            label="Choose Channel", emoji="💬",
+            style=discord.ButtonStyle.primary,
+            custom_id="dank:exit:studio:channel:open:v1", row=1,
+        )
+        self.owner_id = int(owner_id)
 
     async def callback(self, interaction: discord.Interaction) -> None:
         view = self.view
         if not isinstance(view, ExitCardStudioView) or not await view.interaction_check(interaction):
             return
         guild = interaction.guild
-        selected = self.values[0] if self.values else None
-        channel = guild.get_channel(int(selected.id)) if guild is not None and selected is not None else None
-        if not isinstance(channel, discord.TextChannel):
-            return await _private(interaction, content="❌ Choose a text channel from this server.")
-        await _save_exit_card_channel(interaction, channel)
+        if guild is None:
+            return await _private(interaction, content="❌ Use this inside a server.")
+        await interaction.response.edit_message(
+            content="Choose the exact live exit-card channel.", embed=None,
+            view=ExitChannelPickerView(owner_id=self.owner_id, guild=guild),
+        )
 
 
 class ExitTextModal(discord.ui.Modal):
@@ -475,11 +603,9 @@ class ExitCardStudioView(_OwnedView):
         self.section = section if section in _EXIT_SECTIONS else "delivery"
         original = {str(getattr(item, "label", "")): item for item in self.children}
         self.clear_items()
-        self.add_item(_ExitSectionSelect(self.owner_id, self.section))
+        self.add_item(_ExitSectionOpenButton(self.owner_id, self.section))
         if self.section == "delivery":
-            channel_picker = ExitCardChannelSelect()
-            channel_picker.row = 1
-            self.add_item(channel_picker)
+            self.add_item(_ExitChannelOpenButton(self.owner_id))
         actions = (*_EXIT_SECTIONS[self.section], "Refresh", "Welcome & Join", "Close")
         for index, name in enumerate(actions):
             item = original[name]
@@ -553,7 +679,7 @@ class ExitCardStudioView(_OwnedView):
         await _private(
             interaction,
             content="Choose the live Exit Card theme.",
-            view=_ChoiceView(owner_id=self.owner_id, placeholder="Choose Exit Card theme…", options=options, on_pick=pick),
+            view=_ChoiceView(owner_id=self.owner_id, placeholder="Choose Exit Card theme…", options=options, on_pick=pick, custom_id="dank:exit:studio:theme:v1"),
         )
 
     @discord.ui.button(label="Font", emoji="🔤", style=discord.ButtonStyle.secondary, row=1)
@@ -591,7 +717,7 @@ class ExitCardStudioView(_OwnedView):
         await _private(
             interaction,
             content="Choose the Exit Card font. Uploaded fonts are shared safely with Welcome Studio.",
-            view=_ChoiceView(owner_id=self.owner_id, placeholder="Choose Exit Card font…", options=options, on_pick=pick),
+            view=_ChoiceView(owner_id=self.owner_id, placeholder="Choose Exit Card font…", options=options, on_pick=pick, custom_id="dank:exit:studio:font:v1"),
         )
 
     @discord.ui.button(label="Colors", emoji="🎨", style=discord.ButtonStyle.secondary, row=2)
@@ -657,7 +783,7 @@ class ExitCardStudioView(_OwnedView):
         await _private(
             interaction,
             content="Choose how Exit Card colors are resolved.",
-            view=_ChoiceView(owner_id=self.owner_id, placeholder="Choose Exit Card colors…", options=options, on_pick=pick),
+            view=_ChoiceView(owner_id=self.owner_id, placeholder="Choose Exit Card colors…", options=options, on_pick=pick, custom_id="dank:exit:studio:colors:v1"),
         )
 
     @discord.ui.button(label="Shuffle", emoji="🔀", style=discord.ButtonStyle.secondary, row=2)
@@ -679,7 +805,7 @@ class ExitCardStudioView(_OwnedView):
         await _private(
             interaction,
             content="Choose deterministic Exit Card shuffle behavior.",
-            view=_ChoiceView(owner_id=self.owner_id, placeholder="Choose Exit Card shuffle mode…", options=options, on_pick=pick),
+            view=_ChoiceView(owner_id=self.owner_id, placeholder="Choose Exit Card shuffle mode…", options=options, on_pick=pick, custom_id="dank:exit:studio:shuffle:v1"),
         )
 
     @discord.ui.button(label="Preview", emoji="👁️", style=discord.ButtonStyle.primary, row=2)

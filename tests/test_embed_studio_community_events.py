@@ -45,7 +45,7 @@ def test_event_picker_remains_under_discord_25_options():
     assert len(PRESETS) == 20
     assert len({key for key, _name in PRESETS}) == len(PRESETS)
     assert len(PRESETS) <= 25
-    options = ui.StarterSelect(ui.StudioSession(guild_id=111, owner_id=222)).options
+    options = ui._starter_picker_view(ui.StudioSession(guild_id=111, owner_id=222)).children[0].options
     assert len(options) == len(PRESETS)
     assert EVENTS <= {x.value for x in options}
     assert all(x.label and x.description and len(x.description) <= 100 for x in options)
@@ -157,9 +157,8 @@ def test_layout_selection_is_private_and_undoable(monkeypatch):
     async def fake_menu(*_args, **kwargs):
         events.append(kwargs)
     monkeypatch.setattr(ui, "_menu", fake_menu)
-    picker = ui.StarterSelect(session)
-    picker._values = ["movie_night"]
-    asyncio.run(picker.callback(object()))
+    picker = ui._starter_picker_view(session)
+    asyncio.run(picker.handle_pick(object(), "movie_night"))
     assert session.project == old
     assert session.post_key == "111:555"
     assert isinstance(events[0]["view"], ui.ConfirmStarterLayout)

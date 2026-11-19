@@ -14,7 +14,7 @@ from .ui.current_channel import current_text_channel
 
 from .commands_ext.public_setup_group import _require_setup_permission, _upsert_config
 from .guild_config import get_guild_config, invalidate_guild_config
-from .ui.picker import DankPickerView, make_choice
+from .ui.picker import DankPickerView, chunk_choices, make_choice
 from .welcome_card_runtime import build_join_card_embed
 from .welcome_card_service import (
     configured_color_mode,
@@ -206,37 +206,79 @@ def _studio_embed(
     return embed
 
 
-class _JoinCardSectionSelect(discord.ui.Select):
-    def __init__(self, owner_id: int, section: str):
+_JOIN_CARD_SECTION_OPTIONS = (
+    ("delivery", "Delivery"),
+    ("style", "Design"),
+    ("artwork", "Artwork & Uploads"),
+)
+
+
+class _JoinCardSectionPickerView(DankPickerView):
+    """House picker for switching Join Card Studio sections in place."""
+
+    def __init__(self, *, owner_id: int, section: str) -> None:
         self.owner_id = int(owner_id)
+        self.section = section
+
+        async def show(target: discord.Interaction, target_section: str) -> None:
+            guild = target.guild
+            if guild is None:
+                return await _private(target, content="Use this inside a server.")
+            if not target.response.is_done():
+                await target.response.defer()
+            cfg = await get_guild_config(int(guild.id), refresh=True)
+            await target.edit_original_response(
+                embed=_studio_embed(guild, cfg, section=target_section),
+                view=WelcomeCardStudioView(owner_id=self.owner_id, section=target_section),
+            )
+
+        async def on_pick(interaction: discord.Interaction, value: str) -> None:
+            if not await _require_setup_permission(interaction):
+                return
+            await show(interaction, value)
+
+        async def on_home(interaction: discord.Interaction) -> None:
+            await show(interaction, section)
+
         super().__init__(
-            placeholder="Choose join-card settings",
-            options=[
-                discord.SelectOption(label=label, value=key, default=key == section)
-                for key, label in (
-                    ("delivery", "Delivery"),
-                    ("style", "Design"),
-                    ("artwork", "Artwork & Uploads"),
-                )
+            author_id=int(owner_id),
+            choices=[
+                make_choice(label, key, default=key == section)
+                for key, label in _JOIN_CARD_SECTION_OPTIONS
             ],
-            custom_id="dank:welcome:join_studio:section:v2", row=0,
+            on_pick=on_pick,
+            custom_id="dank:welcome:join_studio:section:v2",
+            placeholder="Choose join-card settings",
+            title="Join Card Studio",
+            timeout=900,
+            on_home=on_home,
+            home_label="Back",
         )
 
-    async def callback(self, interaction: discord.Interaction) -> None:
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if int(interaction.user.id) != self.owner_id:
-            return await _private(interaction, content="Open your own Join Card Studio.")
-        if not await _require_setup_permission(interaction):
+            await _private(interaction, content="Open your own Join Card Studio.")
+            return False
+        return True
+
+
+class _JoinCardSectionOpenButton(discord.ui.Button):
+    def __init__(self, owner_id: int, section: str) -> None:
+        super().__init__(
+            label="Switch Section", emoji="🧭",
+            style=discord.ButtonStyle.secondary,
+            custom_id="dank:welcome:join_studio:section:open:v1", row=0,
+        )
+        self.owner_id = int(owner_id)
+        self.section = section
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        view = self.view
+        if not isinstance(view, WelcomeCardStudioView) or not await view.interaction_check(interaction):
             return
-        guild = interaction.guild
-        if guild is None:
-            return await _private(interaction, content="Use this inside a server.")
-        if not interaction.response.is_done():
-            await interaction.response.defer()
-        cfg = await get_guild_config(int(guild.id), refresh=True)
-        section = self.values[0]
-        await interaction.edit_original_response(
-            embed=_studio_embed(guild, cfg, section=section),
-            view=WelcomeCardStudioView(owner_id=self.owner_id, section=section),
+        await interaction.response.edit_message(
+            content="Choose join-card settings", embed=None,
+            view=_JoinCardSectionPickerView(owner_id=self.owner_id, section=self.section),
         )
 
 
@@ -274,32 +316,131 @@ async def _save_live_welcome_card_channel(
     )
 
 
-class WelcomeCardChannelSelect(discord.ui.ChannelSelect):
-    def __init__(self) -> None:
+class WelcomeChannelPickerView(DankPickerView):
+    """Paged house picker for the live join-card channel.
+
+    Every text channel stays reachable: choices are chunked into pages of
+    25 in server order, with the category shown under each channel name.
+    """
+
+    def __init__(self, *, owner_id: int, guild: discord.Guild, page: int = 0) -> None:
+        self.owner_id = int(owner_id)
+        self.guild = guild
+        all_choices = [
+            make_choice(
+                f"#{channel.name}", str(channel.id),
+                description=channel.category.name if channel.category is not None else "No category",
+            )
+            for channel in guild.text_channels
+        ]
+        pages = chunk_choices(all_choices) or [[]]
+        page = max(0, min(int(page), len(pages) - 1))
+        self.page = page
+        self.pages = len(pages)
+        self._all_choices = all_choices
+
+        async def on_pick(interaction: discord.Interaction, value: str) -> None:
+            active_guild = interaction.guild
+            try:
+                channel = active_guild.get_channel(int(value)) if active_guild else None
+            except (TypeError, ValueError):
+                channel = None
+            if not isinstance(channel, discord.TextChannel):
+                return await _private(
+                    interaction,
+                    content="❌ Choose a text channel from this server.",
+                )
+            await _save_live_welcome_card_channel(interaction, self.owner_id, channel)
+
+        async def on_home(interaction: discord.Interaction) -> None:
+            guild_now = interaction.guild
+            if guild_now is None:
+                return await _private(interaction, content="❌ Use this inside a server.")
+            if not interaction.response.is_done():
+                await interaction.response.defer()
+            cfg = await get_guild_config(int(guild_now.id), refresh=True)
+            await interaction.edit_original_response(
+                content=None,
+                embed=_studio_embed(guild_now, cfg),
+                view=WelcomeCardStudioView(owner_id=self.owner_id),
+            )
+
         super().__init__(
-            placeholder="Choose the live join-card channel…",
-            min_values=1,
-            max_values=1,
-            channel_types=[discord.ChannelType.text],
-            custom_id="dank:welcome:studio:join_channel:v1",
-            row=0,
+            author_id=int(owner_id),
+            choices=pages[page],
+            on_pick=on_pick,
+            custom_id=(
+                f"dank:welcome:studio:join_channel:v1:{page}" if len(pages) > 1
+                else "dank:welcome:studio:join_channel:v1"
+            ),
+            placeholder=(
+                f"Choose the live join-card channel… • Page {page + 1}/{len(pages)}"
+                if len(pages) > 1 else "Choose the live join-card channel…"
+            ),
+            title="Join Card Studio",
+            timeout=900,
+            on_home=on_home,
+            home_label="Back",
         )
+        if len(pages) > 1:
+            self.add_item(_WelcomeChannelPageButton(delta=-1, disabled=page <= 0))
+            self.add_item(_WelcomeChannelPageButton(delta=1, disabled=page >= len(pages) - 1))
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if int(interaction.user.id) != self.owner_id:
+            await _private(
+                interaction,
+                content="❌ Open your own Welcome Card Studio to use these controls.",
+            )
+            return False
+        return True
+
+    def _for_page(self, page: int) -> "WelcomeChannelPickerView":
+        return WelcomeChannelPickerView(owner_id=self.owner_id, guild=self.guild, page=page)
+
+
+class _WelcomeChannelPageButton(discord.ui.Button):
+    def __init__(self, *, delta: int, disabled: bool) -> None:
+        super().__init__(
+            label="Previous" if delta < 0 else "Next",
+            emoji="◀️" if delta < 0 else "▶️",
+            style=discord.ButtonStyle.secondary,
+            custom_id=(
+                "dank:welcome:studio:join_channel:prev" if delta < 0
+                else "dank:welcome:studio:join_channel:next"
+            ),
+            row=2, disabled=bool(disabled),
+        )
+        self.delta = int(delta)
 
     async def callback(self, interaction: discord.Interaction) -> None:
         view = self.view
-        if not isinstance(view, WelcomeCardStudioView):
+        if not isinstance(view, WelcomeChannelPickerView) or not await view.interaction_check(interaction):
             return
-        if not await view.interaction_check(interaction):
+        page = max(0, min(view.page + self.delta, view.pages - 1))
+        await interaction.response.edit_message(view=view._for_page(page))
+
+
+class _WelcomeChannelOpenButton(discord.ui.Button):
+    def __init__(self, owner_id: int) -> None:
+        super().__init__(
+            label="Choose Channel", emoji="💬",
+            style=discord.ButtonStyle.primary,
+            custom_id="dank:welcome:studio:join_channel:open:v1", row=1,
+        )
+        self.owner_id = int(owner_id)
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        view = self.view
+        if not isinstance(view, WelcomeCardStudioView) or not await view.interaction_check(interaction):
             return
         guild = interaction.guild
-        selected = self.values[0] if self.values else None
-        channel = guild.get_channel(int(selected.id)) if guild and selected else None
-        if not isinstance(channel, discord.TextChannel):
-            return await _private(
-                interaction,
-                content="❌ Choose a text channel from this server.",
-            )
-        await _save_live_welcome_card_channel(interaction, view.owner_id, channel)
+        if guild is None:
+            return await _private(interaction, content="❌ Use this inside a server.")
+        await interaction.response.edit_message(
+            content="Choose the live join-card channel.", embed=None,
+            view=WelcomeChannelPickerView(owner_id=self.owner_id, guild=guild),
+        )
 
 
 class WelcomeCardStudioView(discord.ui.View):
@@ -309,11 +450,9 @@ class WelcomeCardStudioView(discord.ui.View):
         self.section = section if section in _JOIN_CARD_SECTIONS else "delivery"
         original = {str(getattr(item, "label", "")): item for item in self.children}
         self.clear_items()
-        self.add_item(_JoinCardSectionSelect(self.owner_id, self.section))
+        self.add_item(_JoinCardSectionOpenButton(self.owner_id, self.section))
         if self.section == "delivery":
-            picker = WelcomeCardChannelSelect()
-            picker.row = 1
-            self.add_item(picker)
+            self.add_item(_WelcomeChannelOpenButton(self.owner_id))
         names = (*_JOIN_CARD_SECTIONS[self.section], "Refresh", "Welcome & Join", "Close")
         for index, name in enumerate(names):
             item = original[name]

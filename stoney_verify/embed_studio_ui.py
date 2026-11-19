@@ -18,6 +18,7 @@ import time
 import discord
 
 from .ui.current_channel import current_text_channel
+from .ui.picker import DankPickerView, DankRoleSelect, chunk_choices, make_choice
 
 from .embed_studio_core import (
     STUDIO_KEY, MAX_EMBEDS, MAX_FIELDS, MAX_TEMPLATES,
@@ -138,7 +139,7 @@ def _summary(session: StudioSession) -> discord.Embed:
             "**Make a post in four easy steps**\n"
             "**1. Pick a Layout** (optional) or write your own.\n"
             "**2. Write Message** and add pictures or colors if you like.\n"
-            "**3. Choose a Channel** with the picker below.\n"
+            "**3. Choose a Channel** with the button below.\n"
             "**4. Preview & Post** when you're happy with it.\n\n"
             "Saved designs, buttons, forms, and staff tools are in their own menus. "
             "**Nothing goes public until you confirm.**"
@@ -217,22 +218,153 @@ async def _select_studio_destination(
     await _home(interaction, session, notice=f"Channel set to {channel.mention}. No post was sent.")
 
 
-class DestinationSelect(discord.ui.ChannelSelect):
-    def __init__(self, session: StudioSession) -> None:
+class _StudioPickerView(DankPickerView):
+    """House picker bound to an Embed Studio session.
+
+    Mirrors _StudioView's owner + staff gate, and pages long choice lists
+    with chunk_choices so every option stays reachable past Discord's
+    25-option select limit (a server can have well over 100 text channels).
+    """
+
+    def __init__(
+        self, session: StudioSession, *, choices: Any, on_pick: Any,
+        custom_id: str, placeholder: str, title: str = "Embed Studio",
+        on_home: Any = None, home_label: str = "Back", page: int = 0,
+    ) -> None:
+        all_choices = list(choices or [])
+        pages = chunk_choices(all_choices) or [[]]
+        page = max(0, min(int(page), len(pages) - 1))
         super().__init__(
-            placeholder="Choose a channel before you post…",
-            min_values=1, max_values=1, row=4,
-            channel_types=[discord.ChannelType.text],
+            author_id=int(session.owner_id),
+            choices=pages[page],
+            on_pick=on_pick,
+            custom_id=f"{custom_id}:{page}" if len(pages) > 1 else custom_id,
+            placeholder=(
+                f"{placeholder} • Page {page + 1}/{len(pages)}"
+                if len(pages) > 1 else placeholder
+            ),
+            title=title,
+            on_home=on_home,
+            home_label=home_label,
         )
         self.session = session
+        self._all_choices = all_choices
+        self._picker_on_pick = on_pick
+        self._base_custom_id = custom_id
+        self._base_placeholder = placeholder
+        self._picker_title = title
+        self._picker_on_home = on_home
+        self._picker_home_label = home_label
+        self.page = page
+        self.pages = len(pages)
+        if len(pages) > 1:
+            self.add_item(_StudioPickerPageButton(delta=-1, disabled=page <= 0))
+            self.add_item(_StudioPickerPageButton(delta=1, disabled=page >= len(pages) - 1))
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if (
+            interaction.guild is None or int(interaction.guild.id) != self.session.guild_id
+            or int(interaction.user.id) != self.session.owner_id
+        ):
+            await _say(interaction, "Open your own Embed Studio in the server to use these controls.")
+            return False
+        if not _staff(interaction):
+            await _say(interaction, "Embed Studio needs Manage Server or Administrator access.")
+            return False
+        return True
+
+    def _for_page(self, page: int) -> "_StudioPickerView":
+        return _StudioPickerView(
+            self.session, choices=self._all_choices, on_pick=self._picker_on_pick,
+            custom_id=self._base_custom_id, placeholder=self._base_placeholder,
+            title=self._picker_title, on_home=self._picker_on_home,
+            home_label=self._picker_home_label, page=page,
+        )
+
+
+class _StudioPickerPageButton(discord.ui.Button):
+    def __init__(self, *, delta: int, disabled: bool) -> None:
+        super().__init__(
+            label="Previous" if delta < 0 else "Next",
+            emoji="◀️" if delta < 0 else "▶️",
+            style=discord.ButtonStyle.secondary,
+            custom_id=(
+                "dank:embed_studio:picker:prev" if delta < 0
+                else "dank:embed_studio:picker:next"
+            ),
+            row=2, disabled=bool(disabled),
+        )
+        self.delta = int(delta)
 
     async def callback(self, interaction: discord.Interaction) -> None:
-        chosen = self.values[0] if self.values else None
-        guild = interaction.guild
-        channel = guild.get_channel(int(getattr(chosen, "id", 0) or 0)) if guild else None
-        if not isinstance(channel, discord.TextChannel) or channel.guild.id != self.session.guild_id:
-            return await _say(interaction, "Choose a normal text channel in this server.")
-        await _select_studio_destination(interaction, self.session, channel)
+        view = self.view
+        if not isinstance(view, _StudioPickerView) or not await view.interaction_check(interaction):
+            return
+        page = max(0, min(view.page + self.delta, view.pages - 1))
+        await interaction.response.edit_message(view=view._for_page(page))
+
+
+class _StudioPickerOpenButton(discord.ui.Button):
+    """Swaps the current studio menu for a house picker on the same message."""
+
+    def __init__(
+        self, session: StudioSession, *, label: str, emoji: str | None,
+        custom_id: str, row: int, heading: str, description: str,
+        build: Callable[[discord.Interaction], _StudioPickerView],
+        style: discord.ButtonStyle = discord.ButtonStyle.primary,
+    ) -> None:
+        super().__init__(label=label, emoji=emoji, style=style, custom_id=custom_id, row=row)
+        self.session = session
+        self._heading = heading
+        self._description = description
+        self._build = build
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await _menu(
+            interaction, heading=self._heading, description=self._description,
+            view=self._build(interaction),
+        )
+
+
+def _destination_choices(guild: discord.Guild) -> list[Any]:
+    choices = []
+    for channel in guild.text_channels:
+        category = channel.category
+        choices.append(make_choice(
+            f"#{channel.name}", str(channel.id),
+            description=category.name if category is not None else "No category",
+        ))
+    return choices
+
+
+async def _pick_studio_destination(
+    interaction: discord.Interaction, session: StudioSession, value: str,
+) -> None:
+    guild = interaction.guild
+    try:
+        channel = guild.get_channel(int(value)) if guild else None
+    except (TypeError, ValueError):
+        channel = None
+    if not isinstance(channel, discord.TextChannel) or channel.guild.id != session.guild_id:
+        return await _say(interaction, "Choose a normal text channel in this server.")
+    await _select_studio_destination(interaction, session, channel)
+
+
+def _destination_picker_view(
+    interaction: discord.Interaction, session: StudioSession,
+) -> _StudioPickerView:
+    guild = interaction.guild
+    return _StudioPickerView(
+        session,
+        choices=_destination_choices(guild) if guild is not None else [],
+        on_pick=lambda pick_interaction, value: _pick_studio_destination(
+            pick_interaction, session, value),
+        custom_id="dank:embed_studio:destination:v1",
+        placeholder="Choose a channel before you post…",
+        title="Choose a Channel",
+        on_home=lambda home_interaction: _home(home_interaction, session),
+        home_label="Back to My Post",
+    )
 
 
 class StudioHomeView(_StudioView):
@@ -240,7 +372,17 @@ class StudioHomeView(_StudioView):
 
     def __init__(self, session: StudioSession) -> None:
         super().__init__(session)
-        self.add_item(DestinationSelect(session))
+        self.add_item(_StudioPickerOpenButton(
+            session, label="Choose a Channel", emoji="🧭",
+            custom_id="dank:embed_studio:destination:open:v1", row=4,
+            heading="📍 Choose a Channel",
+            description=(
+                "Pick where this post will go. Every text channel in the "
+                "server is listed in server order, with its category shown "
+                "under the name. Choosing a channel never posts anything."
+            ),
+            build=lambda interaction: _destination_picker_view(interaction, session),
+        ))
 
     @discord.ui.button(label="Pick a Layout", emoji="✨", style=discord.ButtonStyle.primary, row=0)
     async def starter_layouts(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
@@ -544,23 +686,11 @@ async def _portable_menu(interaction: discord.Interaction, session: StudioSessio
     )
 
 
-class StarterSelect(discord.ui.Select):
-    def __init__(self, session: StudioSession) -> None:
-        from .embed_studio_presets import PRESETS, PRESET_DESCRIPTIONS
-        self.session = session
-        super().__init__(
-            placeholder="Choose a post style • gaming, news, events…",
-            options=[
-                discord.SelectOption(
-                    label=name, value=key, description=PRESET_DESCRIPTIONS[key],
-                ) for key, name in PRESETS
-            ],
-            row=0,
-        )
+def _starter_picker_view(session: StudioSession) -> _StudioPickerView:
+    from .embed_studio_presets import PRESETS, PRESET_DESCRIPTIONS
 
-    async def callback(self, interaction: discord.Interaction) -> None:
-        selected = self.values[0]
-        if (self.session.project != new_project() or self.session.post_key):
+    async def on_pick(interaction: discord.Interaction, selected: str) -> None:
+        if (session.project != new_project() or session.post_key):
             return await _menu(
                 interaction,
                 heading="Replace Your Current Draft?",
@@ -569,9 +699,23 @@ class StarterSelect(discord.ui.Select):
                     "can be restored with **Undo**, but the new layout replaces what "
                     "you're editing. Existing posted messages stay unchanged."
                 ),
-                view=ConfirmStarterLayout(self.session, selected),
+                view=ConfirmStarterLayout(session, selected),
             )
-        await _use_starter_layout(interaction, self.session, selected)
+        await _use_starter_layout(interaction, session, selected)
+
+    return _StudioPickerView(
+        session,
+        choices=[
+            make_choice(name, key, description=PRESET_DESCRIPTIONS[key])
+            for key, name in PRESETS
+        ],
+        on_pick=on_pick,
+        custom_id="dank:embed_studio:starter:v1",
+        placeholder="Choose a post style • gaming, news, events…",
+        title="Start with a Layout",
+        on_home=lambda interaction: _home(interaction, session),
+        home_label="Back to My Post",
+    )
 
 
 async def _use_starter_layout(
@@ -613,16 +757,6 @@ class ConfirmStarterLayout(_StudioView):
         await _home(interaction, self.session, notice="Your current draft was kept.")
 
 
-class StarterMenu(_StudioView):
-    def __init__(self, session: StudioSession) -> None:
-        super().__init__(session)
-        self.add_item(StarterSelect(session))
-
-    @discord.ui.button(label="Back", emoji="◀️", style=discord.ButtonStyle.secondary, row=1)
-    async def back(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
-        await _home(interaction, self.session)
-
-
 async def _starters(interaction: discord.Interaction, session: StudioSession) -> None:
     await _menu(
         interaction,
@@ -636,7 +770,7 @@ async def _starters(interaction: discord.Interaction, session: StudioSession) ->
             "Choose a design from the list, then customize details, colors, artwork "
             "and buttons. No layout posts or schedules anything automatically."
         ),
-        view=StarterMenu(session),
+        view=_starter_picker_view(session),
     )
 
 class _ProjectModal(discord.ui.Modal):
@@ -981,37 +1115,32 @@ class StudioFormQuestionModal(discord.ui.Modal, title="Add Form Question"):
         await _form_builder(interaction,self.session)
 
 
-class StudioFormQuestionSelect(discord.ui.Select):
-    def __init__(self,session: StudioSession) -> None:
-        self.session=session
-        form=session.project.get("form") or {}
-        options=[
-            discord.SelectOption(label=row["label"][:100],value=str(i))
-            for i,row in enumerate(form.get("questions") or [])
-        ] or [discord.SelectOption(label="No questions yet",value="none")]
-        super().__init__(placeholder="Choose a question to remove",options=options,row=0)
+def _form_question_picker_view(session: StudioSession) -> _StudioPickerView:
+    form=session.project.get("form") or {}
+    choices=[
+        make_choice(row["label"][:100],str(i))
+        for i,row in enumerate(form.get("questions") or [])
+    ] or [make_choice("No questions yet","none")]
 
-    async def callback(self,interaction: discord.Interaction) -> None:
-        index=self.values[0]
+    async def on_pick(interaction: discord.Interaction,index: str) -> None:
         if index=="none":
             return await _say(interaction,"Add a question first.")
         def change(project):
             project["form"]["questions"].pop(int(index))
         try:
-            self.session.apply(change)
+            session.apply(change)
         except (StudioValidationError,IndexError,TypeError):
             return await _say(interaction,"Question changed. Reopen Form Builder.")
-        await _form_builder(interaction,self.session)
+        await _form_builder(interaction,session)
 
-
-class StudioFormQuestionMenu(_StudioView):
-    def __init__(self,session: StudioSession) -> None:
-        super().__init__(session)
-        self.add_item(StudioFormQuestionSelect(session))
-
-    @discord.ui.button(label="Back",emoji="◀️",style=discord.ButtonStyle.secondary,row=1)
-    async def back(self,interaction: discord.Interaction,_button: discord.ui.Button) -> None:
-        await _form_builder(interaction,self.session)
+    return _StudioPickerView(
+        session,choices=choices,on_pick=on_pick,
+        custom_id="dank:embed_studio:form_question:v1",
+        placeholder="Choose a question to remove",
+        title="Remove a Question",
+        on_home=lambda interaction: _form_builder(interaction,session),
+        home_label="Back",
+    )
 
 
 class StudioFormDeleteConfirm(_StudioView):
@@ -1025,22 +1154,19 @@ class StudioFormDeleteConfirm(_StudioView):
         await _form_builder(interaction,self.session)
 
 
-class StudioFormInboxSelect(discord.ui.Select):
-    def __init__(self,session: StudioSession,rows: list[dict[str,Any]]) -> None:
-        self.session,self.rows=session,rows
-        options=[
-            discord.SelectOption(
-                label=f"Member {str(row['user_id'])[:18]} • {str(row['created_at'])[:20]}",
-                value=str(i),
-            ) for i,row in enumerate(rows)
-        ] or [discord.SelectOption(label="No responses yet",value="none")]
-        super().__init__(placeholder="Read a private response",options=options,row=0)
+def _form_inbox_picker_view(session: StudioSession,rows: list[dict[str,Any]]) -> _StudioPickerView:
+    choices=[
+        make_choice(
+            f"Member {str(row['user_id'])[:18]} • {str(row['created_at'])[:20]}",
+            str(i),
+        ) for i,row in enumerate(rows)
+    ] or [make_choice("No responses yet","none")]
 
-    async def callback(self,interaction: discord.Interaction) -> None:
-        if self.values[0]=="none":
+    async def on_pick(interaction: discord.Interaction,value: str) -> None:
+        if value=="none":
             return await _say(interaction,"No form responses yet.")
         try:
-            row=self.rows[int(self.values[0])]
+            row=rows[int(value)]
             parts=[
                 f"**{discord.utils.escape_markdown(str(item.get('question') or '')[:50])}**\n"
                 + discord.utils.escape_mentions(str(item.get("answer") or "")[:900])
@@ -1052,15 +1178,14 @@ class StudioFormInboxSelect(discord.ui.Select):
             return await _say(interaction,"That response is unavailable.")
         await _say(interaction,note[:1900])
 
-
-class StudioFormInboxView(_StudioView):
-    def __init__(self,session: StudioSession,rows: list[dict[str,Any]]) -> None:
-        super().__init__(session)
-        self.add_item(StudioFormInboxSelect(session,rows))
-
-    @discord.ui.button(label="Back to Forms",emoji="◀️",style=discord.ButtonStyle.secondary,row=1)
-    async def back(self,interaction: discord.Interaction,_button: discord.ui.Button) -> None:
-        await _form_builder(interaction,self.session)
+    return _StudioPickerView(
+        session,choices=choices,on_pick=on_pick,
+        custom_id="dank:embed_studio:form_inbox:v1",
+        placeholder="Read a private response",
+        title="Private Form Responses",
+        on_home=lambda interaction: _form_builder(interaction,session),
+        home_label="Back to Forms",
+    )
 
 
 async def _form_inbox(interaction: discord.Interaction,session: StudioSession) -> None:
@@ -1076,7 +1201,7 @@ async def _form_inbox(interaction: discord.Interaction,session: StudioSession) -
     await _menu(interaction,heading="🔒 Private Form Responses",
                 description="Recent answers are visible only to authorized moderators. "
                             "Never share sensitive responses publicly.",
-                view=StudioFormInboxView(session,rows))
+                view=_form_inbox_picker_view(session,rows))
 
 
 class StudioFormBuilderMenu(_StudioView):
@@ -1096,7 +1221,7 @@ class StudioFormBuilderMenu(_StudioView):
     async def remove_question(self,interaction: discord.Interaction,_button: discord.ui.Button) -> None:
         await _menu(interaction,heading="Remove a Question",
                     description="Choose a question to remove from this draft.",
-                    view=StudioFormQuestionMenu(self.session))
+                    view=_form_question_picker_view(self.session))
 
     @discord.ui.button(label="Response Inbox",emoji="📥",style=discord.ButtonStyle.secondary,row=1)
     async def responses(self,interaction: discord.Interaction,_button: discord.ui.Button) -> None:
@@ -1194,28 +1319,35 @@ class StudioArtworkUploadModal(discord.ui.Modal, title="Upload Artwork"):
                 await discard_failed_upload(uploaded)
 
 
-class MediaLinkSelect(discord.ui.Select):
-    def __init__(self, session: StudioSession, lib: dict[str, Any], *, page: int = 0) -> None:
-        self.session = session
-        start = page * MEDIA_PAGE_SIZE
-        entries = list(lib["media"].items())[start:start + MEDIA_PAGE_SIZE]
-        choices = [
-            discord.SelectOption(label=str(item["name"])[:100], value=key)
-            for key, item in entries
-        ]
-        if not choices:
-            choices = [discord.SelectOption(label="No saved media yet", value="none")]
-        super().__init__(placeholder="Choose a saved image or GIF", options=choices, row=0)
+def _media_picker_view(
+    session: StudioSession, lib: dict[str, Any], *, page: int = 0,
+) -> _StudioPickerView:
+    start = page * MEDIA_PAGE_SIZE
+    entries = list(lib["media"].items())[start:start + MEDIA_PAGE_SIZE]
+    choices = [
+        make_choice(str(item["name"])[:100], key)
+        for key, item in entries
+    ]
+    if not choices:
+        choices = [make_choice("No saved media yet", "none")]
 
-    async def callback(self, interaction: discord.Interaction) -> None:
-        key = self.values[0]
+    async def on_pick(interaction: discord.Interaction, key: str) -> None:
         if key == "none":
             return await _say(interaction, "Save an image or GIF link first.")
         await _menu(
             interaction, heading="Place this media in your embed",
             description="Choose a position below, or remove the saved link. Nothing posts automatically.",
-            view=MediaPlacementMenu(self.session, key),
+            view=MediaPlacementMenu(session, key),
         )
+
+    return _StudioPickerView(
+        session, choices=choices, on_pick=on_pick,
+        custom_id="dank:embed_studio:media:v1",
+        placeholder="Choose a saved image or GIF",
+        title="Saved Pictures",
+        on_home=lambda interaction: _media_library(interaction, session, page=page),
+        home_label="Back",
+    )
 
 
 class MediaPlacementMenu(_StudioView):
@@ -1272,7 +1404,13 @@ class MediaLibraryMenu(_StudioView):
         count = len(lib["media"])
         self.pages = max(1, (count + MEDIA_PAGE_SIZE - 1) // MEDIA_PAGE_SIZE)
         self.page = max(0, min(int(page), self.pages - 1))
-        self.add_item(MediaLinkSelect(session, lib, page=self.page))
+        self.add_item(_StudioPickerOpenButton(
+            session, label="Choose a Saved Picture", emoji="🖼️",
+            custom_id="dank:embed_studio:media:open:v1", row=0,
+            heading="🖼️ Saved Pictures",
+            description="Choose a saved image or GIF to place in your post.",
+            build=lambda interaction: _media_picker_view(session, lib, page=self.page),
+        ))
         self.previous.disabled = self.page == 0
         self.next.disabled = self.page >= self.pages - 1
 
@@ -1466,28 +1604,40 @@ class FieldModal(_ProjectModal):
         await self.commit(interaction, change)
 
 
-class FieldSelect(discord.ui.Select):
-    def __init__(self, session: StudioSession) -> None:
-        fields = session.project["embeds"][session.active]["fields"]
-        choices = [
-            discord.SelectOption(label=f"{i + 1}. {f['name'][:85]}", value=str(i))
-            for i, f in enumerate(fields[:25])
-        ]
-        if not choices:
-            choices = [discord.SelectOption(label="No fields added yet", value="none")]
-        super().__init__(placeholder="Select a field to edit, move or remove", options=choices, row=0)
-        self.session = session
+def _field_picker_view(session: StudioSession) -> _StudioPickerView:
+    fields = session.project["embeds"][session.active]["fields"]
+    choices = [
+        make_choice(f"{i + 1}. {f['name'][:85]}", str(i))
+        for i, f in enumerate(fields[:25])
+    ]
+    if not choices:
+        choices = [make_choice("No fields added yet", "none")]
 
-    async def callback(self, interaction: discord.Interaction) -> None:
-        if self.values[0] == "none":
+    async def on_pick(interaction: discord.Interaction, value: str) -> None:
+        if value == "none":
             return await _say(interaction, "Press Add Field first.")
-        await _menu(interaction, heading="Field controls", description="Edit, move up/down, or remove this field.", view=FieldActions(self.session, int(self.values[0])))
+        await _menu(interaction, heading="Field controls", description="Edit, move up/down, or remove this field.", view=FieldActions(session, int(value)))
+
+    return _StudioPickerView(
+        session, choices=choices, on_pick=on_pick,
+        custom_id="dank:embed_studio:field:v1",
+        placeholder="Select a field to edit, move or remove",
+        title="Embed Fields",
+        on_home=lambda interaction: _fields(interaction, session),
+        home_label="Back",
+    )
 
 
 class FieldListView(_StudioView):
     def __init__(self, session: StudioSession) -> None:
         super().__init__(session)
-        self.add_item(FieldSelect(session))
+        self.add_item(_StudioPickerOpenButton(
+            session, label="Choose a Field", emoji="📋",
+            custom_id="dank:embed_studio:field:open:v1", row=0,
+            heading="📋 Embed Fields",
+            description="Choose one field to edit, move or remove it.",
+            build=lambda interaction: _field_picker_view(session),
+        ))
 
     @discord.ui.button(label="Add Field", emoji="➕", style=discord.ButtonStyle.primary, row=1)
     async def add(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
@@ -1566,29 +1716,41 @@ class LinkModal(_ProjectModal):
         await self.commit(interaction, change)
 
 
-class LinkSelect(discord.ui.Select):
-    def __init__(self, session: StudioSession) -> None:
-        options = [
-            discord.SelectOption(label=f"{i + 1}. {link['label'][:80]}", value=str(i))
-            for i, link in enumerate(session.project["links"])
-        ]
-        if not options:
-            options = [discord.SelectOption(label="No link buttons yet", value="none")]
-        super().__init__(placeholder="Choose a URL button to remove", options=options, row=0)
-        self.session = session
+def _link_picker_view(session: StudioSession) -> _StudioPickerView:
+    choices = [
+        make_choice(f"{i + 1}. {link['label'][:80]}", str(i))
+        for i, link in enumerate(session.project["links"])
+    ]
+    if not choices:
+        choices = [make_choice("No link buttons yet", "none")]
 
-    async def callback(self, interaction: discord.Interaction) -> None:
-        if self.values[0] == "none":
+    async def on_pick(interaction: discord.Interaction, value: str) -> None:
+        if value == "none":
             return await _say(interaction, "Press Add URL Button first.")
-        idx = int(self.values[0])
-        self.session.apply(lambda p: p["links"].pop(idx))
-        await _links(interaction, self.session)
+        idx = int(value)
+        session.apply(lambda p: p["links"].pop(idx))
+        await _links(interaction, session)
+
+    return _StudioPickerView(
+        session, choices=choices, on_pick=on_pick,
+        custom_id="dank:embed_studio:link:v1",
+        placeholder="Choose a URL button to remove",
+        title="Link Buttons",
+        on_home=lambda interaction: _links(interaction, session),
+        home_label="Back",
+    )
 
 
 class LinkMenu(_StudioView):
     def __init__(self, session: StudioSession) -> None:
         super().__init__(session)
-        self.add_item(LinkSelect(session))
+        self.add_item(_StudioPickerOpenButton(
+            session, label="Choose a Link to Remove", emoji="🔗",
+            custom_id="dank:embed_studio:link:open:v1", row=0,
+            heading="🔗 Link Buttons",
+            description="Choose an existing URL button to remove it.",
+            build=lambda interaction: _link_picker_view(session),
+        ))
 
     @discord.ui.button(label="Add URL Button", emoji="➕", style=discord.ButtonStyle.primary, row=1)
     async def add(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
@@ -1639,21 +1801,24 @@ async def _add_studio_role(interaction: discord.Interaction, session: StudioSess
     await _role_controls(interaction, session)
 
 
-class StudioRoleSelect(discord.ui.RoleSelect):
-    def __init__(self, session: StudioSession) -> None:
-        super().__init__(
-            placeholder="Quick pick an optional server role…",
-            min_values=1, max_values=1, row=0,
-        )
-        self.session = session
+def _studio_role_select(session: StudioSession) -> DankRoleSelect:
+    """House-framework role wrapper for the quick-pick slot in Role Controls."""
 
-    async def callback(self, interaction: discord.Interaction) -> None:
+    async def on_pick(interaction: discord.Interaction, role: discord.Role) -> None:
         guild = interaction.guild
-        picked = self.values[0] if self.values else None
-        role = guild.get_role(int(getattr(picked, "id", 0))) if guild else None
-        if not isinstance(role, discord.Role):
+        resolved = guild.get_role(int(role.id)) if guild else None
+        if not isinstance(resolved, discord.Role):
             return await _say(interaction, "Choose a role belonging to this server.")
-        await _add_studio_role(interaction, self.session, role)
+        await _add_studio_role(interaction, session, resolved)
+
+    select = DankRoleSelect(
+        author_id=int(session.owner_id),
+        on_pick=on_pick,
+        placeholder="Quick pick an optional server role…",
+        row=0,
+    )
+    select.custom_id = "dank:embed_studio:role:v1"
+    return select
 
 
 async def _browse_studio_roles(interaction: discord.Interaction, session: StudioSession) -> None:
@@ -1698,25 +1863,31 @@ async def _browse_studio_roles(interaction: discord.Interaction, session: Studio
     await _menu(interaction, heading="🔎 Search-Safe Role Browser",
                 description="Find a safe role by normal words, styled name, previous name, mention or ID.", view=view)
 
-class StudioExistingRoleSelect(discord.ui.Select):
-    def __init__(self, session: StudioSession) -> None:
-        self.session = session
-        actions = session.project["role_actions"]
-        options = [
-            discord.SelectOption(label=f"{i+1}. {a['label'][:80]}", value=str(i))
-            for i, a in enumerate(actions)
-        ] or [discord.SelectOption(label="No roles yet", value="none")]
-        super().__init__(placeholder="Manage an existing role button…", options=options, row=1)
+def _existing_role_picker_view(session: StudioSession) -> _StudioPickerView:
+    actions = session.project["role_actions"]
+    choices = [
+        make_choice(f"{i+1}. {a['label'][:80]}", str(i))
+        for i, a in enumerate(actions)
+    ] or [make_choice("No roles yet", "none")]
 
-    async def callback(self, interaction: discord.Interaction) -> None:
-        if self.values[0] == "none":
+    async def on_pick(interaction: discord.Interaction, value: str) -> None:
+        if value == "none":
             return await _say(interaction, "Add a role first.")
         await _menu(
             interaction,
             heading="🎭 Role Action Settings",
             description="Change the displayed label, move the button, or remove it. Role IDs cannot be edited manually.",
-            view=StudioRoleActionView(self.session, int(self.values[0])),
+            view=StudioRoleActionView(session, int(value)),
         )
+
+    return _StudioPickerView(
+        session, choices=choices, on_pick=on_pick,
+        custom_id="dank:embed_studio:existing_role:v1",
+        placeholder="Manage an existing role button…",
+        title="Role Buttons & Dropdown",
+        on_home=lambda interaction: _role_controls(interaction, session),
+        home_label="Back",
+    )
 
 
 class StudioRoleLabelModal(discord.ui.Modal, title="Rename Role Action"):
@@ -1786,8 +1957,14 @@ class StudioRoleActionView(_StudioView):
 class StudioRolesMenu(_StudioView):
     def __init__(self, session: StudioSession) -> None:
         super().__init__(session)
-        self.add_item(StudioRoleSelect(session))
-        self.add_item(StudioExistingRoleSelect(session))
+        self.add_item(_studio_role_select(session))
+        self.add_item(_StudioPickerOpenButton(
+            session, label="Manage Existing Role", emoji="🎭",
+            custom_id="dank:embed_studio:existing_role:open:v1", row=1,
+            heading="🎭 Role Buttons & Dropdown",
+            description="Choose an existing role button to change its label, order, or remove it.",
+            build=lambda interaction: _existing_role_picker_view(session),
+        ))
 
     @discord.ui.button(label="Buttons / Dropdown", emoji="🔁", style=discord.ButtonStyle.secondary, row=2)
     async def toggle_mode(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
@@ -2017,25 +2194,19 @@ class ThemeNameModal(discord.ui.Modal, title="Save Server Brand Theme"):
         await _say(interaction, f"✅ Server theme **{discord.utils.escape_markdown(name)}** saved. No messages were posted.")
 
 
-class BrandThemeSelect(discord.ui.Select):
-    def __init__(self, session: StudioSession, lib: dict[str, Any]) -> None:
-        self.session = session
-        presets = [
-            discord.SelectOption(label=name, value="preset:" + key, description="Color preset")
-            for key, name, _style in THEME_PRESETS
-        ]
-        saved = [
-            discord.SelectOption(label=str(row["name"])[:100], value="saved:" + key,
-                                 description="Saved server brand style")
-            for key, row in lib["themes"].items()
-        ]
-        super().__init__(
-            placeholder="Apply a brand theme to all embeds…",
-            min_values=1, max_values=1, row=0, options=presets + saved,
-        )
+def _brand_theme_picker_view(
+    session: StudioSession, lib: dict[str, Any],
+) -> _StudioPickerView:
+    choices = [
+        make_choice(name, "preset:" + key, description="Color preset")
+        for key, name, _style in THEME_PRESETS
+    ] + [
+        make_choice(str(row["name"])[:100], "saved:" + key,
+                    description="Saved server brand style")
+        for key, row in lib["themes"].items()
+    ]
 
-    async def callback(self, interaction: discord.Interaction) -> None:
-        value = self.values[0]
+    async def on_pick(interaction: discord.Interaction, value: str) -> None:
         await interaction.response.defer(ephemeral=True)
         try:
             if value.startswith("preset:"):
@@ -2044,23 +2215,39 @@ class BrandThemeSelect(discord.ui.Select):
                     None,
                 )
             elif value.startswith("saved:"):
-                _source, lib = await _load_library(self.session.guild_id)
-                record = lib["themes"].get(value[6:])
+                _source, fresh_lib = await _load_library(session.guild_id)
+                record = fresh_lib["themes"].get(value[6:])
                 chosen = record.get("style") if isinstance(record, dict) else None
             else:
                 chosen = None
             if chosen is None:
                 return await _say(interaction, "That theme is no longer available. Refresh Brand Themes.")
-            self.session.apply(lambda project: project.update(apply_theme(project, chosen)))
+            session.apply(lambda project: project.update(apply_theme(project, chosen)))
         except Exception as exc:
             return await _say(interaction, "Theme not applied: " + _error(exc))
-        await _home(interaction, self.session, notice="Brand style applied to all embeds. Preview before posting.")
+        await _home(interaction, session, notice="Brand style applied to all embeds. Preview before posting.")
+
+    return _StudioPickerView(
+        session, choices=choices, on_pick=on_pick,
+        custom_id="dank:embed_studio:brand_theme:v1",
+        placeholder="Apply a brand theme to all embeds…",
+        title="Server Brand Themes",
+        on_home=lambda interaction: _themes(interaction, session),
+        home_label="Back to Studio",
+    )
 
 
 class BrandThemeMenu(_StudioView):
     def __init__(self, session: StudioSession, lib: dict[str, Any]) -> None:
         super().__init__(session)
-        self.add_item(BrandThemeSelect(session, lib))
+        self.lib = lib
+        self.add_item(_StudioPickerOpenButton(
+            session, label="Apply a Theme", emoji="🎨",
+            custom_id="dank:embed_studio:brand_theme:open:v1", row=0,
+            heading="🎨 Server Brand Themes",
+            description="Choose a color preset or a saved server style to apply to all embeds in this draft.",
+            build=lambda interaction: _brand_theme_picker_view(session, lib),
+        ))
 
     @discord.ui.button(label="Save Current Style", emoji="💾", style=discord.ButtonStyle.primary, row=1)
     async def save(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
@@ -2100,32 +2287,29 @@ async def _themes(interaction: discord.Interaction, session: StudioSession) -> N
     )
 
 
-class RemoveThemeSelect(discord.ui.Select):
-    def __init__(self, session: StudioSession, lib: dict[str, Any]) -> None:
-        self.session = session
-        options = [
-            discord.SelectOption(label=str(row["name"])[:100], value=key)
-            for key, row in lib["themes"].items()
-        ] or [discord.SelectOption(label="No saved themes", value="none")]
-        super().__init__(placeholder="Choose saved theme to remove", options=options, row=0)
+def _remove_theme_picker_view(
+    session: StudioSession, lib: dict[str, Any],
+) -> _StudioPickerView:
+    choices = [
+        make_choice(str(row["name"])[:100], key)
+        for key, row in lib["themes"].items()
+    ] or [make_choice("No saved themes", "none")]
 
-    async def callback(self, interaction: discord.Interaction) -> None:
-        key = self.values[0]
+    async def on_pick(interaction: discord.Interaction, key: str) -> None:
         if key == "none":
             return await _say(interaction, "There are no saved themes.")
         await _menu(interaction, heading="Remove shared theme?",
                     description="Only the saved theme is removed; existing drafts and messages stay unchanged.",
-                    view=ConfirmThemeRemovalView(self.session, key))
+                    view=ConfirmThemeRemovalView(session, key))
 
-
-class RemoveThemeMenu(_StudioView):
-    def __init__(self, session: StudioSession, lib: dict[str, Any]) -> None:
-        super().__init__(session)
-        self.add_item(RemoveThemeSelect(session, lib))
-
-    @discord.ui.button(label="Back", emoji="◀️", style=discord.ButtonStyle.secondary, row=1)
-    async def back(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
-        await _themes(interaction, self.session)
+    return _StudioPickerView(
+        session, choices=choices, on_pick=on_pick,
+        custom_id="dank:embed_studio:remove_theme:v1",
+        placeholder="Choose saved theme to remove",
+        title="Remove a Saved Brand Theme",
+        on_home=lambda interaction: _themes(interaction, session),
+        home_label="Back",
+    )
 
 
 class ConfirmThemeRemovalView(_StudioView):
@@ -2166,7 +2350,7 @@ async def _remove_theme_menu(interaction: discord.Interaction, session: StudioSe
         return await _say(interaction, _error(exc))
     await _menu(interaction, heading="Remove a Saved Brand Theme",
                 description="Only saved styles are listed. Removal requires a second confirmation.",
-                view=RemoveThemeMenu(session, lib))
+                view=_remove_theme_picker_view(session, lib))
 
 
 class TemplateNameModal(discord.ui.Modal, title="Save Embed Template"):
@@ -2197,43 +2381,57 @@ class TemplateNameModal(discord.ui.Modal, title="Save Embed Template"):
         await _say(interaction, f"✅ Template **{discord.utils.escape_markdown(name)}** saved for this server.")
 
 
-class TemplateSelect(discord.ui.Select):
-    def __init__(self, session: StudioSession, lib: dict[str, Any]) -> None:
-        self.session = session
-        choices = [
-            discord.SelectOption(label=str(item.get("name") or "Untitled")[:90], value=key)
-            for key, item in list(lib["templates"].items())[:25]
-        ]
-        if not choices:
-            choices = [discord.SelectOption(label="No saved templates", value="none")]
-        super().__init__(placeholder="Choose a template to load", options=choices, row=0)
+def _template_picker_view(
+    session: StudioSession, lib: dict[str, Any],
+) -> _StudioPickerView:
+    choices = [
+        make_choice(str(item.get("name") or "Untitled")[:90], key)
+        for key, item in list(lib["templates"].items())[:25]
+    ]
+    if not choices:
+        choices = [make_choice("No saved templates", "none")]
 
-    async def callback(self, interaction: discord.Interaction) -> None:
-        key = self.values[0]
+    async def on_pick(interaction: discord.Interaction, key: str) -> None:
         if key == "none":
             return await _say(interaction, "Save your first template from this screen.")
         await interaction.response.defer(ephemeral=True)
         try:
-            _source, lib = await _load_library(self.session.guild_id)
-            item = lib["templates"].get(key)
+            _source, fresh_lib = await _load_library(session.guild_id)
+            item = fresh_lib["templates"].get(key)
             if not item:
                 return await _say(interaction, "That template was removed. Refresh this menu.")
             draft = validate_project(item["project"])
         except Exception as exc:
             return await _say(interaction, f"Could not load template: {_error(exc)}")
-        self.session.history.append(self.session.project)
-        self.session.history = self.session.history[-10:]
-        self.session.project = draft
-        self.session.dirty = True
-        self.session.active = 0
-        self.session.post_key = ""
-        await _home(interaction, self.session, notice="Template loaded. Nothing posted.")
+        session.history.append(session.project)
+        session.history = session.history[-10:]
+        session.project = draft
+        session.dirty = True
+        session.active = 0
+        session.post_key = ""
+        await _home(interaction, session, notice="Template loaded. Nothing posted.")
+
+    return _StudioPickerView(
+        session, choices=choices, on_pick=on_pick,
+        custom_id="dank:embed_studio:template:v1",
+        placeholder="Choose a template to load",
+        title="Reusable Server Templates",
+        on_home=lambda interaction: _templates(interaction, session),
+        home_label="Back",
+    )
 
 
 class TemplateMenu(_StudioView):
     def __init__(self, session: StudioSession, lib: dict[str, Any]) -> None:
         super().__init__(session)
-        self.add_item(TemplateSelect(session, lib))
+        self.lib = lib
+        self.add_item(_StudioPickerOpenButton(
+            session, label="Load a Template", emoji="💾",
+            custom_id="dank:embed_studio:template:open:v1", row=0,
+            heading="💾 Reusable Server Templates",
+            description="Choose a saved template to load into this draft. Nothing is posted.",
+            build=lambda interaction: _template_picker_view(session, lib),
+        ))
 
     @discord.ui.button(label="Save Current Draft", emoji="💾", style=discord.ButtonStyle.success, row=1)
     async def save(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
@@ -2261,30 +2459,27 @@ async def _templates(interaction: discord.Interaction, session: StudioSession) -
     )
 
 
-class DeleteTemplateSelect(discord.ui.Select):
-    def __init__(self, session: StudioSession, lib: dict[str, Any]) -> None:
-        self.session = session
-        choices = [
-            discord.SelectOption(label=str(item.get("name") or "Untitled")[:90], value=key)
-            for key, item in lib["templates"].items()
-        ] or [discord.SelectOption(label="No saved templates", value="none")]
-        super().__init__(placeholder="Choose template to REMOVE", options=choices, row=0)
+def _delete_template_picker_view(
+    session: StudioSession, lib: dict[str, Any],
+) -> _StudioPickerView:
+    choices = [
+        make_choice(str(item.get("name") or "Untitled")[:90], key)
+        for key, item in lib["templates"].items()
+    ] or [make_choice("No saved templates", "none")]
 
-    async def callback(self, interaction: discord.Interaction) -> None:
-        key = self.values[0]
+    async def on_pick(interaction: discord.Interaction, key: str) -> None:
         if key == "none":
             return await _say(interaction, "There is no template to remove.")
-        await _menu(interaction, heading="Delete template?", description="This deletes a saved template, not any published message. Confirm to continue.", view=ConfirmDeleteTemplateView(self.session, key))
+        await _menu(interaction, heading="Delete template?", description="This deletes a saved template, not any published message. Confirm to continue.", view=ConfirmDeleteTemplateView(session, key))
 
-
-class DeleteTemplateMenu(_StudioView):
-    def __init__(self, session: StudioSession, lib: dict[str, Any]) -> None:
-        super().__init__(session)
-        self.add_item(DeleteTemplateSelect(session, lib))
-
-    @discord.ui.button(label="Back", emoji="◀️", style=discord.ButtonStyle.secondary, row=1)
-    async def back(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
-        await _templates(interaction, self.session)
+    return _StudioPickerView(
+        session, choices=choices, on_pick=on_pick,
+        custom_id="dank:embed_studio:delete_template:v1",
+        placeholder="Choose template to REMOVE",
+        title="Manage Templates",
+        on_home=lambda interaction: _templates(interaction, session),
+        home_label="Back",
+    )
 
 
 class ConfirmDeleteTemplateView(_StudioView):
@@ -2322,7 +2517,7 @@ async def _template_deletion(interaction: discord.Interaction, session: StudioSe
         _, lib = await _load_library(session.guild_id)
     except Exception as exc:
         return await _say(interaction, _error(exc))
-    await _menu(interaction, heading="Manage Templates", description="Select a template to remove; a second confirmation is required.", view=DeleteTemplateMenu(session, lib))
+    await _menu(interaction, heading="Manage Templates", description="Select a template to remove; a second confirmation is required.", view=_delete_template_picker_view(session, lib))
 
 
 def _target_channel(interaction: discord.Interaction, session: StudioSession) -> discord.TextChannel | None:
@@ -2423,37 +2618,34 @@ class StudioReviewSubmissionModal(discord.ui.Modal, title="Send Design for Staff
                    "It was not published and your draft remains unchanged.")
 
 
-class StudioReviewQueueSelect(discord.ui.Select):
-    def __init__(self, session: StudioSession, rows: list[dict[str, Any]],
-                 *, state: str) -> None:
-        self.session, self.state = session, state
-        options = [
-            discord.SelectOption(label=str(row["title"])[:100], value=str(row["id"]),
-                                 description=f"By {row['submitted_by']} • Channel {row['channel_id']}"[:100])
-            for row in rows
-        ] or [discord.SelectOption(label="No requests found", value="none")]
-        super().__init__(options=options, placeholder="Choose a staff design...", row=0)
+def _review_queue_picker_view(
+    session: StudioSession, rows: list[dict[str, Any]], *, state: str,
+) -> _StudioPickerView:
+    choices = [
+        make_choice(str(row["title"])[:100], str(row["id"]),
+                    description=f"By {row['submitted_by']} • Channel {row['channel_id']}"[:100])
+        for row in rows
+    ] or [make_choice("No requests found", "none")]
 
-    async def callback(self, interaction: discord.Interaction) -> None:
-        if self.values[0] == "none":
+    async def on_pick(interaction: discord.Interaction, value: str) -> None:
+        if value == "none":
             return await _say(interaction, "No designs in this queue.")
-        if self.state == "pending":
+        if state == "pending":
             await _menu(interaction, heading="Review this design",
                         description=("Approving loads a private copy into your own editor. "
                                      "It never publishes. You cannot approve your own submission."),
-                        view=StudioReviewDecisionView(self.session, self.values[0]))
+                        view=StudioReviewDecisionView(session, value))
         else:
-            await _load_approved_review(interaction, self.session, self.values[0])
+            await _load_approved_review(interaction, session, value)
 
-
-class StudioReviewQueueView(_StudioView):
-    def __init__(self, session: StudioSession, rows: list[dict[str, Any]], *, state: str) -> None:
-        super().__init__(session)
-        self.add_item(StudioReviewQueueSelect(session, rows, state=state))
-
-    @discord.ui.button(label="Back to Team Review", emoji="◀️", style=discord.ButtonStyle.secondary, row=1)
-    async def back(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
-        await _team_review_home(interaction, self.session)
+    return _StudioPickerView(
+        session, choices=choices, on_pick=on_pick,
+        custom_id=f"dank:embed_studio:review_queue:{state}:v1",
+        placeholder="Choose a staff design...",
+        title="Team Design Review",
+        on_home=lambda interaction: _team_review_home(interaction, session),
+        home_label="Back to Team Review",
+    )
 
 
 class StudioReviewDecisionView(_StudioView):
@@ -2539,7 +2731,7 @@ async def _team_review_queue(interaction: discord.Interaction, session: StudioSe
                 description=(f"{len(rows)} recent server designs. "
                              "Only staff may view them. Approved designs load privately; "
                              "publishing always needs a separate preview."),
-                view=StudioReviewQueueView(session, rows, state=state))
+                view=_review_queue_picker_view(session, rows, state=state))
 
 
 class StudioTeamReviewHomeView(_StudioView):
@@ -2642,33 +2834,31 @@ class StudioScheduleModal(discord.ui.Modal, title="Schedule an Announcement"):
             "You can cancel it under Scheduled Posts. No message was posted yet.")
 
 
-class StudioScheduleSelect(discord.ui.Select):
-    def __init__(self, session: StudioSession, rows: list[dict[str, Any]]) -> None:
-        self.session = session
-        options = [
-            discord.SelectOption(
-                label=f"Channel {str(row['channel_id'])[:18]} • {str(row['execute_at'])[:22]}",
-                value=str(row["id"]),
-            ) for row in rows
-        ] or [discord.SelectOption(label="No upcoming announcements", value="none")]
-        super().__init__(placeholder="Choose a scheduled announcement",options=options,row=0)
+def _schedule_picker_view(
+    session: StudioSession, rows: list[dict[str, Any]],
+) -> _StudioPickerView:
+    choices = [
+        make_choice(
+            f"Channel {str(row['channel_id'])[:18]} • {str(row['execute_at'])[:22]}",
+            str(row["id"]),
+        ) for row in rows
+    ] or [make_choice("No upcoming announcements", "none")]
 
-    async def callback(self, interaction: discord.Interaction) -> None:
-        if self.values[0] == "none":
+    async def on_pick(interaction: discord.Interaction, value: str) -> None:
+        if value == "none":
             return await _say(interaction, "There are no upcoming announcements.")
         await _menu(interaction, heading="Cancel this scheduled announcement?",
                     description="Cancellation affects only a pending job. It never deletes past posts.",
-                    view=CancelScheduleView(self.session, self.values[0]))
+                    view=CancelScheduleView(session, value))
 
-
-class StudioSchedulesMenu(_StudioView):
-    def __init__(self, session: StudioSession, rows: list[dict[str, Any]]) -> None:
-        super().__init__(session)
-        self.add_item(StudioScheduleSelect(session, rows))
-
-    @discord.ui.button(label="Back to Studio", emoji="🏠", style=discord.ButtonStyle.secondary, row=1)
-    async def back(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
-        await _home(interaction, self.session)
+    return _StudioPickerView(
+        session, choices=choices, on_pick=on_pick,
+        custom_id="dank:embed_studio:schedule:v1",
+        placeholder="Choose a scheduled announcement",
+        title="Scheduled Announcements",
+        on_home=lambda interaction: _home(interaction, session),
+        home_label="Back to Studio",
+    )
 
 
 class CancelScheduleView(_StudioView):
@@ -2709,7 +2899,7 @@ async def _scheduled_posts(interaction: discord.Interaction, session: StudioSess
     await _menu(interaction, heading="📅 Scheduled Announcements",
                 description="Upcoming one-time posts. Open Preview to schedule another. "
                             "A missed or failed message is never sent twice automatically.",
-                view=StudioSchedulesMenu(session, rows))
+                view=_schedule_picker_view(session, rows))
 
 
 class StudioReviewView(_StudioView):
@@ -3018,23 +3208,21 @@ def _from_message(message: discord.Message) -> dict[str, Any]:
     return validate_project(project)
 
 
-class TrackedPostSelect(discord.ui.Select):
-    def __init__(self, session: StudioSession, lib: dict[str, Any]) -> None:
-        self.session = session
-        options = [
-            discord.SelectOption(label=f"#{item['channel_id']} • message {item['message_id']}", value=key)
-            for key, item in list(lib["published"].items())[-20:]
-        ] or [discord.SelectOption(label="No tracked messages yet", value="none")]
-        super().__init__(placeholder="Choose a previously published embed", options=options, row=0)
+def _tracked_post_picker_view(
+    session: StudioSession, lib: dict[str, Any],
+) -> _StudioPickerView:
+    choices = [
+        make_choice(f"#{item['channel_id']} • message {item['message_id']}", key)
+        for key, item in list(lib["published"].items())[-20:]
+    ] or [make_choice("No tracked messages yet", "none")]
 
-    async def callback(self, interaction: discord.Interaction) -> None:
-        key = self.values[0]
+    async def on_pick(interaction: discord.Interaction, key: str) -> None:
         if key == "none":
             return await _say(interaction, "Publish a message first; it will appear here.")
         await interaction.response.defer(ephemeral=True)
         try:
-            _, lib = await _load_library(self.session.guild_id)
-            item = lib["published"].get(key)
+            _, fresh_lib = await _load_library(session.guild_id)
+            item = fresh_lib["published"].get(key)
             if not item:
                 return await _say(interaction, "This tracked message no longer exists.")
             channel = interaction.guild.get_channel(int(item["channel_id"]))
@@ -3054,8 +3242,8 @@ class TrackedPostSelect(discord.ui.Select):
                     pass
         except Exception as exc:
             return await _say(interaction, f"Could not load this message: {_error(exc)}")
-        self.session.history.append(self.session.project)
-        self.session.history = self.session.history[-10:]
+        session.history.append(session.project)
+        session.history = session.history[-10:]
         draft["role_mode"] = str(item.get("role_mode") or "buttons")
         draft["role_actions"] = deepcopy(item.get("role_actions") or [])
         draft["form"] = deepcopy(item.get("form"))
@@ -3063,18 +3251,34 @@ class TrackedPostSelect(discord.ui.Select):
             draft = validate_project(draft)
         except StudioValidationError:
             return await _say(interaction, "This tracked post has an unsupported role configuration. Ask staff to repair it.")
-        self.session.project = draft
-        self.session.dirty = True
-        self.session.channel_id = int(channel.id)
-        self.session.post_key = key
-        self.session.active = 0
-        await _home(interaction, self.session, notice="Published message loaded. Edits are not live until confirmed.")
+        session.project = draft
+        session.dirty = True
+        session.channel_id = int(channel.id)
+        session.post_key = key
+        session.active = 0
+        await _home(interaction, session, notice="Published message loaded. Edits are not live until confirmed.")
+
+    return _StudioPickerView(
+        session, choices=choices, on_pick=on_pick,
+        custom_id="dank:embed_studio:tracked_post:v1",
+        placeholder="Choose a previously published embed",
+        title="Edit a Published Embed",
+        on_home=lambda interaction: _home(interaction, session),
+        home_label="Back",
+    )
 
 
 class PublishedMenu(_StudioView):
     def __init__(self, session: StudioSession, lib: dict[str, Any]) -> None:
         super().__init__(session)
-        self.add_item(TrackedPostSelect(session, lib))
+        self.lib = lib
+        self.add_item(_StudioPickerOpenButton(
+            session, label="Choose a Published Post", emoji="🛠️",
+            custom_id="dank:embed_studio:tracked_post:open:v1", row=0,
+            heading="🛠️ Edit a Published Embed",
+            description="Choose one of the last 20 tracked Dank Shield posts to load it into your private editor.",
+            build=lambda interaction: _tracked_post_picker_view(session, lib),
+        ))
 
     @discord.ui.button(label="Live Text Updates", emoji="🔄", style=discord.ButtonStyle.secondary, row=1)
     async def live_text(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
