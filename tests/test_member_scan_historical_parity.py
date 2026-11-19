@@ -41,7 +41,9 @@ def test_mobile_review_shows_found_users_and_review_controls() -> None:
     assert "_build_page_users_text" in names
     assert "_page_bounds" in names
     assert 'name=f"Users Found — Page {page + 1}/{pages}"' in source
-    assert "Select a user for details, lock/skip after review" in source
+    # Copy rewritten in plain words 2026-11-19 (PR #873 standard): the
+    # Controls line now says what a press does instead of naming internals.
+    assert "Pick a member in the list to see what they did" in source
     assert "No users found" in source
 
 
