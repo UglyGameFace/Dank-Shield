@@ -84,13 +84,13 @@ def test_member_center_has_button_driven_categories() -> None:
 
 def test_browser_has_role_picker_pagination_search_and_sort() -> None:
     source = _source(ROSTER) + "\n" + _source(CENTER_UI)
-    assert "class CenterRoleSelect(discord.ui.RoleSelect)" in source
+    assert "class CenterRoleSelect(DankRoleSelect)" in source
     assert "_BROWSER_PAGE_SIZE = 20" in source
-    assert "class MemberRosterSelect(discord.ui.Select)" in source
-    assert "class BrowserSortSelect(discord.ui.Select)" in source
-    assert "class BrowserFilterSelect(discord.ui.Select)" in source
+    assert "dank_members_browser:member" in source  # roster picker opener (house picker)
+    assert "dank_members_browser:sort" in source  # sort picker opener (house picker)
+    assert "dank_members_browser:filter" in source  # filter picker opener (house picker)
     assert "class CenterQuickRoleButton(discord.ui.Button)" in source
-    assert "class DirectMemberSelect(discord.ui.UserSelect)" in source
+    assert "class DirectMemberSelect(DankUserSelect)" in source
     assert "class MemberSearchModal" in source
     assert 'label="Previous"' in source
     assert 'label="Next"' in source

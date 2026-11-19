@@ -12,9 +12,164 @@ from .member_role_browser_common import (
     display_name,
     ensure_member_cache,
     reply_ephemeral,
+    require_review,
     timestamp,
     trim,
 )
+from ..ui.picker import DankPickerView, DankRoleSelect, chunk_choices, make_choice
+
+_BROWSER_SORTS = {
+    "name": "Name A\u2013Z",
+    "joined_newest": "Newest server joins",
+    "joined_oldest": "Oldest server joins",
+    "account_newest": "Newest Discord accounts",
+    "account_oldest": "Oldest Discord accounts",
+}
+
+_BROWSER_FILTERS = {
+    "all": "All role members",
+    "humans": "Humans only",
+    "bots": "Bots only",
+    "timed_out": "Currently timed out",
+    "joined_over_24h": "Joined server over 24 hours ago",
+    "joined_over_7d": "Joined server over 7 days ago",
+    "joined_under_24h": "Joined server within 24 hours",
+}
+
+
+class _BrowserPickerView(DankPickerView):
+    """Paged house picker bound to one member-browser panel owner.
+
+    Pages long choice lists with chunk_choices so every option stays
+    reachable past Discord's 25-option select limit. Keeps the member
+    browser's owner gate and denial wording exactly.
+    """
+
+    def __init__(
+        self,
+        owner_id: int,
+        *,
+        choices: Any,
+        on_pick: Any,
+        custom_id: str,
+        placeholder: str,
+        title: str,
+        on_home: Any = None,
+        on_cancel: Any = None,
+        home_label: str = "Back",
+        page: int = 0,
+    ) -> None:
+        all_choices = list(choices or [])
+        pages = chunk_choices(all_choices) or [[]]
+        page = max(0, min(int(page), len(pages) - 1))
+        super().__init__(
+            author_id=int(owner_id),
+            choices=pages[page],
+            on_pick=on_pick,
+            custom_id=f"{custom_id}:{page}" if len(pages) > 1 else custom_id,
+            placeholder=(
+                f"{placeholder} \u2022 Page {page + 1}/{len(pages)}"
+                if len(pages) > 1 else placeholder
+            ),
+            title=title,
+            timeout=900,
+            on_home=on_home,
+            on_cancel=on_cancel,
+            home_label=home_label,
+        )
+        self._all_choices = all_choices
+        self._picker_on_pick = on_pick
+        self._base_custom_id = custom_id
+        self._base_placeholder = placeholder
+        self._picker_title = title
+        self._picker_on_home = on_home
+        self._picker_on_cancel = on_cancel
+        self._picker_home_label = home_label
+        self.page = page
+        self.pages = len(pages)
+        if len(pages) > 1:
+            self.add_item(_BrowserPickerPageButton(delta=-1, disabled=page <= 0))
+            self.add_item(_BrowserPickerPageButton(delta=1, disabled=page >= len(pages) - 1))
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if int(interaction.user.id) != int(self.author_id):
+            await reply_ephemeral(
+                interaction,
+                "\u274c This private member browser belongs to another staff member.",
+            )
+            return False
+        return await require_review(interaction)
+
+    def _for_page(self, page: int) -> "_BrowserPickerView":
+        return _BrowserPickerView(
+            int(self.author_id),
+            choices=self._all_choices,
+            on_pick=self._picker_on_pick,
+            custom_id=self._base_custom_id,
+            placeholder=self._base_placeholder,
+            title=self._picker_title,
+            on_home=self._picker_on_home,
+            on_cancel=self._picker_on_cancel,
+            home_label=self._picker_home_label,
+            page=page,
+        )
+
+
+class _BrowserPickerPageButton(discord.ui.Button):
+    def __init__(self, *, delta: int, disabled: bool) -> None:
+        super().__init__(
+            label="Previous" if delta < 0 else "Next",
+            emoji="\u25c0\ufe0f" if delta < 0 else "\u25b6\ufe0f",
+            style=discord.ButtonStyle.secondary,
+            custom_id=(
+                "dank_members_browser:picker:prev" if delta < 0
+                else "dank_members_browser:picker:next"
+            ),
+            row=2,
+            disabled=bool(disabled),
+        )
+        self.delta = int(delta)
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        view = self.view
+        if not isinstance(view, _BrowserPickerView) or not await view.interaction_check(interaction):
+            return
+        page = max(0, min(view.page + self.delta, view.pages - 1))
+        await interaction.response.edit_message(view=view._for_page(page))
+
+
+class _BrowserPickerOpenButton(discord.ui.Button):
+    """Swaps the member-browser panel for a house picker on the same message."""
+
+    def __init__(
+        self,
+        *,
+        label: str,
+        custom_id: str,
+        row: int,
+        build: Any,
+        disabled: bool = False,
+    ) -> None:
+        super().__init__(
+            label=label,
+            style=discord.ButtonStyle.secondary,
+            custom_id=custom_id,
+            row=row,
+            disabled=bool(disabled),
+        )
+        self._build = build
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        host = self.view
+        if isinstance(host, OwnedView) and not await host.interaction_check(interaction):
+            return
+        picker = self._build(interaction)
+        message = getattr(interaction, "message", None)
+        embeds = getattr(message, "embeds", None) if message is not None else None
+        await interaction.response.edit_message(
+            embed=embeds[0] if embeds else None,
+            view=picker,
+        )
 
 _BROWSER_PAGE_SIZE = 20
 
@@ -176,28 +331,36 @@ def role_browser_embed(view: "RoleMemberBrowserView") -> discord.Embed:
     return embed
 
 
-class BrowserRoleSelect(discord.ui.RoleSelect):
-    def __init__(self) -> None:
+class BrowserRoleSelect(DankRoleSelect):
+    """House role picker for the member browser home.
+
+    Uses the framework's DankRoleSelect wrapper (owner check, house
+    wording); the pick routes into the same browse flow the raw
+    RoleSelect used.
+    """
+
+    def __init__(self, owner_id: int) -> None:
         super().__init__(
-            placeholder="Choose the server role to browse…",
+            author_id=int(owner_id),
+            on_pick=self._browse_role,
+            placeholder="Choose the server role to browse\u2026",
             min_values=1,
             max_values=1,
-            custom_id="dank_members_browser:role",
             row=0,
         )
+        self.custom_id = "dank_members_browser:role"
 
-    async def callback(self, interaction: discord.Interaction) -> None:
-        role = self.values[0] if self.values else None
+    async def _browse_role(self, interaction: discord.Interaction, role: discord.Role) -> None:
         if not isinstance(role, discord.Role):
             await reply_ephemeral(
                 interaction,
-                "❌ Discord did not return a valid role.",
+                "\u274c Discord did not return a valid role.",
             )
             return
         if role.is_default():
             await reply_ephemeral(
                 interaction,
-                "❌ Choose a specific role instead of @everyone.",
+                "\u274c Choose a specific role instead of @everyone.",
             )
             return
         await interaction.response.defer()
@@ -214,7 +377,7 @@ class BrowserRoleSelect(discord.ui.RoleSelect):
             view=view,
         )
         if warning:
-            await interaction.followup.send(f"⚠️ {warning}", ephemeral=True)
+            await interaction.followup.send(f"\u26a0\ufe0f {warning}", ephemeral=True)
 
 
 class QuickRoleButton(discord.ui.Button):
@@ -267,143 +430,9 @@ class MemberBrowserHomeView(OwnedView):
     ) -> None:
         self.quick_roles = list(quick_roles or [])[:4]
         super().__init__(owner_id)
-        self.add_item(BrowserRoleSelect())
+        self.add_item(BrowserRoleSelect(owner_id))
         for role in self.quick_roles:
             self.add_item(QuickRoleButton(self, role, row=1))
-
-
-class MemberRosterSelect(discord.ui.Select):
-    def __init__(self, browser: "RoleMemberBrowserView") -> None:
-        members = browser.page_members()
-        options = [
-            discord.SelectOption(
-                label=trim(str(member.display_name or member.name), 100),
-                value=str(member.id),
-                description=_member_option_description(member),
-                emoji=(
-                    "🤖"
-                    if member.bot
-                    else ("⏱️" if member.is_timed_out() else "👤")
-                ),
-            )
-            for member in members
-        ]
-        if not options:
-            options = [
-                discord.SelectOption(
-                    label="No members on this page",
-                    value="none",
-                    description="Change the role, page, filter, or search.",
-                )
-            ]
-        super().__init__(
-            placeholder="Select a member for moderation actions…",
-            min_values=1,
-            max_values=1,
-            options=options,
-            disabled=not members,
-            custom_id="dank_members_browser:member",
-            row=0,
-        )
-        self.browser = browser
-
-    async def callback(self, interaction: discord.Interaction) -> None:
-        if not self.values or self.values[0] == "none":
-            return
-        member = interaction.guild.get_member(int(self.values[0]))
-        if not isinstance(member, discord.Member):
-            await reply_ephemeral(
-                interaction,
-                "❌ That member is no longer in the server. Refresh the roster.",
-            )
-            return
-        detail = MemberActionView(
-            owner_id=self.browser.owner_id,
-            member=member,
-            browser=self.browser,
-        )
-        await interaction.response.edit_message(
-            embed=member_detail_embed(member, self.browser.role),
-            view=detail,
-        )
-
-
-class BrowserSortSelect(discord.ui.Select):
-    SORTS = {
-        "name": "Name A–Z",
-        "joined_newest": "Newest server joins",
-        "joined_oldest": "Oldest server joins",
-        "account_newest": "Newest Discord accounts",
-        "account_oldest": "Oldest Discord accounts",
-    }
-
-    def __init__(self, browser: "RoleMemberBrowserView") -> None:
-        options = [
-            discord.SelectOption(
-                label=label,
-                value=value,
-                default=value == browser.sort_mode,
-            )
-            for value, label in self.SORTS.items()
-        ]
-        super().__init__(
-            placeholder="Sort members…",
-            min_values=1,
-            max_values=1,
-            options=options,
-            custom_id="dank_members_browser:sort",
-            row=1,
-        )
-        self.browser = browser
-
-    async def callback(self, interaction: discord.Interaction) -> None:
-        self.browser.sort_mode = self.values[0]
-        self.browser.page = 0
-        self.browser.rebuild()
-        await interaction.response.edit_message(
-            embed=role_browser_embed(self.browser),
-            view=self.browser,
-        )
-
-
-class BrowserFilterSelect(discord.ui.Select):
-    FILTERS = {
-        "all": "All role members",
-        "humans": "Humans only",
-        "bots": "Bots only",
-        "timed_out": "Currently timed out",
-        "joined_over_24h": "Joined server over 24 hours ago",
-        "joined_over_7d": "Joined server over 7 days ago",
-        "joined_under_24h": "Joined server within 24 hours",
-    }
-
-    def __init__(self, browser: "RoleMemberBrowserView") -> None:
-        options = [
-            discord.SelectOption(
-                label=label,
-                value=value,
-                default=value == browser.filter_mode,
-            )
-            for value, label in self.FILTERS.items()
-        ]
-        super().__init__(
-            placeholder="Filter role members…",
-            min_values=1,
-            max_values=1,
-            options=options,
-            custom_id="dank_members_browser:filter",
-            row=2,
-        )
-        self.browser = browser
-
-    async def callback(self, interaction: discord.Interaction) -> None:
-        self.browser.filter_mode = self.values[0]
-        self.browser.page = 0
-        self.browser.rebuild()
-        await interaction.response.edit_message(
-            embed=role_browser_embed(self.browser),
-            view=self.browser,
-        )
 
 
 class RoleMemberBrowserView(OwnedView):
@@ -423,11 +452,11 @@ class RoleMemberBrowserView(OwnedView):
         self.role = role
         self.page = max(0, int(page))
         self.sort_mode = (
-            sort_mode if sort_mode in BrowserSortSelect.SORTS else "name"
+            sort_mode if sort_mode in _BROWSER_SORTS else "name"
         )
         self.filter_mode = (
             filter_mode
-            if filter_mode in BrowserFilterSelect.FILTERS
+            if filter_mode in _BROWSER_FILTERS
             else "all"
         )
         self.query = str(query or "").strip()
@@ -437,11 +466,11 @@ class RoleMemberBrowserView(OwnedView):
 
     @property
     def sort_label(self) -> str:
-        return BrowserSortSelect.SORTS.get(self.sort_mode, "Name A–Z")
+        return _BROWSER_SORTS.get(self.sort_mode, "Name A–Z")
 
     @property
     def filter_label(self) -> str:
-        return BrowserFilterSelect.FILTERS.get(
+        return _BROWSER_FILTERS.get(
             self.filter_mode,
             "All role members",
         )
@@ -471,11 +500,128 @@ class RoleMemberBrowserView(OwnedView):
         start = self.page * _BROWSER_PAGE_SIZE
         return members[start : start + _BROWSER_PAGE_SIZE]
 
+    def _member_picker(self) -> _BrowserPickerView:
+        choices = [
+            make_choice(
+                trim(str(member.display_name or member.name), 100),
+                str(member.id),
+                description=_member_option_description(member),
+                emoji=(
+                    "\U0001f916"
+                    if member.bot
+                    else ("\u23f1\ufe0f" if member.is_timed_out() else "\U0001f464")
+                ),
+            )
+            for member in self.filtered_members()
+        ]
+        return _BrowserPickerView(
+            self.owner_id,
+            choices=choices,
+            on_pick=self._pick_roster_member,
+            custom_id="dank_members_browser:member_pick",
+            placeholder="Select a member for moderation actions\u2026",
+            title="Member Roster",
+            on_home=self._restore_browser,
+            on_cancel=self._restore_browser,
+        )
+
+    def _sort_picker(self) -> _BrowserPickerView:
+        choices = [
+            make_choice(label, value, default=value == self.sort_mode)
+            for value, label in _BROWSER_SORTS.items()
+        ]
+        return _BrowserPickerView(
+            self.owner_id,
+            choices=choices,
+            on_pick=self._pick_sort,
+            custom_id="dank_members_browser:sort_pick",
+            placeholder="Sort members\u2026",
+            title="Sort Members",
+            on_home=self._restore_browser,
+            on_cancel=self._restore_browser,
+        )
+
+    def _filter_picker(self) -> _BrowserPickerView:
+        choices = [
+            make_choice(label, value, default=value == self.filter_mode)
+            for value, label in _BROWSER_FILTERS.items()
+        ]
+        return _BrowserPickerView(
+            self.owner_id,
+            choices=choices,
+            on_pick=self._pick_filter,
+            custom_id="dank_members_browser:filter_pick",
+            placeholder="Filter role members\u2026",
+            title="Filter Members",
+            on_home=self._restore_browser,
+            on_cancel=self._restore_browser,
+        )
+
+    async def _restore_browser(self, interaction: discord.Interaction) -> None:
+        await interaction.response.edit_message(
+            embed=role_browser_embed(self),
+            view=self,
+        )
+
+    async def _pick_roster_member(self, interaction: discord.Interaction, value: str) -> None:
+        if not value or value == "none":
+            return
+        member = interaction.guild.get_member(int(value))
+        if not isinstance(member, discord.Member):
+            await reply_ephemeral(
+                interaction,
+                "\u274c That member is no longer in the server. Refresh the roster.",
+            )
+            return
+        detail = MemberActionView(
+            owner_id=self.owner_id,
+            member=member,
+            browser=self,
+        )
+        await interaction.response.edit_message(
+            embed=member_detail_embed(member, self.role),
+            view=detail,
+        )
+
+    async def _pick_sort(self, interaction: discord.Interaction, value: str) -> None:
+        self.sort_mode = value
+        self.page = 0
+        self.rebuild()
+        await interaction.response.edit_message(
+            embed=role_browser_embed(self),
+            view=self,
+        )
+
+    async def _pick_filter(self, interaction: discord.Interaction, value: str) -> None:
+        self.filter_mode = value
+        self.page = 0
+        self.rebuild()
+        await interaction.response.edit_message(
+            embed=role_browser_embed(self),
+            view=self,
+        )
+
     def rebuild(self) -> None:
         self.clear_items()
-        self.add_item(MemberRosterSelect(self))
-        self.add_item(BrowserSortSelect(self))
-        self.add_item(BrowserFilterSelect(self))
+        self.add_item(_BrowserPickerOpenButton(
+            label="Select a member for moderation actions\u2026",
+            custom_id="dank_members_browser:member",
+            row=0,
+            build=lambda interaction: self._member_picker(),
+            disabled=not self.page_members(),
+        ))
+        self.add_item(_BrowserPickerOpenButton(
+            label="Sort members\u2026",
+            custom_id="dank_members_browser:sort",
+            row=1,
+            build=lambda interaction: self._sort_picker(),
+        ))
+        self.add_item(_BrowserPickerOpenButton(
+            label="Filter role members\u2026",
+            custom_id="dank_members_browser:filter",
+            row=2,
+            build=lambda interaction: self._filter_picker(),
+        ))
 
         previous = discord.ui.Button(
             label="Previous",

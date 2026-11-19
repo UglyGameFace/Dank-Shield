@@ -101,8 +101,7 @@ def test_mod_picker_passes_selected_id_to_rest_verified_open(monkeypatch):
     monkeypatch.setattr(mod, "open_member_actions_by_id", open_by_id)
     view = mod.ModerationCenterView(123)
     picker = next(x for x in view.children if isinstance(x, mod.ModMemberSelect))
-    picker._values = [SimpleNamespace(id=1531117218291646605)]
-    run(picker.callback(SimpleNamespace()))
+    run(picker.on_pick(SimpleNamespace(), SimpleNamespace(id=1531117218291646605)))
     assert events == [(1531117218291646605, True, view)]
 
 
@@ -120,7 +119,6 @@ def test_live_members_picker_queries_rest_even_when_cache_is_empty(monkeypatch):
     monkeypatch.setattr(members, "reply_ephemeral", reply)
     view = members.LiveMembersMenuView(123)
     picker = next(x for x in view.children if isinstance(x, members.DirectMemberSelect))
-    picker._values = [SimpleNamespace(id=1531117218291646605)]
     class Response:
         def is_done(self):
             return bool(events)
@@ -129,7 +127,7 @@ def test_live_members_picker_queries_rest_even_when_cache_is_empty(monkeypatch):
     interaction = SimpleNamespace(response=Response(), guild=SimpleNamespace(
         get_member=lambda uid: None,
     ))
-    run(picker.callback(interaction))
+    run(picker.on_pick(interaction, SimpleNamespace(id=1531117218291646605)))
     assert events[0:2] == ["deferred", "rest"]
     assert any("could not verify" in str(item) for item in events)
 

@@ -8,6 +8,7 @@ import re
 import discord
 
 from ..panel_lifecycle import PRIVATE_MENU_TTL_SECONDS
+from ..ui.picker import DankUserSelect
 from discord import app_commands
 
 from .common import _staff_check
@@ -169,24 +170,31 @@ class FindModMemberByIdModal(discord.ui.Modal, title="Find Member by Discord ID"
         )
 
 
-class ModMemberSelect(discord.ui.UserSelect):
-    """First step of /mod: pick the member, land on their action card."""
+class ModMemberSelect(DankUserSelect):
+    """First step of /mod: pick the member, land on their action card.
 
-    def __init__(self) -> None:
+    Uses the framework's DankUserSelect wrapper (owner check, house
+    wording); the pick routes into the same member-actions flow the raw
+    UserSelect used.
+    """
+
+    def __init__(self, owner_id: int) -> None:
         super().__init__(
-            placeholder="Pick a member to moderate…",
+            author_id=int(owner_id),
+            on_pick=self._open_member,
+            placeholder="Pick a member to moderate\u2026",
             min_values=1,
             max_values=1,
             row=0,
         )
+        self.custom_id = "dank:mod:center:member:v1"
 
-    async def callback(self, interaction: discord.Interaction) -> None:
+    async def _open_member(self, interaction: discord.Interaction, selected: object) -> None:
         if not await _require_staff(interaction):
             return
-        selected = self.values[0] if self.values else None
         member_id = int(getattr(selected, "id", 0) or 0)
         if member_id <= 0:
-            return await _private(interaction, "❌ Select a member or use Find Member by ID.")
+            return await _private(interaction, "\u274c Select a member or use Find Member by ID.")
         center = self.view
         await open_member_actions_by_id(
             interaction, member_id, owner_id=center.owner_id,
@@ -201,7 +209,7 @@ class ModerationCenterView(_OwnedView):
 
     def __init__(self, owner_id: int, *, timeout: float = PRIVATE_MENU_TTL_SECONDS) -> None:
         super().__init__(owner_id, timeout=timeout)
-        self.add_item(ModMemberSelect())
+        self.add_item(ModMemberSelect(owner_id))
 
     def rebuild(self) -> None:
         """Called by MemberActionView's Back button; nothing to recompute here."""
