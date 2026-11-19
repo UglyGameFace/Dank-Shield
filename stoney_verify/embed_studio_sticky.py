@@ -232,6 +232,13 @@ def _message_view(item: dict[str, Any], project: dict[str, Any]) -> Optional[dis
     """Rebuild the post's buttons exactly as publishing built them."""
     from .embed_studio_core import link_view
 
+    if isinstance(item.get("poll"), dict):
+        from .embed_studio_polls import poll_view, validate_poll
+
+        try:
+            return poll_view(validate_poll(item["poll"]), str(item.get("poll_token") or ""))
+        except Exception:
+            return None
     if project.get("role_actions"):
         from .embed_studio_roles import member_role_view
 
@@ -407,21 +414,37 @@ class StudioStickyRuntime:
 
             from .embed_studio_ui import _from_message
 
-            try:
-                project = _from_message(message)
-                project["role_mode"] = str(item.get("role_mode") or "buttons")
-                project["role_actions"] = deepcopy(item.get("role_actions") or [])
-                project["form"] = deepcopy(item.get("form"))
-                project = validate_project(project)
-                view = _message_view(item, project)
-            except (StudioValidationError, ValueError, TypeError):
-                return None
+            if isinstance(item.get("poll"), dict):
+                # Polls render from the tracked record, never from the
+                # message: the record holds the votes, and a sticky move
+                # must carry the exact same vote state to the new copy.
+                from .embed_studio_polls import poll_embed, poll_view, validate_poll
+
+                try:
+                    poll = validate_poll(item["poll"])
+                except Exception:
+                    return None
+                send_content = None
+                send_embeds = [poll_embed(poll)]
+                send_view = poll_view(poll, str(item.get("poll_token") or ""))
+            else:
+                try:
+                    project = _from_message(message)
+                    project["role_mode"] = str(item.get("role_mode") or "buttons")
+                    project["role_actions"] = deepcopy(item.get("role_actions") or [])
+                    project["form"] = deepcopy(item.get("form"))
+                    project = validate_project(project)
+                    send_content = project["content"] or None
+                    send_embeds = render_embeds(project)
+                    send_view = _message_view(item, project)
+                except (StudioValidationError, ValueError, TypeError):
+                    return None
 
             try:
                 new_message = await channel.send(
-                    content=project["content"] or None,
-                    embeds=render_embeds(project),
-                    view=view,
+                    content=send_content,
+                    embeds=send_embeds,
+                    view=send_view,
                     allowed_mentions=_MENTIONS,
                 )
             except (discord.Forbidden, discord.HTTPException):
