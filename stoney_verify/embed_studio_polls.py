@@ -451,17 +451,32 @@ from .ui.picker import make_choice  # noqa: E402
 _PENDING_POLLS: dict[tuple[int, int], dict[str, Any]] = {}
 
 
-def _poll_label(item: dict[str, Any]) -> str:
+def _poll_state_emoji(item: dict[str, Any]) -> str:
     poll = item.get("poll") if isinstance(item.get("poll"), dict) else {}
     try:
         clean = validate_poll(poll)
-        state = {"active": "🗳️ Voting open", "paused": "⏸️ Paused", "ended": "🏁 Ended"}.get(
-            clean["state"], clean["state"])
-        question = clean["question"]
-        votes = len(clean["votes"])
+        return {"active": "🗳️", "paused": "⏸️", "ended": "🏁"}.get(
+            clean["state"], "🗳️")
     except StudioValidationError:
-        state, question, votes = "Poll", "Untitled poll", 0
-    return f"{state} • {question[:60]} • {votes} vote{'s' if votes != 1 else ''} • #{item.get('channel_id')}"
+        return "🗳️"
+
+
+def _poll_votes_text(item: dict[str, Any]) -> str:
+    poll = item.get("poll") if isinstance(item.get("poll"), dict) else {}
+    try:
+        votes = len(validate_poll(poll)["votes"])
+    except StudioValidationError:
+        votes = 0
+    return f"{votes} vote{'s' if votes != 1 else ''}"
+
+
+def _poll_label(item: dict[str, Any]) -> str:
+    """One poll's label text (record-only; pickers use the shared builder)."""
+    from .embed_studio_post_labels import build_published_post_choices
+
+    choices = build_published_post_choices(
+        [("key", item)], prefix_for=lambda _key, row: _poll_state_emoji(row))
+    return choices[0].label if choices else "Untitled poll"
 
 
 async def _refresh_poll_message(
@@ -522,20 +537,33 @@ async def _show_poll_control(
     )
     if notice:
         description = notice + "\n\n" + description
+    if bool(item.get("message_missing")):
+        description += (
+            "\n\n⚠️ This poll's message was **deleted** in Discord. Repost "
+            "starts it fresh (votes start over); Delete Post removes it "
+            "from Post Builder for good."
+        )
     await _menu(
         interaction,
         heading="📊 Poll",
         description=description,
-        view=StudioPollControlView(session, key, state=poll["state"], sticky=sticky),
+        view=StudioPollControlView(
+            session, key, state=poll["state"], sticky=sticky,
+            missing=bool(item.get("message_missing"))),
     )
 
 
 class StudioPollControlView(_StudioView):
-    def __init__(self, session: StudioSession, key: str, *, state: str, sticky: bool) -> None:
+    def __init__(
+        self, session: StudioSession, key: str, *, state: str, sticky: bool,
+        missing: bool = False,
+    ) -> None:
         super().__init__(session)
         self.key = key
         self.state = state
         self.sticky = bool(sticky)
+        self.missing = bool(missing)
+        self.repost.disabled = not self.missing
         if state == "active":
             self.pause_resume.label = "Pause Voting"
             self.pause_resume.emoji = "⏸️"
@@ -602,6 +630,24 @@ class StudioPollControlView(_StudioView):
                     pass
         await _show_poll_control(
             interaction, self.session, self.key, notice=("✅ " if ok else "❌ ") + message)
+
+    @discord.ui.button(
+        label="Repost", emoji="📨", style=discord.ButtonStyle.success,
+        custom_id="dank:embed_studio:repost:v1", row=2,
+    )
+    async def repost(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        from .embed_studio_post_actions import run_repost
+
+        await run_repost(interaction, self.session, self.key)
+
+    @discord.ui.button(
+        label="Delete Post", emoji="🗑️", style=discord.ButtonStyle.danger,
+        custom_id="dank:embed_studio:delete_post:v1", row=2,
+    )
+    async def delete_post(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        from .embed_studio_post_actions import open_delete_post_confirm
+
+        await open_delete_post_confirm(interaction, self.session, self.key)
 
     @discord.ui.button(
         label="Back to Polls", emoji="◀️", style=discord.ButtonStyle.secondary,
@@ -723,14 +769,19 @@ async def _publish_pending_poll(
 
 
 class StudioPollMenuView(_StudioView):
-    def __init__(self, session: StudioSession, lib: dict[str, Any]) -> None:
+    def __init__(
+        self, session: StudioSession, lib: dict[str, Any], *,
+        channel_names: dict[int, str] | None = None,
+        fetched: dict[str, Any] | None = None,
+    ) -> None:
         super().__init__(session)
         self.add_item(_StudioPickerOpenButton(
             session, label="Manage a Poll", emoji="🗳️",
             custom_id="dank:embed_studio:poll_post:open:v1", row=1,
             heading="📊 Manage a Poll",
             description="Choose one of this server's Post Builder polls to pause, resume, end, or make sticky.",
-            build=lambda interaction: _poll_post_picker_view(session, lib),
+            build=lambda interaction: _poll_post_picker_view(
+                session, lib, channel_names=channel_names, fetched=fetched),
         ))
 
     @discord.ui.button(
@@ -748,12 +799,22 @@ class StudioPollMenuView(_StudioView):
         await _published(interaction, self.session)
 
 
-def _poll_post_picker_view(session: StudioSession, lib: dict[str, Any]) -> _StudioPickerView:
-    choices = [
-        make_choice(_poll_label(item), key)
-        for key, item in list(lib.get("published", {}).items())[-20:]
+def _poll_post_picker_view(
+    session: StudioSession, lib: dict[str, Any], *,
+    channel_names: dict[int, str] | None = None,
+    fetched: dict[str, Any] | None = None,
+) -> _StudioPickerView:
+    from .embed_studio_post_labels import build_published_post_choices
+
+    records = [
+        (key, item) for key, item in list(lib.get("published", {}).items())[-20:]
         if record_is_poll(item)
-    ] or [make_choice("No polls yet — create one first", "none")]
+    ]
+    choices = build_published_post_choices(
+        records, channel_names=channel_names, fetched=fetched,
+        prefix_for=lambda _key, row: _poll_state_emoji(row),
+        extra_description_for=lambda _key, row: _poll_votes_text(row),
+    ) or [make_choice("No polls yet — create one first", "none")]
 
     async def on_pick(interaction: discord.Interaction, key: str) -> None:
         if key == "none":
@@ -779,6 +840,15 @@ async def open_poll_menu(interaction: discord.Interaction, session: StudioSessio
         from .embed_studio_ui import _error
 
         return await _say(interaction, _error(exc))
+    from .embed_studio_post_labels import (
+        channel_names_from_guild, collect_published_post_info,
+    )
+
+    records = [
+        (key, item) for key, item in list(lib.get("published", {}).items())[-20:]
+        if record_is_poll(item)
+    ]
+    fetched = await collect_published_post_info(interaction.guild, records)
     await _menu(
         interaction, heading="📊 Polls",
         description=(
@@ -788,5 +858,9 @@ async def open_poll_menu(interaction: discord.Interaction, session: StudioSessio
             "vote. Polls can be made sticky, and their votes move with "
             "them when they are re-posted at the bottom of the chat."
         ),
-        view=StudioPollMenuView(session, lib),
+        view=StudioPollMenuView(
+            session, lib,
+            channel_names=channel_names_from_guild(interaction.guild),
+            fetched=fetched,
+        ),
     )
