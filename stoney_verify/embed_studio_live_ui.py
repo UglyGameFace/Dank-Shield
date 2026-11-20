@@ -34,8 +34,10 @@ class LiveTextSelect(_StudioPickerView):
     Text menu.
     """
 
-    def __init__(self,session: StudioSession,rows: list[tuple[str,dict[str,Any]]]) -> None:
+    def __init__(self,session: StudioSession,rows: list[tuple[str,dict[str,Any]]],*,channel_names: dict[int,str]|None=None,fetched: dict[str,Any]|None=None) -> None:
         self.rows=list(rows)
+        self.channel_names=channel_names
+        self.fetched=fetched
 
         async def on_pick(interaction: discord.Interaction,value: str) -> None:
             if value=="none":
@@ -47,15 +49,16 @@ class LiveTextSelect(_StudioPickerView):
         async def on_home(interaction: discord.Interaction) -> None:
             await _menu(interaction,heading=_LIVE_HEADING,
                         description=_LIVE_DESCRIPTION,
-                        view=LiveTextMenu(session,self.rows))
+                        view=LiveTextMenu(session,self.rows,channel_names=self.channel_names,fetched=self.fetched))
 
-        choices=[
-            make_choice(
-                f"{'On' if row.get('live_nonce') else 'Off'} • Channel {str(row['channel_id'])[:19]}",
-                key,
-                description=f"Message {str(row['message_id'])[:20]}",
-            ) for key,row in self.rows
-        ] or [make_choice("No eligible Smart Text posts","none")]
+        from .embed_studio_post_labels import build_published_post_choices
+
+        choices=build_published_post_choices(
+            self.rows,channel_names=channel_names,fetched=fetched,
+            extra_description_for=lambda _key,row: (
+                "Live Text on" if row.get("live_nonce") else "Live Text off"
+            ),
+        ) or [make_choice("No eligible Smart Text posts","none")]
         super().__init__(
             session,
             choices=choices,
@@ -71,7 +74,7 @@ class LiveTextSelect(_StudioPickerView):
 class _LiveTextPickerOpenButton(discord.ui.Button):
     """Swaps the Live Text menu for its house picker via _menu."""
 
-    def __init__(self,session: StudioSession,rows: list[tuple[str,dict[str,Any]]]) -> None:
+    def __init__(self,session: StudioSession,rows: list[tuple[str,dict[str,Any]]],*,channel_names: dict[int,str]|None=None,fetched: dict[str,Any]|None=None) -> None:
         super().__init__(
             label="Choose a Post",emoji="🔄",
             style=discord.ButtonStyle.primary,
@@ -79,6 +82,8 @@ class _LiveTextPickerOpenButton(discord.ui.Button):
         )
         self.session=session
         self.rows=list(rows)
+        self.channel_names=channel_names
+        self.fetched=fetched
 
     async def callback(self,interaction: discord.Interaction) -> None:
         view=self.view
@@ -86,13 +91,13 @@ class _LiveTextPickerOpenButton(discord.ui.Button):
             return
         await _menu(interaction,heading=_LIVE_HEADING,
                     description=_LIVE_DESCRIPTION,
-                    view=LiveTextSelect(self.session,self.rows))
+                    view=LiveTextSelect(self.session,self.rows,channel_names=self.channel_names,fetched=self.fetched))
 
 
 class LiveTextMenu(_StudioView):
-    def __init__(self,session: StudioSession,rows: list[tuple[str,dict[str,Any]]]) -> None:
+    def __init__(self,session: StudioSession,rows: list[tuple[str,dict[str,Any]]],*,channel_names: dict[int,str]|None=None,fetched: dict[str,Any]|None=None) -> None:
         super().__init__(session)
-        self.add_item(_LiveTextPickerOpenButton(session,rows))
+        self.add_item(_LiveTextPickerOpenButton(session,rows,channel_names=channel_names,fetched=fetched))
 
     @discord.ui.button(label="Back to Posted",emoji="◀️",style=discord.ButtonStyle.secondary,row=1)
     async def back(self,interaction: discord.Interaction,_button: discord.ui.Button) -> None:
@@ -206,8 +211,13 @@ async def open_live_text_menu(interaction: discord.Interaction,session: StudioSe
         ][-20:]
     except Exception:
         return await _say(interaction,"Couldn't read eligible Smart Text posts.")
+    from .embed_studio_post_labels import (
+        channel_names_from_guild, collect_published_post_info,
+    )
+
+    fetched=await collect_published_post_info(interaction.guild,rows)
     await _menu(interaction,heading="🔄 Hourly Live Text",
                 description="Choose an existing tracked post. Updates are optional and "
                             "recheck the moderator's access, bot authorship and content "
                             "before editing. A later manual Publish resets enrollment.",
-                view=LiveTextMenu(session,rows))
+                view=LiveTextMenu(session,rows,channel_names=channel_names_from_guild(interaction.guild),fetched=fetched))

@@ -499,8 +499,14 @@ def test_publish_deleted_sticky_post_recovers_like_pr875(monkeypatch):
     assert "Publish failed" not in said
     assert "NotFound" not in said
     assert harness.channel.sent == []
-    # The record (and its sticky state with it) is gone, session detached.
-    assert harness.library.published == {}
+    # UPDATED with the Repost build: the record is no longer dropped here.
+    # It stays, flagged message_missing with stickiness preserved as
+    # was_sticky, so one-tap Repost can bring the original back; the
+    # session is still detached so a fresh publish posts a new message.
+    record = harness.library.published[POST_KEY]
+    assert record["message_missing"] is True
+    assert record["was_sticky"] is True
+    assert post_is_sticky(record) is False
     assert harness.session.post_key == ""
 
 

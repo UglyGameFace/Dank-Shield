@@ -6,6 +6,13 @@ into the broad publish handler, so the user got a raw
 library forever — every later edit of that post failed identically and
 Edit Posted kept offering the ghost. These tests drive the real
 ``StudioReviewView.publish`` callback with a fake channel.
+
+Repost reconciliation (2026-11-19): PR #875 dropped the stale record
+here. One-tap Repost needs the record to survive, so the branch now
+flags it ``message_missing`` instead of removing it — the plain-words
+recovery, the detached session, and the untouched draft are unchanged,
+and the picker routes flagged posts to their action screen, so the
+ghost can never strand an edit on the raw error again.
 """
 from __future__ import annotations
 
@@ -178,8 +185,11 @@ def test_publish_deleted_tracked_post_recovers_in_plain_words(monkeypatch):
     assert "NotFound" not in said
     # Nothing was posted as a side effect of the recovery.
     assert harness.channel.sent == []
-    # (b) The stale record is gone from the saved library.
-    assert harness.state["value"]["published"] == {}
+    # (b) UPDATED for Repost: the record stays, flagged message_missing,
+    # so Published → Post Actions can Repost or Delete it. (PR #875
+    # removed it; one-tap Repost needs it to survive — see module doc.)
+    record = harness.state["value"]["published"][POST_KEY]
+    assert record["message_missing"] is True
     # The session is detached from the dead record.
     assert harness.session.post_key == ""
     # (c) The draft/project is untouched, and autosave persisted it as-is.

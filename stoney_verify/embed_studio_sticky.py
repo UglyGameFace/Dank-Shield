@@ -335,6 +335,66 @@ class StudioStickyRuntime:
         if entry is not None:
             self.remove_sticky(entry.channel_id)
 
+    async def _mark_missing_record(
+        self, guild_id: int, post_key: str, *, expected_message_id: int = 0,
+    ) -> None:
+        """Best-effort: flag a tracked post's message as deleted.
+
+        The record stays in Post Builder (flagged ``message_missing``,
+        stickiness preserved as ``was_sticky``) so a manager can bring
+        it back with one-tap Repost or remove it with Delete Post. A
+        mod's delete sticks until then — nothing auto-restores.
+        """
+        from .embed_studio_post_labels import flag_record_missing
+
+        try:
+            source, lib = await _load_library(int(guild_id))
+            item = lib.get("published", {}).get(post_key)
+            if isinstance(item, dict):
+                if expected_message_id and int(item.get("message_id") or 0) != int(expected_message_id):
+                    return
+                if flag_record_missing(item):
+                    await _save_library(int(guild_id), source, lib)
+        except Exception:
+            pass
+        entry = self._index_by_key(post_key)
+        if entry is not None:
+            self.remove_sticky(entry.channel_id)
+
+    async def on_message_delete(self, message: discord.Message) -> None:
+        """Flag a tracked Post Builder post when its message is deleted.
+
+        Only Dank Shield's own messages can be tracked posts, so other
+        deletions cost nothing. Uncached deletions are still caught by
+        the startup reconcile and by the picker / edit fetches, which
+        flag the record the same way.
+        """
+        guild = getattr(message, "guild", None)
+        if guild is None:
+            return
+        bot_user = getattr(self.bot, "user", None)
+        author = getattr(message, "author", None)
+        if bot_user is None or author is None:
+            return
+        if int(getattr(author, "id", 0) or 0) != int(getattr(bot_user, "id", 0) or 0):
+            return
+        channel_id = int(getattr(getattr(message, "channel", None), "id", 0) or 0)
+        message_id = int(getattr(message, "id", 0) or 0)
+        guild_id = int(getattr(guild, "id", 0) or 0)
+        if channel_id <= 0 or message_id <= 0 or guild_id <= 0:
+            return
+        post_key = f"{channel_id}:{message_id}"
+        try:
+            _source, lib = await _load_library(guild_id)
+        except Exception:
+            return
+        item = lib.get("published", {}).get(post_key)
+        if not isinstance(item, dict):
+            return
+        if int(item.get("message_id") or 0) != message_id:
+            return
+        await self._mark_missing_record(guild_id, post_key, expected_message_id=message_id)
+
     def _index_by_key(self, post_key: str) -> Optional[StudioStickyEntry]:
         for entry in self._index.values():
             if entry.post_key == post_key:
@@ -377,10 +437,11 @@ class StudioStickyRuntime:
                 message = await fetch_message_with_api_safety(
                     channel, old_message_id, label="studio sticky refresh")
             except discord.NotFound:
-                # The post was deleted. Like the publish recovery, a deleted
-                # post stays deleted: stop being sticky instead of posting
-                # the announcement again unasked.
-                await self._clear_sticky_record(
+                # The post was deleted. A deleted post stays deleted:
+                # flag it (stickiness preserved as was_sticky) instead of
+                # posting the announcement again unasked. A manager can
+                # bring it back with one-tap Repost.
+                await self._mark_missing_record(
                     int(entry.guild_id), entry.post_key,
                     expected_message_id=old_message_id)
                 return None
@@ -509,7 +570,7 @@ class StudioStickyRuntime:
         except Exception:
             return
         for key, item in list(lib.get("published", {}).items()):
-            if not isinstance(item, dict) or not post_is_sticky(item):
+            if not isinstance(item, dict):
                 continue
             try:
                 channel_id = int(item.get("channel_id") or 0)
@@ -518,11 +579,14 @@ class StudioStickyRuntime:
                 continue
             if channel_id <= 0 or message_id <= 0:
                 continue
-            state = sticky_state(item)
-            self.set_sticky(StudioStickyEntry(
-                guild_id=guild_id, channel_id=channel_id, post_key=str(key),
-                last_sent_at=state["last_sent_at"],
-            ))
+            if post_is_sticky(item):
+                state = sticky_state(item)
+                self.set_sticky(StudioStickyEntry(
+                    guild_id=guild_id, channel_id=channel_id, post_key=str(key),
+                    last_sent_at=state["last_sent_at"],
+                ))
+            if bool(item.get("message_missing")):
+                continue
             channel = guild.get_channel(channel_id) if hasattr(guild, "get_channel") else None
             if not isinstance(channel, discord.TextChannel):
                 continue
@@ -530,7 +594,10 @@ class StudioStickyRuntime:
                 await fetch_message_with_api_safety(
                     channel, message_id, label="studio sticky startup", recovery=True)
             except discord.NotFound:
-                await self._clear_sticky_record(
+                # Deleted while the bot was offline (or never flagged):
+                # flag it so pickers say "message deleted" and Repost
+                # can bring it back, instead of silently un-sticking.
+                await self._mark_missing_record(
                     guild_id, str(key), expected_message_id=message_id)
             except (discord.Forbidden, discord.HTTPException):
                 continue
@@ -543,6 +610,7 @@ def ensure_studio_sticky_runtime(bot: Any) -> StudioStickyRuntime:
     runtime = StudioStickyRuntime(bot)
     setattr(bot, _RUNTIME_ATTR, runtime)
     bot.add_listener(runtime.on_message, "on_message")
+    bot.add_listener(runtime.on_message_delete, "on_message_delete")
     bot.add_listener(runtime.on_ready, "on_ready")
     return runtime
 
@@ -571,8 +639,14 @@ from .ui.picker import make_choice  # noqa: E402
 
 
 def _sticky_label(item: dict[str, Any]) -> str:
-    state = "📌 Sticky on" if post_is_sticky(item) else "Not sticky"
-    return f"{state} • #{item.get('channel_id')} • message {item.get('message_id')}"
+    """One post's label text (record-only; pickers use the shared builder)."""
+    from .embed_studio_post_labels import build_published_post_choices
+
+    choices = build_published_post_choices(
+        [("key", item)],
+        prefix_for=lambda _key, row: "📌" if post_is_sticky(row) else "",
+    )
+    return choices[0].label if choices else "Untitled post"
 
 
 async def _show_sticky_choice(
@@ -589,8 +663,15 @@ async def _show_sticky_choice(
     if not isinstance(item, dict):
         return await _say(interaction, "That tracked post no longer exists.")
     sticky = post_is_sticky(item)
+    missing = bool(item.get("message_missing"))
     channel_id = item.get("channel_id")
-    if sticky:
+    if missing:
+        status = (
+            "⚠️ This post's message was **deleted** in Discord. Repost brings "
+            "it back (stickiness included, if it was sticky). Delete Post "
+            "removes it from Post Builder for good."
+        )
+    elif sticky:
         status = (
             "This post is **sticky**. When people chat in its channel, it is "
             "re-posted at the bottom so it does not get buried. Bot messages "
@@ -603,8 +684,10 @@ async def _show_sticky_choice(
             "re-posted at the bottom of its channel as people chat, so it "
             "does not get buried. A channel can only have one sticky."
         )
+    from .embed_studio_post_labels import post_identity
+
     description = (
-        f"Channel: <#{channel_id}>\nMessage: {item.get('message_id')}\n\n{status}"
+        f"**{post_identity(item)}**\nChannel: <#{channel_id}>\nMessage: {item.get('message_id')}\n\n{status}"
     )
     if notice:
         description = notice + "\n\n" + description
@@ -612,19 +695,24 @@ async def _show_sticky_choice(
         interaction,
         heading="📌 Sticky Post",
         description=description,
-        view=StudioStickyChoiceView(session, key, sticky=sticky),
+        view=StudioStickyChoiceView(session, key, sticky=sticky, missing=missing),
     )
 
 
 class StudioStickyChoiceView(_StudioView):
-    def __init__(self, session: StudioSession, key: str, *, sticky: bool) -> None:
+    def __init__(
+        self, session: StudioSession, key: str, *, sticky: bool, missing: bool = False,
+    ) -> None:
         super().__init__(session)
         self.key = key
         self.sticky = bool(sticky)
+        self.missing = bool(missing)
         self.toggle.label = "Remove Sticky" if self.sticky else "Make Sticky"
         self.toggle.style = (
             discord.ButtonStyle.danger if self.sticky else discord.ButtonStyle.success
         )
+        self.toggle.disabled = self.missing
+        self.repost.disabled = not self.missing
 
     @discord.ui.button(
         label="Make Sticky", emoji="📌", style=discord.ButtonStyle.success,
@@ -654,6 +742,24 @@ class StudioStickyChoiceView(_StudioView):
         )
 
     @discord.ui.button(
+        label="Repost", emoji="📨", style=discord.ButtonStyle.success,
+        custom_id="dank:embed_studio:repost:v1", row=1,
+    )
+    async def repost(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        from .embed_studio_post_actions import run_repost
+
+        await run_repost(interaction, self.session, self.key)
+
+    @discord.ui.button(
+        label="Delete Post", emoji="🗑️", style=discord.ButtonStyle.danger,
+        custom_id="dank:embed_studio:delete_post:v1", row=1,
+    )
+    async def delete_post(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        from .embed_studio_post_actions import open_delete_post_confirm
+
+        await open_delete_post_confirm(interaction, self.session, self.key)
+
+    @discord.ui.button(
         label="Back to Sticky Posts", emoji="◀️", style=discord.ButtonStyle.secondary,
         custom_id="dank:embed_studio:sticky_choice_back:v1", row=0,
     )
@@ -662,14 +768,19 @@ class StudioStickyChoiceView(_StudioView):
 
 
 class StudioStickyMenuView(_StudioView):
-    def __init__(self, session: StudioSession, lib: dict[str, Any]) -> None:
+    def __init__(
+        self, session: StudioSession, lib: dict[str, Any], *,
+        channel_names: dict[int, str] | None = None,
+        fetched: dict[str, Any] | None = None,
+    ) -> None:
         super().__init__(session)
         self.add_item(_StudioPickerOpenButton(
             session, label="Choose a Published Post", emoji="📌",
             custom_id="dank:embed_studio:sticky_post:open:v1", row=0,
             heading="📌 Sticky Posts",
             description="Choose one of the tracked Dank Shield posts to make it sticky or remove sticky.",
-            build=lambda interaction: _sticky_post_picker_view(session, lib),
+            build=lambda interaction: _sticky_post_picker_view(
+                session, lib, channel_names=channel_names, fetched=fetched),
         ))
 
     @discord.ui.button(
@@ -681,13 +792,23 @@ class StudioStickyMenuView(_StudioView):
 
 
 def _sticky_post_picker_view(
-    session: StudioSession, lib: dict[str, Any],
+    session: StudioSession, lib: dict[str, Any], *,
+    channel_names: dict[int, str] | None = None,
+    fetched: dict[str, Any] | None = None,
 ) -> _StudioPickerView:
-    choices = [
-        make_choice(_sticky_label(item), key)
-        for key, item in list(lib.get("published", {}).items())[-20:]
+    from .embed_studio_post_labels import build_published_post_choices
+
+    records = [
+        (key, item) for key, item in list(lib.get("published", {}).items())[-20:]
         if isinstance(item, dict)
-    ] or [make_choice("No tracked messages yet", "none")]
+    ]
+    choices = build_published_post_choices(
+        records, channel_names=channel_names, fetched=fetched,
+        prefix_for=lambda _key, row: "📌" if post_is_sticky(row) else "",
+        extra_description_for=lambda _key, row: (
+            "Sticky on" if post_is_sticky(row) else ""
+        ),
+    ) or [make_choice("No tracked messages yet", "none")]
 
     async def on_pick(interaction: discord.Interaction, key: str) -> None:
         if key == "none":
@@ -713,6 +834,15 @@ async def open_sticky_menu(interaction: discord.Interaction, session: StudioSess
         from .embed_studio_ui import _error
 
         return await _say(interaction, _error(exc))
+    from .embed_studio_post_labels import (
+        channel_names_from_guild, collect_published_post_info,
+    )
+
+    records = [
+        (key, item) for key, item in list(lib.get("published", {}).items())[-20:]
+        if isinstance(item, dict)
+    ]
+    fetched = await collect_published_post_info(interaction.guild, records)
     await _menu(
         interaction, heading="📌 Sticky Posts",
         description=(
@@ -720,7 +850,11 @@ async def open_sticky_menu(interaction: discord.Interaction, session: StudioSess
             "re-posted at the bottom of its channel as people chat, so it "
             "does not get buried. A channel can only have one sticky."
         ),
-        view=StudioStickyMenuView(session, lib),
+        view=StudioStickyMenuView(
+            session, lib,
+            channel_names=channel_names_from_guild(interaction.guild),
+            fetched=fetched,
+        ),
     )
 
 

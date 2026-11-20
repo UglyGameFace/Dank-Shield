@@ -3097,17 +3097,24 @@ class StudioReviewView(_StudioView):
                     message = await channel.fetch_message(int(item["message_id"]))
                 except discord.NotFound:
                     # The tracked Discord message was deleted, so there is
-                    # nothing left to edit. Drop the stale tracking record —
-                    # left in place it strands every later edit on this same
-                    # raw error and keeps haunting Edit Posted — detach the
-                    # session from it, and leave the draft untouched:
-                    # publishing again posts the draft as a brand-new message.
+                    # nothing left to edit. Flag the record as missing
+                    # instead of dropping it: the post stays Repost-able
+                    # from Published → Post Actions until a manager deletes
+                    # it for real, and no later edit can hit this raw error
+                    # again (the picker routes flagged posts to their
+                    # action screen). Detach the session from it and leave
+                    # the draft untouched: publishing again posts the draft
+                    # as a brand-new message.
                     dead_key = self.session.post_key
-                    lib["published"].pop(dead_key, None)
-                    try:
-                        await _save_library(self.session.guild_id, source, lib)
-                    except Exception:
-                        pass
+                    dead_item = lib["published"].get(dead_key)
+                    if isinstance(dead_item, dict):
+                        from .embed_studio_post_labels import flag_record_missing
+
+                        flag_record_missing(dead_item)
+                        try:
+                            await _save_library(self.session.guild_id, source, lib)
+                        except Exception:
+                            pass
                     if self.session.post_key == dead_key:
                         self.session.post_key = ""
                     self.session.dirty = True
@@ -3115,9 +3122,11 @@ class StudioReviewView(_StudioView):
                     return await _say(
                         interaction,
                         "That post was deleted, so there is nothing to edit. "
-                        "I removed its stale tracking entry, and your changes "
-                        "are saved in your draft — publish again and it will "
-                        "post as a brand-new message."
+                        "I kept it in Post Builder, marked as deleted — "
+                        "Repost (Published → pick the post) can bring the "
+                        "original back, and your changes are saved in your "
+                        "draft: publish again and it will post as a "
+                        "brand-new message."
                         + (f"\n⚠️ {autosave_warning}" if autosave_warning else ""),
                     )
                 if message.author.id != interaction.client.user.id:
@@ -3160,6 +3169,14 @@ class StudioReviewView(_StudioView):
                 try:
                     lib["published"][self.session.post_key]["live_source"] = live_project(self.preview_project)
                 except StudioLiveError:
+                    pass
+                # Keep a saved copy of the post's own words on the record
+                # (v2 storage only, like live_source): picker labels read
+                # it, and one-tap Repost re-sends it if the message is
+                # deleted. Best-effort — tracking never fails over it.
+                try:
+                    lib["published"][self.session.post_key]["repost_source"] = validate_project(deepcopy(draft))
+                except (StudioValidationError, ValueError, TypeError):
                     pass
             from .embed_studio_core import trim_published_history
             try:
@@ -3238,61 +3255,26 @@ def _from_message(message: discord.Message) -> dict[str, Any]:
 
 
 def _tracked_post_picker_view(
-    session: StudioSession, lib: dict[str, Any],
+    session: StudioSession, lib: dict[str, Any], *,
+    channel_names: dict[int, str] | None = None,
+    fetched: dict[str, Any] | None = None,
 ) -> _StudioPickerView:
-    choices = [
-        make_choice(f"#{item['channel_id']} • message {item['message_id']}", key)
-        for key, item in list(lib["published"].items())[-20:]
-    ] or [make_choice("No tracked messages yet", "none")]
+    from .embed_studio_post_labels import build_published_post_choices
+
+    records = [
+        (key, item) for key, item in list(lib["published"].items())[-20:]
+        if isinstance(item, dict)
+    ]
+    choices = build_published_post_choices(
+        records, channel_names=channel_names, fetched=fetched,
+    ) or [make_choice("No tracked messages yet", "none")]
 
     async def on_pick(interaction: discord.Interaction, key: str) -> None:
         if key == "none":
             return await _say(interaction, "Publish a message first; it will appear here.")
-        await interaction.response.defer(ephemeral=True)
-        try:
-            _, fresh_lib = await _load_library(session.guild_id)
-            item = fresh_lib["published"].get(key)
-            if not item:
-                return await _say(interaction, "This tracked message no longer exists.")
-            if isinstance(item.get("poll"), dict):
-                return await _say(
-                    interaction,
-                    "This is a poll post. Polls are managed from Polls in this "
-                    "menu — pause, resume, or end voting there. The question "
-                    "and choices cannot be edited after posting, so the "
-                    "wording editor does not open for polls.")
-            channel = interaction.guild.get_channel(int(item["channel_id"]))
-            if not isinstance(channel, discord.TextChannel):
-                return await _say(interaction, "That channel is not available.")
-            if _post_blockers(interaction, channel):
-                return await _say(interaction, "Dank Shield cannot safely edit in that channel.")
-            message = await channel.fetch_message(int(item["message_id"]))
-            if message.author.id != interaction.client.user.id:
-                return await _say(interaction, "This is not a Dank Shield message.")
-            draft = _from_message(message)
-            if isinstance(item.get("live_source"), dict):
-                from .embed_studio_live_text import live_project
-                try:
-                    draft = live_project(item["live_source"])
-                except StudioValidationError:
-                    pass
-        except Exception as exc:
-            return await _say(interaction, f"Could not load this message: {_error(exc)}")
-        session.history.append(session.project)
-        session.history = session.history[-10:]
-        draft["role_mode"] = str(item.get("role_mode") or "buttons")
-        draft["role_actions"] = deepcopy(item.get("role_actions") or [])
-        draft["form"] = deepcopy(item.get("form"))
-        try:
-            draft = validate_project(draft)
-        except StudioValidationError:
-            return await _say(interaction, "This tracked post has an unsupported role configuration. Ask staff to repair it.")
-        session.project = draft
-        session.dirty = True
-        session.channel_id = int(channel.id)
-        session.post_key = key
-        session.active = 0
-        await _home(interaction, session, notice="Published message loaded. Edits are not live until confirmed.")
+        from .embed_studio_post_actions import open_post_actions
+
+        await open_post_actions(interaction, session, key)
 
     return _StudioPickerView(
         session, choices=choices, on_pick=on_pick,
@@ -3304,8 +3286,75 @@ def _tracked_post_picker_view(
     )
 
 
+async def _load_tracked_post_into_editor(
+    interaction: discord.Interaction, session: StudioSession, key: str,
+) -> None:
+    """Load one tracked post into the editor (the picker's Edit action)."""
+    if not interaction.response.is_done():
+        await interaction.response.defer(ephemeral=True)
+    try:
+        _, fresh_lib = await _load_library(session.guild_id)
+        item = fresh_lib["published"].get(key)
+        if not item:
+            return await _say(interaction, "This tracked message no longer exists.")
+        if isinstance(item.get("poll"), dict):
+            return await _say(
+                interaction,
+                "This is a poll post. Polls are managed from Polls in this "
+                "menu — pause, resume, or end voting there. The question "
+                "and choices cannot be edited after posting, so the "
+                "wording editor does not open for polls.")
+        channel = interaction.guild.get_channel(int(item["channel_id"]))
+        if not isinstance(channel, discord.TextChannel):
+            return await _say(interaction, "That channel is not available.")
+        if _post_blockers(interaction, channel):
+            return await _say(interaction, "Dank Shield cannot safely edit in that channel.")
+        try:
+            message = await channel.fetch_message(int(item["message_id"]))
+        except discord.NotFound:
+            # The message is gone: flag the record (Repost can bring it
+            # back) and show its action screen instead of a raw error.
+            from .embed_studio_post_actions import mark_published_post_missing, open_post_actions
+
+            await mark_published_post_missing(
+                session.guild_id, key, expected_message_id=int(item["message_id"]))
+            return await open_post_actions(
+                interaction, session, key,
+                notice="That post's message was deleted in Discord, so there is nothing to edit.")
+        if message.author.id != interaction.client.user.id:
+            return await _say(interaction, "This is not a Dank Shield message.")
+        draft = _from_message(message)
+        if isinstance(item.get("live_source"), dict):
+            from .embed_studio_live_text import live_project
+            try:
+                draft = live_project(item["live_source"])
+            except StudioValidationError:
+                pass
+    except Exception as exc:
+        return await _say(interaction, f"Could not load this message: {_error(exc)}")
+    session.history.append(session.project)
+    session.history = session.history[-10:]
+    draft["role_mode"] = str(item.get("role_mode") or "buttons")
+    draft["role_actions"] = deepcopy(item.get("role_actions") or [])
+    draft["form"] = deepcopy(item.get("form"))
+    try:
+        draft = validate_project(draft)
+    except StudioValidationError:
+        return await _say(interaction, "This tracked post has an unsupported role configuration. Ask staff to repair it.")
+    session.project = draft
+    session.dirty = True
+    session.channel_id = int(channel.id)
+    session.post_key = key
+    session.active = 0
+    await _home(interaction, session, notice="Published message loaded. Edits are not live until confirmed.")
+
+
 class PublishedMenu(_StudioView):
-    def __init__(self, session: StudioSession, lib: dict[str, Any]) -> None:
+    def __init__(
+        self, session: StudioSession, lib: dict[str, Any], *,
+        channel_names: dict[int, str] | None = None,
+        fetched: dict[str, Any] | None = None,
+    ) -> None:
         super().__init__(session)
         self.lib = lib
         self.add_item(_StudioPickerOpenButton(
@@ -3313,7 +3362,8 @@ class PublishedMenu(_StudioView):
             custom_id="dank:embed_studio:tracked_post:open:v1", row=0,
             heading="🛠️ Edit a Published Embed",
             description="Choose one of the last 20 tracked Dank Shield posts to load it into your private editor.",
-            build=lambda interaction: _tracked_post_picker_view(session, lib),
+            build=lambda interaction: _tracked_post_picker_view(
+                session, lib, channel_names=channel_names, fetched=fetched),
         ))
 
     @discord.ui.button(label="Live Text Updates", emoji="🔄", style=discord.ButtonStyle.secondary, row=1)
@@ -3342,10 +3392,23 @@ async def _published(interaction: discord.Interaction, session: StudioSession) -
         _, lib = await _load_library(session.guild_id)
     except Exception as exc:
         return await _say(interaction, _error(exc))
+    from .embed_studio_post_labels import (
+        channel_names_from_guild, collect_published_post_info,
+    )
+
+    records = [
+        (key, item) for key, item in list(lib["published"].items())[-20:]
+        if isinstance(item, dict)
+    ]
+    fetched = await collect_published_post_info(interaction.guild, records)
     await _menu(
         interaction, heading="🛠️ Edit a Published Embed",
         description="Select one of the last 20 tracked Dank Shield posts. We'll fetch the actual message, then let you edit a private copy. Publishing applies the changes to that same bot-owned message.",
-        view=PublishedMenu(session, lib),
+        view=PublishedMenu(
+            session, lib,
+            channel_names=channel_names_from_guild(interaction.guild),
+            fetched=fetched,
+        ),
     )
 
 
