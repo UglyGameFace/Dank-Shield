@@ -550,6 +550,15 @@ RECENT_UPDATES: tuple[RecentFeatureUpdate, ...] = (
     # Same day: polls moved into Post Builder — create, vote, pause, and
     # end them under Edit Posted → Polls; sticky polls keep their votes
     # when they move.
+    # Same day: published-post pickers stopped labelling posts with raw
+    # channel IDs — they now show each post's title with its channel
+    # name and posted date, and say "message deleted" for posts whose
+    # message is gone. Published posts gained Delete Post (message and
+    # tracking removed together; the draft is kept) and one-tap Repost:
+    # a deleted post is kept, marked deleted, and Repost brings it back
+    # (stickiness restored; polls restart at zero votes) — so the
+    # deleted-post wording in the entry below says "bring it back"
+    # instead of the earlier "clears the stale entry".
     RecentFeatureUpdate(
         "embed_studio", "Scheduled and recurring posts are in Post Builder",
         "Announcements in 4 steps: schedule for later, repeat daily or "
@@ -557,9 +566,11 @@ RECENT_UPDATES: tuple[RecentFeatureUpdate, ...] = (
         "plus JSON backups. Any published post can "
         "now be made sticky: it is re-posted at the bottom of its "
         "channel as people chat. Polls live here too — create one, let "
-        "members vote, pause or end it anytime. If a post you are editing "
-        "was deleted, Post Builder now says so, clears the stale "
-        "entry, and lets you publish your draft as a new post.", "2026-11-19",
+        "members vote, pause or end it anytime. Post pickers now name "
+        "each post by its title, channel and date, so the right post is "
+        "easy to spot. If a post was deleted, Post Builder says so and "
+        "one tap on Repost brings it back; Delete Post removes a post "
+        "for good while keeping your draft.", "2026-11-19",
     ),
     RecentFeatureUpdate(
         "share_router", "Share videos from regular channels",
