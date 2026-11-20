@@ -562,15 +562,13 @@ RECENT_UPDATES: tuple[RecentFeatureUpdate, ...] = (
     RecentFeatureUpdate(
         "embed_studio", "Scheduled and recurring posts are in Post Builder",
         "Announcements in 4 steps: schedule for later, repeat daily or "
-        "weekly, run a campaign, add a form or a live-updating post — "
-        "plus JSON backups. Any published post can "
-        "now be made sticky: it is re-posted at the bottom of its "
-        "channel as people chat. Polls live here too — create one, let "
-        "members vote, pause or end it anytime. Post pickers now name "
-        "each post by its title, channel and date, so the right post is "
-        "easy to spot. If a post was deleted, Post Builder says so and "
-        "one tap on Repost brings it back; Delete Post removes a post "
-        "for good while keeping your draft.", "2026-11-19",
+        "weekly, run a campaign, add a form or a live-updating post, "
+        "plus JSON backups. Any published post can be made sticky — "
+        "re-posted at the bottom of its channel as people chat. Polls "
+        "live here too: create, vote, pause or end anytime. Pickers "
+        "name each post by title, channel and date. A deleted post can "
+        "be brought back with one tap on Repost; Delete Post removes "
+        "it for good, keeping your draft.", "2026-11-19",
     ),
     RecentFeatureUpdate(
         "share_router", "Share videos from regular channels",
