@@ -210,6 +210,13 @@ class CommunityToolsView(_OwnedView):
         _ = button
         await _replace(interaction, embed=_fun_embed(), view=FunLookupView(self.owner_id))
 
+    @discord.ui.button(label="Dead Server Clapbacks", emoji="💀", style=discord.ButtonStyle.secondary, row=2)
+    async def clapbacks(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        from .public_dead_server_clapbacks import open_dead_server_clapbacks
+
+        await open_dead_server_clapbacks(interaction)
+
     @discord.ui.button(label="Dank Shield Home", emoji="🏠", style=discord.ButtonStyle.secondary, row=2)
     async def home(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button

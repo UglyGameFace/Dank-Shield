@@ -178,6 +178,12 @@ class CleanupCenterView(_OwnedView):
         from .public_mod_command_center import open_mod_command_center
         await open_mod_command_center(interaction)
 
+    @discord.ui.button(label="Dank Shield Home", emoji="🏠", style=discord.ButtonStyle.secondary, row=1)
+    async def home(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        from .public_command_surface_v2 import open_compact_dank_home
+        await open_compact_dank_home(interaction)
+
 
 class CleanupRunModal(discord.ui.Modal, title="Run Configured Cleanup"):
     hours = discord.ui.TextInput(label="Override age hours (blank = configured)", required=False, max_length=4)

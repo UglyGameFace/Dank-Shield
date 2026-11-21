@@ -1232,7 +1232,6 @@ class FeatureCategoryView(_OwnedView):
             raise RuntimeError(
                 f"Dank Shield category {self.category_key!r} exceeds the mobile component layout budget"
             )
-        self.add_item(_CategoryNavButton(category_key=self.category_key, action="back", row=nav_row))
         self.add_item(_CategoryNavButton(category_key=self.category_key, action="home", row=nav_row))
         self.add_item(_CategoryNavButton(category_key=self.category_key, action="refresh", row=nav_row))
         self.add_item(_CloseNavigationButton(row=nav_row))
@@ -1787,8 +1786,15 @@ def _shortcut_callback(feature_key: str) -> Any:
             from .public_share_router import open_share_router
             return await open_share_router(interaction, replace_message=False)
         if feature_key == "community_pings_manager":
-            from .public_toke import open_community_ping_setup
-            return await open_community_ping_setup(interaction, replace_message=False)
+            # Staff land on the ping-role manager; everyone else lands on
+            # their own ping picker. The shortcut is member-discoverable, so
+            # it must not route members into a staff-only surface.
+            from .public_owner_authority import interaction_has_manage_guild_authority
+            if interaction_has_manage_guild_authority(interaction):
+                from .public_toke import open_community_ping_setup
+                return await open_community_ping_setup(interaction, replace_message=False)
+            from .public_toke import open_member_community_pings
+            return await open_member_community_pings(interaction, replace_message=False)
         if feature_key == "server_stats" and not interaction.response.is_done():
             # Canonical stats editor switches to edit_original_response once
             # deferred, instead of edit_message (invalid for slash commands).

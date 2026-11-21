@@ -384,6 +384,22 @@ class MemberCommandCenterView(OwnedView):
         view = OperationsSafetyMenuView(self.owner_id)
         await _replace_panel(interaction, embed=_operations_embed(), view=view)
 
+    @discord.ui.button(
+        label="Dank Shield Home",
+        emoji="🏠",
+        style=discord.ButtonStyle.secondary,
+        row=1,
+    )
+    async def home(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ) -> None:
+        _ = button
+        from .public_command_surface_v2 import open_compact_dank_home
+
+        await open_compact_dank_home(interaction)
+
 
 class CenterRoleSelect(DankRoleSelect):
     """House role picker for the Member Command Center.

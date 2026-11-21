@@ -699,6 +699,13 @@ class VoiceSafetyStaffView(discord.ui.View):
         await interaction.response.defer()
         await interaction.edit_original_response(embed=await _embed(interaction), view=VoiceSafetyStaffView(self.owner_id))
 
+    @discord.ui.button(label="Dank Shield Home", emoji="🏠", style=discord.ButtonStyle.secondary, row=3)
+    async def home(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        from .public_command_surface_v2 import open_compact_dank_home
+
+        await open_compact_dank_home(interaction)
+
 
 class VoiceSafetyPaidAckView(discord.ui.View):
     """One-time per-guild acknowledgment that Voice Safety uses a paid API.

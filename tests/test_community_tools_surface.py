@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 
 import discord
 
@@ -19,6 +22,24 @@ def _labels(view: discord.ui.View) -> set[str]:
         for item in view.children
         if str(getattr(item, "label", "") or "")
     }
+
+
+def test_community_tools_clapbacks_button_opens_clapbacks() -> None:
+    """Phase 0: Community Tools must actually link the Clapbacks surface it groups."""
+    async def run():
+        view = CommunityToolsView(1)
+        button = next(
+            item for item in view.children
+            if str(getattr(item, "label", "") or "") == "Dead Server Clapbacks"
+        )
+        interaction = SimpleNamespace()
+        with patch(
+            "stoney_verify.commands_ext.public_dead_server_clapbacks.open_dead_server_clapbacks",
+            new_callable=AsyncMock,
+        ) as opener:
+            await button.callback(interaction)
+            opener.assert_awaited_once_with(interaction)
+    asyncio.run(run())
 
 
 def test_community_navigation_exposes_tools_without_new_slash_child() -> None:
@@ -40,6 +61,7 @@ def test_community_center_keeps_core_tools_without_command_sprawl() -> None:
         "Member / Server Info",
         "Permission Check",
         "Fun & Lookup",
+        "Dead Server Clapbacks",
         "Dank Shield Home",
         "Close",
     } <= labels

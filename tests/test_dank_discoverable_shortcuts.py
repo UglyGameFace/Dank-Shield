@@ -50,12 +50,41 @@ def test_component_only_ui_is_opened_with_private_slash_message():
         paths = (
             ("community_hub", "stoney_verify.commands_ext.public_community_hub.open_community_hub"),
             ("share_router", "stoney_verify.commands_ext.public_share_router.open_share_router"),
-            ("community_pings_manager", "stoney_verify.commands_ext.public_toke.open_community_ping_setup"),
         )
         for key, path in paths:
             with patch(path, new_callable=AsyncMock) as owner:
                 await surface._shortcut_callback(key)(interaction)
                 owner.assert_awaited_once_with(interaction, replace_message=False)
+    asyncio.run(run())
+
+
+def test_pings_shortcut_routes_by_manage_guild_authority():
+    """Phase 0: /dank pings must not route members into the staff manager."""
+    async def run():
+        staff = SimpleNamespace(
+            permissions=SimpleNamespace(administrator=False, manage_guild=True),
+            user=SimpleNamespace(id=7),
+            guild=SimpleNamespace(owner_id=999),
+        )
+        member = SimpleNamespace(
+            permissions=SimpleNamespace(administrator=False, manage_guild=False),
+            user=SimpleNamespace(id=7),
+            guild=SimpleNamespace(owner_id=999),
+        )
+        with patch(
+            "stoney_verify.commands_ext.public_toke.open_community_ping_setup",
+            new_callable=AsyncMock,
+        ) as staff_owner, patch(
+            "stoney_verify.commands_ext.public_toke.open_member_community_pings",
+            new_callable=AsyncMock,
+        ) as member_owner:
+            await surface._shortcut_callback("community_pings_manager")(staff)
+            staff_owner.assert_awaited_once_with(staff, replace_message=False)
+            member_owner.assert_not_awaited()
+
+            await surface._shortcut_callback("community_pings_manager")(member)
+            member_owner.assert_awaited_once_with(member, replace_message=False)
+            staff_owner.assert_awaited_once()
     asyncio.run(run())
 
 

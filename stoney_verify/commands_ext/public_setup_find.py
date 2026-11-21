@@ -407,6 +407,19 @@ class SetupSearchResultView(discord.ui.View):
         self.timeout_seconds = float(timeout)
         self.add_item(_SetupFindOpenButton(spec))
 
+    @discord.ui.button(
+        label="Setup Home",
+        emoji="🏠",
+        style=discord.ButtonStyle.secondary,
+        custom_id="dank:setup_find:result:home:v1",
+        row=1,
+    )
+    async def setup_home(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        from .public_setup_group import _dank_shield_solid_setup_entry
+
+        await _dank_shield_solid_setup_entry(interaction)
+
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if int(interaction.user.id) != self.owner_id:
             await interaction.response.send_message("❌ This setup search belongs to the admin who opened it.", ephemeral=True)

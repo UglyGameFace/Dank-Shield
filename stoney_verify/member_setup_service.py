@@ -32,7 +32,7 @@ SETUP_SECTIONS: tuple[str, ...] = (
 SECTION_LABELS: dict[str, str] = {
     "community": "Community",
     "notifications": "Notifications",
-    "profile": "Profile & Cosmetics",
+    "profile": "Profile & Signature",
     "interests": "Interests",
 }
 

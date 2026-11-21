@@ -573,15 +573,17 @@ def test_status_embed_reflects_state_and_role() -> None:
     assert "<@&" not in joined
 
 
-def test_community_tools_view_no_longer_contains_clapback_button() -> None:
+def test_community_tools_view_contains_clapback_button() -> None:
+    # Menu Phase 0 (2026-11-21): the registry groups Clapbacks under
+    # Community Tools' "Server tools", so the tools menu links it again.
     view = CommunityToolsView(123)
     labels = {
         str(getattr(item, "label", "") or "")
         for item in view.children
         if str(getattr(item, "label", "") or "")
     }
-    assert "Dead Server Clapbacks" not in labels
-    assert sum(isinstance(item, discord.ui.Button) for item in view.children) == 9
+    assert "Dead Server Clapbacks" in labels
+    assert sum(isinstance(item, discord.ui.Button) for item in view.children) == 10
 
 
 def test_clapback_destination_is_registered_with_community_server_tools() -> None:

@@ -105,7 +105,7 @@ def test_ticket_operations_preserve_queue_lookup_and_setup_families() -> None:
     queues = _labels(TicketOperationsView(1, section="queues"))
     setup = _labels(TicketOperationsView(1, section="setup"))
     assert {"Active", "Unassigned", "Mine", "Recent Closed", "Overdue", "Find Ticket"} <= queues
-    assert {"Current Ticket", "Public Panel", "Intake & Routing", "Categories", "Staff Alerts"} <= setup
+    assert {"This Ticket", "Public Panel", "Intake & Routing", "Categories", "Staff Alerts"} <= setup
     assert "Public Panel" not in queues
     assert "Active" not in setup
     for section in ("queues", "setup"):
