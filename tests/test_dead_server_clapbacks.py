@@ -13,7 +13,10 @@ from stoney_verify import dead_server_clapbacks as clap
 from stoney_verify import navigation_registry
 from stoney_verify.commands_ext import public_command_surface_v2 as surface
 from stoney_verify.commands_ext import public_dead_server_clapbacks as clapback_panel
-from stoney_verify.commands_ext.public_community_tools import CommunityToolsView
+from stoney_verify.commands_ext.public_community_tools import (
+    CommunityToolsMoreView,
+    CommunityToolsView,
+)
 from stoney_verify.dead_server_clapbacks import (
     BUILTIN_LINES,
     DeadServerClapbackRuntime,
@@ -576,14 +579,24 @@ def test_status_embed_reflects_state_and_role() -> None:
 def test_community_tools_view_contains_clapback_button() -> None:
     # Menu Phase 0 (2026-11-21): the registry groups Clapbacks under
     # Community Tools' "Server tools", so the tools menu links it again.
-    view = CommunityToolsView(123)
+    # CI repair: the flat home view hit the mobile dense-panel limit, so
+    # the Clapbacks button now lives in the Fun, Links & More section.
+    home = CommunityToolsView(123)
+    home_labels = {
+        str(getattr(item, "label", "") or "")
+        for item in home.children
+        if str(getattr(item, "label", "") or "")
+    }
+    assert "Fun, Links & More" in home_labels
+    assert sum(isinstance(item, discord.ui.Button) for item in home.children) == 6
+    view = CommunityToolsMoreView(123)
     labels = {
         str(getattr(item, "label", "") or "")
         for item in view.children
         if str(getattr(item, "label", "") or "")
     }
     assert "Dead Server Clapbacks" in labels
-    assert sum(isinstance(item, discord.ui.Button) for item in view.children) == 10
+    assert sum(isinstance(item, discord.ui.Button) for item in view.children) == 5
 
 
 def test_clapback_destination_is_registered_with_community_server_tools() -> None:

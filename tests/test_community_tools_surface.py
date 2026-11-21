@@ -9,6 +9,8 @@ import discord
 
 from stoney_verify.commands_ext.public_command_surface_v2 import FeatureCategoryView
 from stoney_verify.commands_ext.public_community_tools import (
+    CommunityToolsInfoView,
+    CommunityToolsMoreView,
     CommunityToolsView,
     FunLookupView,
 )
@@ -25,9 +27,13 @@ def _labels(view: discord.ui.View) -> set[str]:
 
 
 def test_community_tools_clapbacks_button_opens_clapbacks() -> None:
-    """Phase 0: Community Tools must actually link the Clapbacks surface it groups."""
+    """Phase 0: Community Tools must actually link the Clapbacks surface it groups.
+
+    The button lives in the Fun, Links & More section view — the flat
+    home view was split into focused sections for the mobile guardrail.
+    """
     async def run():
-        view = CommunityToolsView(1)
+        view = CommunityToolsMoreView(1)
         button = next(
             item for item in view.children
             if str(getattr(item, "label", "") or "") == "Dead Server Clapbacks"
@@ -53,18 +59,41 @@ def test_community_navigation_exposes_tools_without_new_slash_child() -> None:
 
 
 def test_community_center_keeps_core_tools_without_command_sprawl() -> None:
+    # Home keeps the two primary jobs plus the two section openers;
+    # every other tool lives in exactly one focused section.
     labels = _labels(CommunityToolsView(1))
     assert {
         "Quiet Server Notice",
         "Create Poll",
-        "Embed Studio",
-        "Member / Server Info",
-        "Permission Check",
-        "Fun & Lookup",
-        "Dead Server Clapbacks",
+        "Info & Checks",
+        "Fun, Links & More",
         "Dank Shield Home",
         "Close",
     } <= labels
+    assert {
+        "Embed Studio",
+        "Member / Server Info",
+        "Permission Check",
+        "Share Router",
+        "Fun & Lookup",
+        "Dead Server Clapbacks",
+    }.isdisjoint(labels)
+
+    info_labels = _labels(CommunityToolsInfoView(1))
+    assert {
+        "Member / Server Info",
+        "Permission Check",
+        "Community Tools",
+    } <= info_labels
+
+    more_labels = _labels(CommunityToolsMoreView(1))
+    assert {
+        "Fun & Lookup",
+        "Dead Server Clapbacks",
+        "Embed Studio",
+        "Share Router",
+        "Community Tools",
+    } <= more_labels
 
 
 def test_fun_lookup_surface_contains_real_features_only() -> None:
