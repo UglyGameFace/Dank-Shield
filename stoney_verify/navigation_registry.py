@@ -634,6 +634,35 @@ RECENT_UPDATES: tuple[RecentFeatureUpdate, ...] = (
         "roles and welcome.",
         "2026-11-19",
     ),
+    # Menu Phase 0 (2026-11-21): quick label/link fixes from the menu
+    # grouping audit — Community Tools gained the Clapbacks link its
+    # grouping already claimed and was split into focused sections for
+    # the mobile dense-panel limit, /dank pings stopped routing members
+    # into the staff manager, and the Protection / Voice Safety /
+    # Cleanup / Setup Search screens that dead-ended gained Back and
+    # Dank Shield Home buttons. Keys below are the destinations those
+    # changes belong to; each key stays unique in this list.
+    RecentFeatureUpdate(
+        "dead_server_clapbacks", "Clapbacks are linked from Community Tools, in focused sections",
+        "Community Tools now opens with just polls and quiet notices; "
+        "Dead Server Clapbacks, Fun & Lookup, Embed Studio and Share Router "
+        "live under Fun, Links & More, and the info tools under Info & Checks.",
+        "2026-11-21",
+    ),
+    RecentFeatureUpdate(
+        "my_community_pings", "/dank pings opens your own ping picker",
+        "Members now land on their own community ping picker; staff with "
+        "Manage Server still land on the Community & Pings Manager. "
+        "Same shortcut, the right screen for each person.",
+        "2026-11-21",
+    ),
+    RecentFeatureUpdate(
+        "voice_safety", "Back and Home buttons on safety, cleanup and search screens",
+        "Protection, AI Voice Safety, Cleanup and Setup Search screens "
+        "that used to dead-end now carry Back and Dank Shield Home "
+        "buttons, so you can always get back without reopening /dank.",
+        "2026-11-21",
+    ),
 )
 RECENT_FEATURE_KEYS: tuple[str, ...] = tuple(item.key for item in RECENT_UPDATES)
 

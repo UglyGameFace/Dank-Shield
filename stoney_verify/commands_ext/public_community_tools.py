@@ -135,26 +135,57 @@ def _center_embed() -> discord.Embed:
         name="✏️ Make a post",
         value=(
             "**Create Poll:** Let members vote.\n"
-            "**Quiet Server Notice:** Post a notice when the server goes quiet.\n"
-            "**Embed Studio:** Build a custom announcement with images and buttons."
+            "**Quiet Server Notice:** Post a notice when the server goes quiet."
         ),
         inline=False,
     )
     embed.add_field(
-        name="🔗 Share & manage",
+        name="🔍 Info & Checks",
         value=(
-            "**Share Router:** Move or copy matching videos, photos, and links.\n"
             "**Member / Server Info:** View useful account or server facts.\n"
             "**Permission Check:** See what Dank Shield can access."
         ),
         inline=False,
     )
     embed.add_field(
-        name="🎲 Explore",
-        value="Weather, useful lookups, dice, coin flips, and community games.",
+        name="🎲 Fun, Links & More",
+        value=(
+            "**Fun & Lookup:** Weather, useful lookups, dice, coin flips, and community games.\n"
+            "**Dead Server Clapbacks:** Snippy auto-replies when someone calls the server dead.\n"
+            "**Embed Studio:** Build a custom announcement with images and buttons.\n"
+            "**Share Router:** Move or copy matching videos, photos, and links."
+        ),
         inline=False,
     )
     embed.set_footer(text="Community Tools • previews stay private until you publish or post a test • Blue: open a task • Grey: browse • Red: remove")
+    return embed
+
+
+def _info_checks_embed() -> discord.Embed:
+    embed = discord.Embed(
+        title="🔍 Info & Checks",
+        description=(
+            "**Member / Server Info:** View useful account or server facts.\n"
+            "**Permission Check:** See what Dank Shield can access."
+        ),
+        color=discord.Color.blurple(),
+    )
+    embed.set_footer(text="Community Tools • Info & Checks")
+    return embed
+
+
+def _more_embed() -> discord.Embed:
+    embed = discord.Embed(
+        title="🎲 Fun, Links & More",
+        description=(
+            "**Fun & Lookup:** Weather, useful lookups, dice, coin flips, and community games.\n"
+            "**Dead Server Clapbacks:** Snippy auto-replies when someone calls the server dead.\n"
+            "**Embed Studio:** Build a custom announcement with images and buttons.\n"
+            "**Share Router:** Move or copy matching videos, photos, and links."
+        ),
+        color=discord.Color.blurple(),
+    )
+    embed.set_footer(text="Community Tools • Fun, Links & More")
     return embed
 
 
@@ -173,42 +204,15 @@ class CommunityToolsView(_OwnedView):
             return await _private(interaction, "❌ You need this channel's **Send Messages + poll permission** to create a poll.")
         await interaction.response.send_modal(NativePollModal())
 
-    @discord.ui.button(label="Embed Studio", emoji="🧱", style=discord.ButtonStyle.primary, row=0)
-    async def embed_builder(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+    @discord.ui.button(label="Info & Checks", emoji="🔍", style=discord.ButtonStyle.secondary, row=1)
+    async def info_checks(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
-        from ..embed_studio_ui import open_embed_studio
+        await _replace(interaction, embed=_info_checks_embed(), view=CommunityToolsInfoView(self.owner_id))
 
-        await open_embed_studio(interaction)
-
-    @discord.ui.button(label="Member / Server Info", emoji="👤", style=discord.ButtonStyle.secondary, row=1)
-    async def info(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+    @discord.ui.button(label="Fun, Links & More", emoji="🎲", style=discord.ButtonStyle.secondary, row=1)
+    async def more(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
-        await _replace(
-            interaction,
-            embed=discord.Embed(
-                title="👤 Member / Server Info",
-                description="Pick a member for useful account/server facts, or open the server summary.",
-                color=discord.Color.blurple(),
-            ),
-            view=InfoView(self.owner_id),
-        )
-
-    @discord.ui.button(label="Permission Check", emoji="🔐", style=discord.ButtonStyle.secondary, row=1)
-    async def permissions(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        _ = button
-        await show_permission_check(interaction)
-
-    @discord.ui.button(label="Share Router", emoji="🔗", style=discord.ButtonStyle.secondary, row=1)
-    async def share_router(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        _ = button
-        from .public_share_router import open_share_router
-
-        await open_share_router(interaction, replace_message=True)
-
-    @discord.ui.button(label="Fun & Lookup", emoji="🎲", style=discord.ButtonStyle.secondary, row=1)
-    async def fun(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        _ = button
-        await _replace(interaction, embed=_fun_embed(), view=FunLookupView(self.owner_id))
+        await _replace(interaction, embed=_more_embed(), view=CommunityToolsMoreView(self.owner_id))
 
     @discord.ui.button(label="Dank Shield Home", emoji="🏠", style=discord.ButtonStyle.secondary, row=2)
     async def home(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -221,6 +225,64 @@ class CommunityToolsView(_OwnedView):
     async def close(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await _replace(interaction, content="Community Tools closed.", embed=None, view=None)
+
+
+class CommunityToolsInfoView(_OwnedView):
+    @discord.ui.button(label="Member / Server Info", emoji="👤", style=discord.ButtonStyle.secondary, row=0)
+    async def info(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _replace(
+            interaction,
+            embed=discord.Embed(
+                title="👤 Member / Server Info",
+                description="Pick a member for useful account/server facts, or open the server summary.",
+                color=discord.Color.blurple(),
+            ),
+            view=InfoView(self.owner_id),
+        )
+
+    @discord.ui.button(label="Permission Check", emoji="🔐", style=discord.ButtonStyle.secondary, row=0)
+    async def permissions(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await show_permission_check(interaction)
+
+    @discord.ui.button(label="Community Tools", emoji="↩️", style=discord.ButtonStyle.secondary, row=1)
+    async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _replace(interaction, embed=_center_embed(), view=CommunityToolsView(self.owner_id))
+
+
+class CommunityToolsMoreView(_OwnedView):
+    @discord.ui.button(label="Fun & Lookup", emoji="🎲", style=discord.ButtonStyle.secondary, row=0)
+    async def fun(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _replace(interaction, embed=_fun_embed(), view=FunLookupView(self.owner_id))
+
+    @discord.ui.button(label="Dead Server Clapbacks", emoji="💀", style=discord.ButtonStyle.secondary, row=0)
+    async def clapbacks(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        from .public_dead_server_clapbacks import open_dead_server_clapbacks
+
+        await open_dead_server_clapbacks(interaction)
+
+    @discord.ui.button(label="Embed Studio", emoji="🧱", style=discord.ButtonStyle.primary, row=1)
+    async def embed_builder(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        from ..embed_studio_ui import open_embed_studio
+
+        await open_embed_studio(interaction)
+
+    @discord.ui.button(label="Share Router", emoji="🔗", style=discord.ButtonStyle.secondary, row=1)
+    async def share_router(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        from .public_share_router import open_share_router
+
+        await open_share_router(interaction, replace_message=True)
+
+    @discord.ui.button(label="Community Tools", emoji="↩️", style=discord.ButtonStyle.secondary, row=2)
+    async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _replace(interaction, embed=_center_embed(), view=CommunityToolsView(self.owner_id))
 
 
 def _normalize_native_poll_choices(raw: str) -> list[str]:
@@ -700,6 +762,8 @@ async def open_community_tools(interaction: discord.Interaction, *, replace_mess
 
 
 __all__ = [
+    "CommunityToolsInfoView",
+    "CommunityToolsMoreView",
     "CommunityToolsView",
     "DiceView",
     "FunLookupView",

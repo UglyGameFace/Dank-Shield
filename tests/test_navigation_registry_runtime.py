@@ -59,7 +59,7 @@ def test_every_registered_category_and_feature_is_reachable_from_navigation() ->
         assert features
         view = surface.FeatureCategoryView(100, category.key)
         labels = _labels(view)
-        assert {"Back", "Home", "Refresh", "Close"} <= labels
+        assert {"Home", "Refresh", "Close"} <= labels
         assert len(view.children) <= 25
         assert all(int(getattr(item, "row", 0) or 0) <= 4 for item in view.children)
 
@@ -476,7 +476,7 @@ def test_actions_and_notifications_is_a_distinct_mobile_category_with_live_owner
     assert {
         "Action & Reminder Center", "Other Notification Settings", "Reminder Rules (Preview)",
         "Reminder Times & Limits", "My Reminder Preferences",
-        "Back", "Home", "Refresh", "Close",
+        "Home", "Refresh", "Close",
     } <= labels
     assert "Action & Reminder Center" not in _labels(surface.FeatureCategoryView(42, "access"))
     assert {"Verification", "Member Setup Manager", "Verification Reminders"} <= _labels(

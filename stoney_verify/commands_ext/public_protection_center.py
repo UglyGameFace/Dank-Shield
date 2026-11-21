@@ -1681,6 +1681,24 @@ class AntiNukeTrustManagerView(discord.ui.View):
             defer=False,
         )
 
+    @discord.ui.button(
+        label="Back to Protection",
+        emoji="↩️",
+        style=discord.ButtonStyle.secondary,
+        custom_id="dank_protection:antinuke_trust:back:v1",
+        row=3,
+    )
+    async def back_to_protection(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ) -> None:
+        _ = button
+        await _ack_protection_entry(interaction)
+        if not await _require_setup_permission(interaction):
+            return
+        await _refresh_panel(interaction, content="Back to Protection Center.", section="antinuke")
+
 
 class AntiNukeThresholdsModal(discord.ui.Modal):
     def __init__(self, settings: dict[str, Any]) -> None:
@@ -2076,6 +2094,24 @@ class SpamGuardEditorView(discord.ui.View):
         self.add_item(SpamResponseModeOpenButton(self.spam))
         self.add_item(SpamGuardDetectionButton(self.spam))
         self.add_item(SpamGuardActionsButton(self.spam))
+
+    @discord.ui.button(
+        label="Back to Protection",
+        emoji="↩️",
+        style=discord.ButtonStyle.secondary,
+        custom_id="dank_protection:spamguard_editor:back:v1",
+        row=2,
+    )
+    async def back_to_protection(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ) -> None:
+        _ = button
+        await _ack_protection_entry(interaction)
+        if not await _require_setup_permission(interaction):
+            return
+        await _refresh_panel(interaction, content="Back to Protection Center.", section="spam")
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if int(interaction.user.id) != int(self.author_id):

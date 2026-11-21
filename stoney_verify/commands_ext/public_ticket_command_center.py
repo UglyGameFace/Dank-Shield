@@ -593,7 +593,7 @@ class TicketActionCenterView(_OwnedView):
         from .public_tickets_group import tickets_activity
         await _invoke(tickets_activity, interaction, channel=channel)
 
-    @discord.ui.button(label="Ticket Operations", emoji="🎛️", style=discord.ButtonStyle.primary, row=2)
+    @discord.ui.button(label="All Tickets & Queues", emoji="🎛️", style=discord.ButtonStyle.primary, row=2)
     async def operations(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await _replace(
@@ -872,7 +872,7 @@ def _history_user_select(owner_id: int) -> DankUserSelect:
 
 _TICKET_OPERATIONS_SECTIONS = {
     "queues": ("Active", "Unassigned", "Mine", "Recent Closed", "Overdue", "Find Ticket"),
-    "setup": ("Current Ticket", "Public Panel", "Intake & Routing", "Categories", "Staff Alerts"),
+    "setup": ("This Ticket", "Public Panel", "Intake & Routing", "Categories", "Staff Alerts"),
 }
 
 
@@ -966,7 +966,7 @@ class TicketOperationsView(_OwnedView):
         _ = button
         await interaction.response.send_modal(TicketFindModal(self.owner_id))
 
-    @discord.ui.button(label="Current Ticket", emoji="🛠️", style=discord.ButtonStyle.primary, row=1)
+    @discord.ui.button(label="This Ticket", emoji="🛠️", style=discord.ButtonStyle.primary, row=1)
     async def current(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         channel = interaction.channel if isinstance(interaction.channel, discord.TextChannel) else None

@@ -542,7 +542,7 @@ class MemberSetupView(discord.ui.View):
         from .public_toke import open_member_community_pings
         await open_member_community_pings(interaction)
 
-    @discord.ui.button(label="Profile & Cosmetics", emoji="🎭", style=discord.ButtonStyle.secondary, row=0)
+    @discord.ui.button(label="Profile & Signature", emoji="🎭", style=discord.ButtonStyle.secondary, row=0)
     async def profile(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         from .public_command_hub import open_profile_entry
